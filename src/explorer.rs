@@ -1,7 +1,8 @@
-//! Indexed saved-data navigation. No method consults the source filesystem.
+//! Indexed in-memory navigation. Reads never consult the source filesystem.
 use crate::{Counters, Kind, Map, invalid};
 use std::{
     borrow::Cow,
+    collections::{HashMap, HashSet},
     io,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
@@ -58,13 +59,13 @@ pub struct StorageStats {
 }
 
 /// CSR child lists sorted once by descending subtree allocation, then raw basename.
-/// This is the local-mutation seam: callers use `children`, not offsets. A later
-/// operation owner can replace affected lists without changing navigation/layout.
+/// Local mutations replace affected lists without changing navigation/layout.
 /// Node slots must not be compacted/reused while session handles remain valid.
 #[derive(Debug)]
 struct ChildIndex {
     offsets: Vec<u32>,
     ids: Vec<u32>,
+    overrides: HashMap<u32, Vec<u32>>,
 }
 impl ChildIndex {
     fn new(map: &Map) -> Self {
@@ -86,7 +87,11 @@ impl ChildIndex {
             offsets[i] = offsets[i - 1];
         }
         offsets[0] = 0;
-        let mut index = Self { offsets, ids };
+        let mut index = Self {
+            offsets,
+            ids,
+            overrides: HashMap::new(),
+        };
         for id in 0..map.nodes.len() {
             let start = index.offsets[id] as usize;
             let end = index.offsets[id + 1] as usize;
@@ -101,6 +106,12 @@ impl ChildIndex {
         index
     }
     fn children(&self, id: u32) -> &[u32] {
+        if let Some(ids) = self.overrides.get(&id) {
+            return ids;
+        }
+        if id as usize + 1 >= self.offsets.len() {
+            return &[];
+        }
         &self.ids[self.offsets[id as usize] as usize..self.offsets[id as usize + 1] as usize]
     }
 }
@@ -110,6 +121,7 @@ pub struct Explorer {
     pub(crate) map: Map,
     session: u64,
     children: ChildIndex,
+    removed: HashSet<u32>,
 }
 impl Explorer {
     pub(crate) fn from_map(map: Map) -> io::Result<Self> {
@@ -121,6 +133,7 @@ impl Explorer {
             map,
             session,
             children,
+            removed: HashSet::new(),
         })
     }
     pub fn root(&self) -> &Path {
@@ -140,7 +153,14 @@ impl Explorer {
             entries: self.map.nodes.len(),
             arena_bytes: self.map.arena_bytes(),
             index_bytes: (self.children.offsets.capacity() + self.children.ids.capacity())
-                * size_of::<u32>(),
+                * size_of::<u32>()
+                + self
+                    .children
+                    .overrides
+                    .values()
+                    .map(|ids| ids.capacity() * size_of::<u32>())
+                    .sum::<usize>()
+                + self.removed.capacity() * size_of::<u32>(),
         }
     }
     pub(crate) fn handle(&self, index: u32) -> EntryHandle {
@@ -150,7 +170,10 @@ impl Explorer {
         }
     }
     pub(crate) fn resolve(&self, handle: EntryHandle) -> io::Result<u32> {
-        if handle.session != self.session || handle.index as usize >= self.map.nodes.len() {
+        if handle.session != self.session
+            || handle.index as usize >= self.map.nodes.len()
+            || self.removed.contains(&handle.index)
+        {
             return Err(invalid(
                 "entry handle does not belong to this explorer session",
             ));
@@ -159,6 +182,31 @@ impl Explorer {
     }
     pub(crate) fn child_ids(&self, id: u32) -> &[u32] {
         self.children.children(id)
+    }
+    pub(crate) fn replace_children(&mut self, id: u32, children: Vec<u32>) {
+        self.children.overrides.insert(id, children);
+    }
+    pub(crate) fn invalidate(&mut self, id: u32) {
+        self.removed.insert(id);
+        self.children.overrides.remove(&id);
+    }
+    pub(crate) fn is_live(&self, id: u32) -> bool {
+        !self.removed.contains(&id)
+    }
+    pub(crate) fn sort_children(&mut self, id: u32) {
+        let mut children = self.child_ids(id).to_vec();
+        children.sort_unstable_by(|&a, &b| {
+            self.map.nodes[b as usize]
+                .subtree
+                .cmp(&self.map.nodes[a as usize].subtree)
+                .then_with(|| {
+                    self.map
+                        .basename(a as usize)
+                        .cmp(self.map.basename(b as usize))
+                })
+                .then(a.cmp(&b))
+        });
+        self.replace_children(id, children);
     }
     pub fn entry(&self, handle: EntryHandle) -> io::Result<EntrySummary<'_>> {
         let id = self.resolve(handle)?;

@@ -2,8 +2,10 @@
 
 A macOS allocated-storage inventory with a reusable Rust core and a small CLI:
 **create, sync, info, export**. Scan once, then use saved data with external tools
-such as jq, sort or SQLite. There is no filtering or sorting language. Cleanup is
-external; Disk Inventory never deletes source files or reads their contents.
+such as jq, sort or SQLite. There is no filtering or sorting language. The CLI never
+deletes source files. The reusable [operation session](docs/operations.md)
+adds explicitly confirmed Trash/removal and local refresh for native clients. No
+source-file contents are read.
 
 Opening a snapshot eagerly reads and validates the entire file, reconstructs its
 arrays and recomputes accounting. Export streams entries from that in-memory map;
@@ -11,8 +13,9 @@ it does not sort or materialize all export rows. This is not mmap or lazy loadin
 
 ## 1a Build and use
 
-Requirements: macOS, Apple SDK and Rust. The only Rust dependency is pinned
-[libc](Cargo.toml). Tests also use Python 3 and the system sqlite3 CLI as independent
+Requirements: macOS, Apple SDK and Rust. Native dependencies are pinned in
+[Cargo.toml](Cargo.toml): libc and minimal objc2/Foundation bindings. Tests also use
+Python 3 and the system sqlite3 CLI as independent
 export parsers; Node.js runs the benchmark helpers.
 
 ```sh
@@ -42,7 +45,7 @@ allocation is omitted, but directory allocation remains observed. Other files,
 including older snapshot generations retained by hardlinks, count normally.
 Lifecycle writes reject destination symlinks. Use a trusted snapshot directory;
 concurrent namespace changes and sync writers are not serialized. There is no
-targeted sync or automatic refresh.
+targeted CLI sync or automatic refresh.
 
 For the macOS Data volume, with the snapshot in your home directory:
 

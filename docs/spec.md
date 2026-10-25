@@ -66,7 +66,7 @@ trusted: concurrent namespace changes and concurrent sync writers are not serial
 
 Loading eagerly reads the entire snapshot, validates checksum and structure,
 reconstructs arrays, and recomputes accounting. It never checks source paths. There
-is no mmap, automatic refresh or targeted sync. Typed entry access and export work
+is no mmap, automatic refresh or targeted CLI sync. Typed entry access and export work
 with a missing root. Export allocates one row/path at a time on top of the loaded map.
 
 [tests/inventory.rs](../tests/inventory.rs):
@@ -144,7 +144,9 @@ firmlinks; stat cannot reliably identify them. Compare collectors only where bul
 preflight reports zero firmlinks/errors. Directory opens reject symlink components
 and verify identity, but collection/destination checks are not race-proof. A live
 scan is not a point-in-time snapshot. No file contents, hashing of source files,
-privilege escalation, deletion, SQLite dependency, watchers or mmap are involved.
+privilege escalation, SQLite dependency, watchers or mmap are involved. Explicit
+confirmed library operations and their limits are specified in
+[operations.md](operations.md); the CLI does not expose deletion.
 
 Errors are counted; up to sixteen scan samples are held in the legacy map. Saved
 snapshots retain counts, not samples. Inaccessible subtrees are not known empty.

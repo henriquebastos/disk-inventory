@@ -4,6 +4,7 @@ pub mod export;
 pub mod inventory;
 pub mod layout;
 pub mod native;
+pub mod operations;
 pub mod snapshot;
 use std::os::darwin::fs::MetadataExt as DarwinMetadataExt;
 
