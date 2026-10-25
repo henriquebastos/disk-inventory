@@ -221,6 +221,12 @@ impl Explorer {
                 });
             }
             squarify(&mut parts, tile.rect, tile.bytes);
+            // Rounded endpoints can collapse distinct regions. Keep their parent
+            // intact rather than emit overlapping or zero-extent allocations.
+            if parts.iter().any(|part| !part.rect.valid()) {
+                result.tiles.push(tile);
+                continue;
+            }
             result.groups.push(Group {
                 directory: self.handle(id),
                 rect: tile.rect,

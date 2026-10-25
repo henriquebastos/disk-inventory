@@ -60,6 +60,15 @@ fn validate(layout: &Layout, options: LayoutOptions) {
     assert!(layout.work.entries_examined <= options.max_rectangles);
     assert!(layout.work.child_ids_examined <= 2 * options.max_rectangles);
     let box_ = options.viewport;
+    for rect in layout
+        .tiles
+        .iter()
+        .map(|tile| tile.rect)
+        .chain(layout.groups.iter().map(|group| group.rect))
+    {
+        assert!(rect.x + rect.width > rect.x);
+        assert!(rect.y + rect.height > rect.y);
+    }
     for (i, a) in layout.tiles.iter().enumerate() {
         let r = a.rect;
         assert!([r.x, r.y, r.width, r.height].iter().all(|n| n.is_finite()));
@@ -78,6 +87,51 @@ fn validate(layout: &Layout, options: LayoutOptions) {
                     || (r.y + r.height).min(b.rect.y + b.rect.height) - r.y.max(b.rect.y) < 1e-7
             );
         }
+    }
+}
+
+#[test]
+fn unrepresentable_subdivisions_preserve_the_parent_region() {
+    for (weights, viewport) in [
+        (
+            [1, 1],
+            Rect {
+                x: 1e16,
+                y: 1e16,
+                width: 2.0,
+                height: 2.0,
+            },
+        ),
+        (
+            [i64::MAX as u64, 1],
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+        ),
+    ] {
+        let mut map = tree();
+        map.nodes[0].raw = 0;
+        add(&mut map, 0, b"a", Kind::File, weights[0]);
+        add(&mut map, 0, b"b", Kind::File, weights[1]);
+        let explorer = explorer(map);
+        let options = LayoutOptions {
+            viewport,
+            max_rectangles: 10,
+            min_area: 0.0,
+            max_depth: 4,
+        };
+        let layout = explorer.layout(explorer.root_handle(), options).unwrap();
+        validate(&layout, options);
+        assert_eq!(layout.tiles.len(), 1);
+        assert!(layout.groups.is_empty());
+        assert_eq!(layout.tiles[0].rect, viewport);
+        assert_eq!(
+            layout.tiles[0].kind,
+            TileKind::Entry(explorer.root_handle())
+        );
     }
 }
 
