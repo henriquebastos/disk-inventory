@@ -354,3 +354,54 @@ fn invalid_bridge_requests_return_typed_errors_without_source_calls() {
     assert_eq!(memory(&s, |f| f.calls), MemoryCalls::default());
     assert!(!s.is_busy());
 }
+
+#[test]
+fn presentation_and_delay_fixtures_are_isolated() {
+    let ordinary = session("ordinary");
+    let presentation = session("presentation");
+    let delayed = session("metadata-delay");
+    assert!(memory(&ordinary, |f| f.metadata_delays.is_empty()));
+    assert!(memory(&presentation, |f| f.metadata_delays.is_empty()));
+    assert_eq!(memory(&delayed, |f| f.metadata_delays.len()), 1);
+    assert_eq!(
+        memory(&delayed, |f| f.metadata_delays
+            [std::path::Path::new("/simulated-inventory/large-file")]),
+        std::time::Duration::from_secs(1)
+    );
+    for s in [&presentation, &delayed] {
+        assert!(s.status().unwrap().simulated);
+        assert_eq!(
+            s.selection(find(s, b"large-file"))
+                .unwrap()
+                .entry
+                .allocated_bytes,
+            4096
+        );
+        let children = s.children(find(s, b"small-files"), 0, 100).unwrap();
+        assert_eq!(children.total, 128);
+        assert_eq!(children.entries.len(), 100);
+        assert_eq!(children.next_offset, Some(100));
+        assert_eq!(
+            s.children(find(s, b"small-files"), 100, 100)
+                .unwrap()
+                .entries
+                .len(),
+            28
+        );
+    }
+    assert_eq!(
+        ordinary
+            .children(find(&ordinary, b"small-files"), 0, 100)
+            .unwrap()
+            .total,
+        16
+    );
+    assert_eq!(
+        ordinary
+            .selection(find(&ordinary, b"large-file"))
+            .unwrap()
+            .entry
+            .allocated_bytes,
+        (1u64 << 53) + 123
+    );
+}

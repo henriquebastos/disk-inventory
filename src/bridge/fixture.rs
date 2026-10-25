@@ -26,6 +26,9 @@ pub(super) fn metadata(inode: u64, kind: Kind, bytes: u64) -> LiveMetadata {
     }
 }
 pub(super) fn map() -> Result<Map, BridgeError> {
+    build_map(false)
+}
+fn build_map(presentation: bool) -> Result<Map, BridgeError> {
     let mut map = Map {
         root: PathBuf::from("/simulated-inventory"),
         nodes: vec![],
@@ -50,17 +53,28 @@ pub(super) fn map() -> Result<Map, BridgeError> {
     };
     add(0, b"", 1, Kind::Dir, 10, 1)?;
     let small = add(0, b"small-files", 2, Kind::Dir, 20, 1)?;
-    for i in 0..16 {
+    for i in 0..if presentation { 128 } else { 16 } {
         add(
             small,
             format!("small-{i:02}").as_bytes(),
-            10 + i,
+            if presentation { 1000 + i } else { 10 + i },
             Kind::File,
             64,
             1,
         )?;
     }
-    add(0, b"large-file", 30, Kind::File, (1u64 << 53) + 123, 1)?;
+    add(
+        0,
+        b"large-file",
+        30,
+        Kind::File,
+        if presentation {
+            4096
+        } else {
+            (1u64 << 53) + 123
+        },
+        1,
+    )?;
     add(0, b"zero-byte", 31, Kind::File, 0, 1)?;
     add(0, b"hardlink-a", 32, Kind::File, 512, 2)?;
     add(0, b"hardlink-b", 32, Kind::File, 512, 2)?;
@@ -72,6 +86,8 @@ pub(super) fn map() -> Result<Map, BridgeError> {
 pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSystem>, BridgeError> {
     if ![
         "ordinary",
+        "presentation",
+        "metadata-delay",
         "trash-inside",
         "trash-outside",
         "metadata-failure",
@@ -89,7 +105,11 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
             message: format!("unknown simulated scenario: {scenario}"),
         });
     }
-    let map = map()?;
+    let map = if matches!(scenario, "presentation" | "metadata-delay") {
+        build_map(true)?
+    } else {
+        map()?
+    };
     let mut fs = MemoryFileSystem::default();
     fs.insert("/", metadata(90, Kind::Dir, 0));
     fs.insert("/simulated-outside", metadata(91, Kind::Dir, 0));
@@ -102,6 +122,10 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
     let root = Path::new("/simulated-inventory");
     fs.trash_behavior = TrashBehavior::MoveTo(PathBuf::from("/simulated-outside/moved"));
     match scenario {
+        "metadata-delay" => {
+            fs.metadata_delays
+                .insert(root.join("large-file"), std::time::Duration::from_secs(1));
+        }
         "trash-inside" => fs.trash_behavior = TrashBehavior::MoveTo(root.join("trash/moved")),
         "metadata-failure" => {
             fs.metadata_errors.insert(root.join("large-file"));

@@ -43,6 +43,8 @@ pub struct MemoryFileSystem {
     pins: Arc<Mutex<BTreeMap<Identity, usize>>>,
     pub unreadable: BTreeSet<PathBuf>,
     pub metadata_errors: BTreeSet<PathBuf>,
+    /// Explicit fixture-only latency; empty by default. Never used by the native adapter.
+    pub metadata_delays: BTreeMap<PathBuf, std::time::Duration>,
     pub trash_behavior: TrashBehavior,
     pub unknown_scope: bool,
     /// Fail after exactly this many unlinks (0 guarantees no changes).
@@ -60,6 +62,7 @@ impl Default for MemoryFileSystem {
             pins: Arc::default(),
             unreadable: BTreeSet::new(),
             metadata_errors: BTreeSet::new(),
+            metadata_delays: BTreeMap::new(),
             trash_behavior: TrashBehavior::Fail("no fake Trash destination configured".into()),
             unknown_scope: false,
             remove_failure_after: None,
@@ -182,6 +185,9 @@ impl FileSystem for MemoryFileSystem {
     fn metadata(&mut self, path: &Path) -> io::Result<LiveMetadata> {
         self.calls.metadata += 1;
         let path = self.canonical(path);
+        if let Some(delay) = self.metadata_delays.get(&path) {
+            std::thread::sleep(*delay);
+        }
         if self.metadata_errors.contains(&path) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
