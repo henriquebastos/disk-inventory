@@ -23,3 +23,8 @@ For benchmark changes, read [scripts/run-benchmark.mjs](scripts/run-benchmark.mj
   test name. Mark untested limits explicitly.
 - Keep references repository-local and each Markdown document below 1,500 words.
 - Keep this guide for navigation and shared rules, not product explanations.
+
+## 1c Git checkpoints
+
+- Commit focused changes when requested work reaches a verified, stable checkpoint.
+- Do not push without an explicit user request.
