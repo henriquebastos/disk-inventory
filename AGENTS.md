@@ -10,7 +10,8 @@ For benchmark changes, read [scripts/run-benchmark.mjs](scripts/run-benchmark.mj
 - A behavior change needs a test that fails without it. Report skipped platform checks.
 - Tests may mutate only their own temporary fixtures. Keep real inventories, snapshots,
   raw results and build artifacts outside Git. Broad scans need an explicit scope.
-- Keep user-file deletion outside the tool. Read metadata without following symlinks,
+- Treat Trash and permanent deletion as explicit, confirmed core operations. During
+  development, mutate only owned fixtures. Read metadata without following symlinks,
   reading source-file contents, or elevating permissions.
 
 ## 1b Keep documentation beside its evidence
