@@ -1,6 +1,8 @@
 #![cfg(target_os = "macos")]
+pub mod explorer;
 pub mod export;
 pub mod inventory;
+pub mod layout;
 pub mod native;
 pub mod snapshot;
 use std::os::darwin::fs::MetadataExt as DarwinMetadataExt;

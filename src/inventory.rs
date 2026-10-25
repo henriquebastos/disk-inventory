@@ -119,6 +119,11 @@ impl Inventory {
         Ok(Self { map })
     }
 
+    /// Consume the loaded arena and build compact child indexes once. No source I/O.
+    pub fn into_explorer(self) -> io::Result<crate::explorer::Explorer> {
+        crate::explorer::Explorer::from_map(self.map)
+    }
+
     pub fn root(&self) -> &Path {
         &self.map.root
     }
