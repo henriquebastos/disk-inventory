@@ -466,9 +466,9 @@ fn refresh_mount_firmlink_and_inaccessible_regions_are_not_followed() {
     assert_consistent(&s);
 }
 
-struct Fixture(PathBuf);
+pub(super) struct Fixture(pub(super) PathBuf);
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = PathBuf::from(format!(
             "/private/tmp/disk-inventory-native.otaCfM/operations/fixture-{}-{}",
@@ -879,5 +879,212 @@ fn unvalidated_returned_destination_is_unknown_even_when_ancestry_is_outside() {
     assert!(r.update.state.stale);
     assert_eq!(total(&s), 360);
     assert_eq!(s.filesystem.calls.remove, 0);
+    assert_consistent(&s);
+}
+
+fn survivor_session() -> OperationSession<MemoryFileSystem> {
+    let mut s = session();
+    let mut alias = meta(3, Kind::File, 100);
+    alias.links = 2;
+    s.filesystem.insert("/scope/z/alias", alias.clone());
+    s.refresh_directory(handle(&s, 3)).unwrap();
+    alias.allocated_bytes = 500;
+    s.filesystem.insert("/scope/z/alias", alias);
+    s
+}
+#[test]
+fn directory_removal_refreshes_surviving_hardlink_allocation() {
+    let mut s = survivor_session();
+    let c = s.prepare(handle(&s, 1), Action::PermanentlyDelete).unwrap();
+    let r = s.execute(c).unwrap();
+    println!(
+        "directory removal total={} work={:?}",
+        total(&s),
+        r.update.work
+    );
+    assert_eq!(total(&s), 740);
+    assert!(!r.update.state.stale);
+    let alias = s
+        .explorer
+        .children(handle(&s, 3), 0, 10)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.basename == b"alias")
+        .unwrap()
+        .handle;
+    assert_eq!(s.explorer.entry(alias).unwrap().allocated_bytes, 500);
+    assert_consistent(&s);
+}
+#[test]
+fn outside_directory_trash_refreshes_surviving_hardlink_allocation() {
+    let mut s = survivor_session();
+    s.filesystem.trash_behavior = TrashBehavior::MoveTo("/outside/moved".into());
+    let c = s.prepare(handle(&s, 1), Action::Trash).unwrap();
+    let r = s.execute(c).unwrap();
+    assert_eq!(r.scope, Some(DestinationScope::Outside));
+    assert_eq!(total(&s), 740);
+    assert!(!r.update.state.stale);
+    assert_eq!(s.filesystem.calls.remove, 0);
+    assert_consistent(&s);
+}
+#[test]
+fn survivor_observation_failure_retains_recorded_allocation_and_marks_stale() {
+    let mut s = survivor_session();
+    s.filesystem.metadata_errors.insert("/scope/z/alias".into());
+    let c = s.prepare(handle(&s, 1), Action::PermanentlyDelete).unwrap();
+    let r = s.execute(c).unwrap();
+    assert!(r.update.state.stale);
+    assert!(!r.update.issues.is_empty());
+    assert_eq!(total(&s), 340);
+    assert_consistent(&s);
+}
+#[test]
+fn hardlink_observations_are_batched_for_new_and_changed_aliases() {
+    let mut measurements = Vec::new();
+    for count in [100, 1000] {
+        let mut s = session();
+        let mut alias = meta(5, Kind::File, 200);
+        alias.links = count + 1;
+        for i in 0..count {
+            s.filesystem
+                .insert(format!("/scope/a/alias-{i:04}"), alias.clone());
+        }
+        let r = s.refresh_directory(handle(&s, 1)).unwrap();
+        println!("new_aliases={count} work={:?}", r.work);
+        measurements.push((count, r.work.identity_members));
+        assert_eq!(total(&s), 360);
+        alias.allocated_bytes = 500;
+        s.filesystem.insert("/scope/z/sibling", alias);
+        let r = s.refresh_directory(handle(&s, 1)).unwrap();
+        println!("changed_aliases={count} work={:?}", r.work);
+        measurements.push((count, r.work.identity_members));
+        assert_eq!(total(&s), 660);
+        assert!(!r.state.stale);
+        assert_consistent(&s);
+    }
+    for (count, members) in measurements {
+        assert!(
+            members <= 4 * (count as usize + 1),
+            "{count} aliases visited {members} times"
+        );
+    }
+}
+#[test]
+fn unchanged_nonfile_link_counts_do_not_dirty_refresh() {
+    let mut s = session();
+    let mut directory = meta(2, Kind::Dir, 20);
+    directory.links = 9;
+    s.filesystem.insert("/scope/a", directory);
+    let mut root = meta(1, Kind::Dir, 10);
+    root.links = 3;
+    s.filesystem.insert("/scope", root);
+    let r = s.refresh_directory(handle(&s, 1)).unwrap();
+    assert_eq!(r.state, SessionState::default());
+    assert_eq!(total(&s), 360);
+    assert_eq!(s.explorer.map.nodes[1].links, 1);
+}
+
+fn native_regular_fixture(count: usize) -> (Fixture, OperationSession<native::NativeFileSystem>) {
+    let fixture = Fixture::new();
+    let root = fixture.0.join("root");
+    std::fs::create_dir(&root).unwrap();
+    for i in 0..count {
+        std::fs::File::create(root.join(format!("file-{i:05}"))).unwrap();
+    }
+    std::fs::write(root.join("file-00000"), vec![0; 4096]).unwrap();
+    let map = fixture.0.join("map");
+    crate::inventory::Inventory::create(&root, &map, Default::default()).unwrap();
+    let s = native::NativeFileSystem::open_snapshot(&map).unwrap();
+    (fixture, s)
+}
+#[test]
+fn native_regular_refresh_uses_bulk_records_without_child_stats() {
+    let (_fixture, mut s) = native_regular_fixture(128);
+    let r = s.refresh_directory(s.explorer.root_handle()).unwrap();
+    let work = s.filesystem.enumeration_work;
+    println!(
+        "native regular refresh: {work:?}; targeted metadata={}",
+        s.filesystem.metadata_requests
+    );
+    assert_eq!(work.records, 128);
+    assert_eq!(work.child_stat_calls, 0);
+    assert_eq!(s.filesystem.metadata_requests, 2); // root validation and root-own allocation
+    assert_eq!(r.state, SessionState::default());
+    let file = s
+        .explorer
+        .children(s.explorer.root_handle(), 0, 1)
+        .unwrap()
+        .entries[0]
+        .handle;
+    let live = s.live_metadata(file).unwrap();
+    assert_eq!(live.logical_bytes, 4096);
+    assert_eq!(s.filesystem.metadata_requests, 3);
+    assert_consistent(&s);
+}
+#[test]
+#[ignore = "bounded owned native fixture measurement (25,000 regular files)"]
+fn native_owned_bulk_refresh_performance() {
+    let started = std::time::Instant::now();
+    let (_fixture, mut s) = native_regular_fixture(25_000);
+    println!(
+        "native fixture files=25000 create_scan_load_ms={:.3}",
+        started.elapsed().as_secs_f64() * 1000.
+    );
+    for iteration in 0..3 {
+        if iteration != 0 {
+            std::fs::write(
+                s.explorer.root().join(format!("file-{iteration:05}")),
+                vec![0; 4096 * iteration],
+            )
+            .unwrap();
+        }
+        s.filesystem.enumeration_work = Default::default();
+        s.filesystem.metadata_requests = 0;
+        s.filesystem.enumeration_elapsed = std::time::Duration::ZERO;
+        let started = std::time::Instant::now();
+        let r = s.refresh_directory(s.explorer.root_handle()).unwrap();
+        println!(
+            "native refresh iteration={iteration} (0=no-op,1/2=one-file-change) total_ms={:.3} native_directory_ms={:.3} enumeration={:?} targeted_metadata={} core_work={:?}",
+            started.elapsed().as_secs_f64() * 1000.,
+            s.filesystem.enumeration_elapsed.as_secs_f64() * 1000.,
+            s.filesystem.enumeration_work,
+            s.filesystem.metadata_requests,
+            r.work
+        );
+        assert_eq!(s.filesystem.enumeration_work.records, 25_000);
+        assert_eq!(s.filesystem.enumeration_work.child_stat_calls, 0);
+        assert_eq!(s.filesystem.metadata_requests, 2);
+        assert!(!r.state.stale);
+        assert_consistent(&s);
+    }
+}
+#[test]
+fn conflicting_hardlink_observations_preserve_previous_allocations() {
+    let mut s = session();
+    let mut alias = meta(5, Kind::File, 200);
+    alias.links = 3;
+    s.filesystem.insert("/scope/a/alias-a", alias.clone());
+    s.filesystem.insert("/scope/a/alias-b", alias);
+    s.refresh_directory(handle(&s, 1)).unwrap();
+    // Deliberately inconsistent fixture records: singleton inserts bypass the
+    // fake's normal shared-inode propagation to model a racing enumeration.
+    s.filesystem
+        .insert("/scope/a/alias-a", meta(5, Kind::File, 100));
+    s.filesystem
+        .insert("/scope/a/alias-b", meta(5, Kind::File, 500));
+    let r = s.refresh_directory(handle(&s, 1)).unwrap();
+    assert!(r.state.stale);
+    assert!(
+        r.issues
+            .iter()
+            .any(|s| s.contains("conflicting allocation"))
+    );
+    assert_eq!(total(&s), 360);
+    for entry in s.explorer.children(handle(&s, 1), 0, 10).unwrap().entries {
+        if entry.basename.starts_with(b"alias") {
+            assert_eq!(entry.allocated_bytes, 200);
+        }
+    }
     assert_consistent(&s);
 }

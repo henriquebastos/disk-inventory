@@ -1,4 +1,4 @@
-# Live operation sessions
+# 1 Live operation sessions
 
 [src/operations.rs](../src/operations.rs) owns the indexed explorer and a narrow
 `FileSystem` adapter. `OperationSession::new` indexes every recorded identity,
@@ -10,8 +10,14 @@ Use `explorer()` for saved selection, paging and layout. `live_metadata(handle)`
 is a separate targeted request returning identity, kind, allocation, logical size,
 mode, modification/birth timestamps and collection-policy fields. A failed request
 does not silently change accounting. No selection recursively sizes a directory.
+`DirectoryEntry.metadata` is `ScanMetadata`: identity, kind, allocated bytes, links,
+flags and mount status only. It has no fabricated inspector fields. Native enumeration
+uses bulk records directly; only missing directory allocation or symlink identity
+needs child stat fallback. Directory descriptor validation and immediate pre-mutation
+checks remain mandatory. Non-file link counts are ignored for change detection,
+consistent with the collector's directory-link normalization.
 
-## Confirmation and outcomes
+## 1a Confirmation and outcomes
 
 `prepare(handle, Action::{Trash,PermanentlyDelete})` returns a non-cloneable
 `Confirmation<F::Pin>`. It exposes the raw absolute path and freshly observed
@@ -37,14 +43,20 @@ reclaimed disk space**. Unknown scope retains recorded allocation and marks it s
 New destination ancestors with unscanned children also mark the session stale.
 Partial removal reconciles survivors; failed enumeration preserves unknown children.
 
-## Refresh, ownership and work
+## 1b Refresh, ownership and work
 
 `refresh_directory` enumerates only the selected region, plus targeted root/parent
 validation and affected hardlink groups. It reconciles additions, removal, renames,
 replacement and allocation changes, excluding snapshot aliases, symlinks, other-device
 entries, discovered mounts and firmlinks. Failed enumeration is never an empty list.
 Hardlink ownership remains the smallest raw relative path, including aliases outside
-the refreshed/moved region. Directory-own allocation remains separate.
+the refreshed/moved region. Allocation/link observations are staged per identity;
+propagation and canonical ownership are applied once per affected group, then the
+observation tables are released. Conflicting
+allocation observations mark stale and retain previous recorded allocations. After
+removal (including an outside move), surviving groups receive a targeted identity-
+validated alias observation; failure retains recorded allocation and marks stale.
+Directory-own allocation remains separate.
 
 Stable arena slots, tombstones, a sorted identity-ID baseline, an additions overlay
 and affected CSR child-list overrides avoid a global accounting rebuild. Work is
@@ -52,7 +64,8 @@ bounded by the changed/selected region, affected parent fanout, ancestor depth a
 identity groups (including tombstoned group members), **not solely changed entries**.
 Affected parents are sorted once per update when ordering changes; deletion-only
 child filtering preserves order. `UpdateWork` charges visited entries, baseline
-identity comparisons/members, ancestor validation/updates, child IDs copied/sorted
+identity comparisons and group visits (lookup, propagation/owner choice, attribution),
+ancestor validation/updates, child IDs copied/sorted
 and refresh directory reads. It does not count adapter I/O or safety preflight scans.
 Navigation/layout budgets are unchanged. Arenas/tombstones/overlays grow for the
 session lifetime; reload is the reclamation boundary, not an interactive operation.
@@ -69,7 +82,7 @@ metadata, alias spellings, pins and injected failures. Its default Trash behavio
 fails closed. It never constructs a native adapter. It favors simple fixture logic;
 some fake operations scan its fixture map. Those costs are not native performance.
 
-## Evidence and limits
+## 1c Evidence and limits
 
 [src/operations/tests.rs](../src/operations/tests.rs):
 
@@ -100,6 +113,24 @@ some fake operations scan its fixture map. Those costs are not native performanc
   "activity_is_observable_while_worker_refreshes_and_last_layout_remains_usable".
 - "native_owned_fixture_metadata_url_scope_and_nofollow_permanent_removal" tests
   only owned fixtures, including a Data-volume namespace alias when available.
+
+Additional regressions in [src/operations/tests.rs](../src/operations/tests.rs):
+
+- "directory_removal_refreshes_surviving_hardlink_allocation" and
+  "outside_directory_trash_refreshes_surviving_hardlink_allocation".
+- "survivor_observation_failure_retains_recorded_allocation_and_marks_stale" and
+  "conflicting_hardlink_observations_preserve_previous_allocations".
+- "hardlink_observations_are_batched_for_new_and_changed_aliases" bounds new and
+  changed groups at 100/1,000 aliases; "unchanged_nonfile_link_counts_do_not_dirty_refresh".
+- "native_regular_refresh_uses_bulk_records_without_child_stats" isolates native
+  adapter counters and distinguishes bulk enumeration from targeted inspector requests.
+- "native_owned_bulk_refresh_performance" explicitly measures an owned 25,000-file
+  fixture (normally ignored). Native directory time and total refresh time are separate;
+  this is not fake-adapter timing or a production latency guarantee.
+
+[src/operations/native.rs](../src/operations/native.rs)
+"bulk_fallback_checks_directory_identity_and_preserves_symlink_identity" verifies
+identity-checked allocation fallback and no-follow symlink identity on owned fixtures.
 
 [src/operations/performance.rs](../src/operations/performance.rs)
 "operations_release_performance" is an ignored, explicit release measurement of

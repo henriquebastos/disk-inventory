@@ -21,10 +21,22 @@ pub struct NativePin {
     pub(super) _file: File,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct EnumerationWork {
+    pub records: usize,
+    pub child_stat_calls: usize,
+}
+
 pub struct NativeFileSystem {
     snapshot: File,
     identity: Identity,
     root: Identity,
+    #[cfg(test)]
+    pub(super) enumeration_work: EnumerationWork,
+    #[cfg(test)]
+    pub(super) metadata_requests: usize,
+    #[cfg(test)]
+    pub(super) enumeration_elapsed: std::time::Duration,
 }
 impl NativeFileSystem {
     /// Load/pin the same open snapshot inode. Does not check or scan its source root.
@@ -52,6 +64,12 @@ impl NativeFileSystem {
                 snapshot,
                 identity,
                 root,
+                #[cfg(test)]
+                enumeration_work: EnumerationWork::default(),
+                #[cfg(test)]
+                metadata_requests: 0,
+                #[cfg(test)]
+                enumeration_elapsed: std::time::Duration::ZERO,
             },
         ))
     }
@@ -187,24 +205,14 @@ fn check(m: &LiveMetadata, expected: &Target) -> io::Result<()> {
     }
     Ok(())
 }
-fn enumerate(dir: &File) -> io::Result<Vec<DirectoryEntry>> {
+fn enumerate(dir: &File, work: &mut EnumerationWork) -> io::Result<Vec<DirectoryEntry>> {
     let mut entries = Vec::new();
     let mut error = None;
     crate::native::enumerate(dir, |record| {
         let result = (|| {
             let e = record.result?;
-            // bulk supplies mount/firmlink policy; stat supplies only on-demand fields
-            // here because mutation safety also needs precise descendant identities.
-            let mut m = stat_at(
-                dir,
-                &CString::new(record.name.as_slice()).map_err(|_| invalid("invalid child name"))?,
-            )?;
-            if e.kind != Kind::Symlink
-                && (e.dev != m.identity.device || e.ino != m.identity.inode || e.kind != m.kind)
-            {
-                return Err(invalid("child changed during enumeration"));
-            }
-            m.mount = e.mount != 0;
+            work.records += 1;
+            let m = scan_metadata(dir, &record.name, e, work)?;
             Ok(DirectoryEntry {
                 name: record.name,
                 metadata: m,
@@ -219,6 +227,49 @@ fn enumerate(dir: &File) -> io::Result<Vec<DirectoryEntry>> {
         return Err(error);
     }
     Ok(entries)
+}
+fn scan_metadata(
+    dir: &File,
+    name: &[u8],
+    e: crate::Entry,
+    work: &mut EnumerationWork,
+) -> io::Result<ScanMetadata> {
+    // Symlink bulk fields are deliberately undefined in the shared parser. Obtain
+    // their identity without following them so recursive removal can still check
+    // the exact entry. A missing directory allocation is the other allowed fallback.
+    let allocation = if let Some(allocation) = e.allocation {
+        allocation
+    } else {
+        if !matches!(e.kind, Kind::Dir | Kind::Symlink) {
+            return Err(invalid("missing bulk file allocation"));
+        }
+        work.child_stat_calls += 1;
+        let m = stat_at(
+            dir,
+            &CString::new(name).map_err(|_| invalid("invalid child name"))?,
+        )?;
+        if e.kind != m.kind
+            || (e.kind != Kind::Symlink
+                && (e.dev != m.identity.device || e.ino != m.identity.inode))
+        {
+            return Err(invalid("child changed during enumeration fallback"));
+        }
+        if e.kind == Kind::Symlink {
+            return Ok(ScanMetadata::from(&m));
+        }
+        m.allocated_bytes
+    };
+    Ok(ScanMetadata {
+        identity: Identity {
+            device: e.dev,
+            inode: e.ino,
+        },
+        kind: e.kind,
+        allocated_bytes: allocation,
+        links: e.links,
+        flags: e.flags,
+        mount: e.mount != 0,
+    })
 }
 /// Reject known unsupported Foundation representations before any mutation. The
 /// published URL helper has a 1024-byte output buffer and warns about non-Unicode.
@@ -278,6 +329,10 @@ impl FileSystem for NativeFileSystem {
         Some(self.identity)
     }
     fn metadata(&mut self, path: &Path) -> io::Result<LiveMetadata> {
+        #[cfg(test)]
+        {
+            self.metadata_requests += 1;
+        }
         if path == Path::new("/") {
             return stat_fd(&crate::open_directory(path)?);
         }
@@ -285,9 +340,19 @@ impl FileSystem for NativeFileSystem {
         stat_at(&dir, &name)
     }
     fn read_directory(&mut self, target: &Target) -> io::Result<Vec<DirectoryEntry>> {
+        #[cfg(test)]
+        let started = std::time::Instant::now();
         let dir = crate::open_directory(&target.path)?;
         check(&stat_fd(&dir)?, target)?;
-        enumerate(&dir)
+        let mut work = EnumerationWork::default();
+        let result = enumerate(&dir, &mut work);
+        #[cfg(test)]
+        {
+            self.enumeration_elapsed += started.elapsed();
+            self.enumeration_work.records += work.records;
+            self.enumeration_work.child_stat_calls += work.child_stat_calls;
+        }
+        result
     }
     fn trash(&mut self, target: &Target, pin: &Self::Pin) -> Mutation {
         if let Err(e) = stat_fd(&pin._file).and_then(|m| check(&m, target)) {
@@ -398,7 +463,7 @@ fn remove_at(
         if stat_fd(&dir)?.identity != expected {
             return Err(invalid("directory replaced before open"));
         }
-        for entry in enumerate(&dir)? {
+        for entry in enumerate(&dir, &mut EnumerationWork::default())? {
             if entry.metadata.mount {
                 return Err(invalid("refusing mounted child"));
             }
@@ -467,5 +532,57 @@ fn classify(path: &Path, root: Identity) -> io::Result<DestinationScope> {
             .parent()
             .ok_or_else(|| invalid("unknown destination ancestry"))?;
         dir = up;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::tests::Fixture;
+
+    #[test]
+    fn bulk_fallback_checks_directory_identity_and_preserves_symlink_identity() {
+        let fixture = Fixture::new();
+        std::fs::create_dir(fixture.0.join("child")).unwrap();
+        let dir = crate::open_directory(&fixture.0).unwrap();
+        let m = stat_at(&dir, &CString::new("child").unwrap()).unwrap();
+        let directory = |inode| crate::Entry {
+            kind: Kind::Dir,
+            dev: m.identity.device,
+            ino: inode,
+            flags: 16,
+            links: 1,
+            allocation: None,
+            mount: 1,
+        };
+        let mut work = EnumerationWork::default();
+        let scan = scan_metadata(&dir, b"child", directory(m.identity.inode), &mut work).unwrap();
+        assert_eq!(scan.identity, m.identity);
+        assert_eq!(scan.allocated_bytes, m.allocated_bytes);
+        assert_eq!(scan.links, 1);
+        assert_eq!(scan.flags, 16);
+        assert!(scan.mount);
+        assert_eq!(work.child_stat_calls, 1);
+        assert!(scan_metadata(&dir, b"child", directory(m.identity.inode + 1), &mut work).is_err());
+        assert_eq!(work.child_stat_calls, 2);
+        std::fs::write(fixture.0.join("outside"), b"owned target").unwrap();
+        std::os::unix::fs::symlink(fixture.0.join("outside"), fixture.0.join("link")).unwrap();
+        let scan = scan_metadata(&dir, b"link", crate::Entry::symlink(), &mut work).unwrap();
+        assert_eq!(scan.kind, Kind::Symlink);
+        assert_eq!(
+            scan.identity,
+            stat_at(&dir, &CString::new("link").unwrap())
+                .unwrap()
+                .identity
+        );
+        assert_ne!(
+            scan.identity,
+            stat_at(&dir, &CString::new("outside").unwrap())
+                .unwrap()
+                .identity
+        );
+        assert_eq!(work.child_stat_calls, 3);
+        // A symlink swapped for a regular file must not acquire symlink treatment.
+        assert!(scan_metadata(&dir, b"outside", crate::Entry::symlink(), &mut work).is_err());
     }
 }

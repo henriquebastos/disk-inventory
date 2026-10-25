@@ -40,10 +40,33 @@ pub struct LiveMetadata {
     pub flags: u32,
     pub mount: bool,
 }
+/// Collection/accounting fields only; inspector timestamps, mode and logical size
+/// remain in LiveMetadata and are never fabricated by bulk enumeration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScanMetadata {
+    pub identity: Identity,
+    pub kind: Kind,
+    pub allocated_bytes: u64,
+    pub links: u32,
+    pub flags: u32,
+    pub mount: bool,
+}
+impl From<&LiveMetadata> for ScanMetadata {
+    fn from(m: &LiveMetadata) -> Self {
+        Self {
+            identity: m.identity,
+            kind: m.kind,
+            allocated_bytes: m.allocated_bytes,
+            links: m.links,
+            flags: m.flags,
+            mount: m.mount,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct DirectoryEntry {
     pub name: Vec<u8>,
-    pub metadata: LiveMetadata,
+    pub metadata: ScanMetadata,
 }
 #[derive(Clone, Debug)]
 pub struct Target {
@@ -168,6 +191,8 @@ pub struct OperationSession<F: FileSystem> {
     activity: Activity,
     work: UpdateWork,
     groups: BTreeSet<Identity>,
+    observations: HashMap<Identity, index::FileObservation>,
+    survivor_groups: HashSet<Identity>,
     sort: HashSet<u32>,
     issues: Vec<String>,
 }
@@ -187,6 +212,8 @@ impl<F: FileSystem> OperationSession<F> {
             },
             work: UpdateWork::default(),
             groups: BTreeSet::new(),
+            observations: HashMap::new(),
+            survivor_groups: HashSet::new(),
             sort: HashSet::new(),
             issues: Vec::new(),
         }
@@ -335,7 +362,7 @@ impl<F: FileSystem> OperationSession<F> {
         match &mutation {
             Mutation::Removed => {
                 self.state.dirty = true;
-                self.set_metadata(id, &live);
+                self.set_metadata(id, &ScanMetadata::from(&live));
                 let parent = self.explorer.map.nodes[id as usize].parent;
                 self.remove_node(id);
                 self.refresh_own(parent);
@@ -356,7 +383,7 @@ impl<F: FileSystem> OperationSession<F> {
                 };
                 match &classified {
                     DestinationScope::Outside => {
-                        self.set_metadata(id, &live);
+                        self.set_metadata(id, &ScanMetadata::from(&live));
                         let parent = self.explorer.map.nodes[id as usize].parent;
                         self.remove_node(id);
                         self.refresh_own(parent);

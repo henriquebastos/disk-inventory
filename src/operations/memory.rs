@@ -221,7 +221,7 @@ impl FileSystem for MemoryFileSystem {
             .filter(|(p, _)| p.parent() == Some(path.as_path()))
             .map(|(p, m)| DirectoryEntry {
                 name: p.file_name().unwrap().as_bytes().to_vec(),
-                metadata: m.clone(),
+                metadata: ScanMetadata::from(m),
             })
             .collect())
     }
