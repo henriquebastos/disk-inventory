@@ -1,0 +1,7 @@
+**/target/
+/artifacts/
+/.planning/
+/snapshots/
+*.bin
+*.dmap
+.DS_Store
