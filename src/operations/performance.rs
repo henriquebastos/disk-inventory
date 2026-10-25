@@ -139,7 +139,27 @@ fn operations_release_performance() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3_000_000);
     let start = Instant::now();
-    let mut s = timed(with_unrelated(count));
+    let original = session();
+    let mut map = original.explorer.map;
+    for i in 0..count {
+        add(
+            &mut map,
+            3,
+            format!("other-{i:08}").as_bytes(),
+            &meta(1000 + i as u64, Kind::File, 4),
+        );
+    }
+    map.aggregate().unwrap();
+    let fixture_ms = start.elapsed().as_secs_f64() * 1000.;
+    let indexing = Instant::now();
+    let explorer = Explorer::from_map(map).unwrap();
+    let explorer_ms = indexing.elapsed().as_secs_f64() * 1000.;
+    let indexing = Instant::now();
+    let mut s = timed(OperationSession::new(explorer, original.filesystem));
+    let identity_ms = indexing.elapsed().as_secs_f64() * 1000.;
+    println!(
+        "unrelated_startup fixture_ms={fixture_ms:.3} explorer_index_ms={explorer_ms:.3} identity_index_ms={identity_ms:.3}"
+    );
     println!(
         "unrelated_entries={count} startup_ms={:.3} arena_bytes={} explorer_index_bytes={} identity_base_bytes={} rust_live={} process_peak_rss={}",
         start.elapsed().as_secs_f64() * 1000.,
@@ -197,7 +217,16 @@ fn operations_release_performance() {
         fs.insert(format!("/scope/{name}"), m);
     }
     map.aggregate().unwrap();
-    let mut s = timed(OperationSession::new(Explorer::from_map(map).unwrap(), fs));
+    let fixture_ms = start.elapsed().as_secs_f64() * 1000.;
+    let indexing = Instant::now();
+    let explorer = Explorer::from_map(map).unwrap();
+    let explorer_ms = indexing.elapsed().as_secs_f64() * 1000.;
+    let indexing = Instant::now();
+    let mut s = timed(OperationSession::new(explorer, fs));
+    let identity_ms = indexing.elapsed().as_secs_f64() * 1000.;
+    println!(
+        "fanout_startup fixture_ms={fixture_ms:.3} explorer_index_ms={explorer_ms:.3} identity_index_ms={identity_ms:.3}"
+    );
     println!(
         "million_fanout startup_ms={:.3} arena_bytes={} explorer_index_bytes={} identity_base_bytes={} rust_live={} process_peak_rss={}",
         start.elapsed().as_secs_f64() * 1000.,
