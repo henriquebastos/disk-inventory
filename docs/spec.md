@@ -45,9 +45,16 @@ the root; `root()` is absolute. Access is snapshot order, not canonical ordering
 `create` saves even partial results; `is_partial()` and `counters()` expose that
 state. `sync` reopens the saved map and rescans only its full original root. Fatal
 or partial scans do not publish. Partial sync returns an `io::Error` containing
-`IncompleteSync` with counters. Output inside the source root is rejected, including
-parent aliases; destination symlinks are rejected for lifecycle writes. Root
-symlink policy is unchanged. Snapshot parent directories must already exist.
+`IncompleteSync` with counters. Output may be inside the source root, including
+through parent aliases. Create scans before publication. Sync opens the destination
+without following its symlink, loads its root and regular-file identity from that
+same open file, and pins it throughout collection to prevent inode reuse. Both
+collectors can internally omit that identity before arena insertion/accounting;
+the public `scan` remains unfiltered. All current-snapshot hardlinks are omitted,
+not names or directories. Directory allocation stays observed. Unrelated maps and
+older generations retained by hardlinks count normally on later scans. A saved map
+moved/copied inside its root can sync. Destination symlinks are rejected for lifecycle
+writes; root symlink policy is unchanged. Snapshot parents must already exist.
 
 [src/snapshot.rs](../src/snapshot.rs) stores explicit little-endian fields. Saving
 uses a same-directory mode-0600 temporary file, flush/fsync, atomic publication and
@@ -67,13 +74,24 @@ with a missing root. Export allocates one row/path at a time on top of the loade
 - "core_lifecycle_and_hardlink_accounting": API use without a CLI, hardlink ownership,
   mode 0600, saved reads ignoring mutations, explicit sync and missing-root reads.
 - "create_no_clobber_and_destination_safety": existing bytes and symlinks survive
-  no-clobber publication; direct/aliased in-root destinations are rejected for create,
-  and legacy in-root snapshots cannot sync.
+  no-clobber publication; symlink roots and destination symlinks are rejected.
+- "in_root_create_and_repeated_sync_omit_snapshot_from_entries_and_totals": in-root
+  creation/repeated sync omit self from typed entries, exports and totals; public
+  bulk/stat scans remain unfiltered.
+- "aliased_parent_and_current_snapshot_hardlinks_exclude_only_current_identity":
+  aliased parent works; current hardlinks are omitted, unrelated snapshot-looking
+  files and old-generation hardlinks count with deduplication.
+- "legacy_snapshot_moved_or_copied_inside_root_can_sync": version-1 compatibility.
 - "partial_sync_preserves_old_bytes_and_creation_reports_partial": core/CLI partial
-  sync preserves bytes; partial creation and later complete sync. Permission
+  sync preserves in-root bytes; partial creation and later complete sync. Permission
   assertions conditionally skip for privileged processes.
 - "cli_create_info_export_sync_and_missing_root": command lifecycle, data-only stdout,
-  unchanged reads until sync, missing-root export and fatal-sync byte preservation.
+  unchanged reads until sync, missing-root export and fatal-sync in-root byte preservation.
+
+[src/lib.rs](../src/lib.rs)
+"snapshot_identity_exclusion_precedes_accounting_in_both_collectors" checks the
+private identity omission with bulk/stat and one/four workers, including aliases,
+accounted totals and retention of directory identities.
 
 [tests/accounting.rs](../tests/accounting.rs)
 "bulk_stat_and_workers_have_identical_canonical_allocations" covers snapshot mode,
@@ -130,7 +148,7 @@ privilege escalation, deletion, SQLite dependency, watchers or mmap are involved
 
 Errors are counted; up to sixteen scan samples are held in the legacy map. Saved
 snapshots retain counts, not samples. Inaccessible subtrees are not known empty.
-Intentional exclusions are separate counters. APFS clones/shared extents are not
+Symlink/mount/firmlink exclusions have separate counters; snapshot self-omission has none. APFS clones/shared extents are not
 deduplicated; totals need not match `df`. Cloud hydration is not deliberately requested.
 
 Controlled mounts/firmlinks, compressed files, cloud placeholders, concurrent mutation,

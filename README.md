@@ -35,9 +35,25 @@ Native bulk collection defaults to four workers; `create` and `sync` accept
 
 `create` requires a new output file. `sync` rescans the whole original root and
 atomically replaces the existing snapshot only after a complete scan. Fatal or
-partial scans preserve the old bytes. Output must be **outside** the root (including
-parent-directory aliases); lifecycle writes reject destination symlinks. Use a
-trusted snapshot directory. There is no targeted sync or automatic refresh.
+partial scans preserve the old bytes. The output may be inside the root, including
+through parent-directory aliases. Create scans before publishing; sync omits the
+current snapshot's regular-file identity and all its hardlink aliases. Its own file
+allocation is omitted, but directory allocation remains observed. Other files,
+including older snapshot generations retained by hardlinks, count normally.
+Lifecycle writes reject destination symlinks. Use a trusted snapshot directory;
+concurrent namespace changes and sync writers are not serialized. There is no
+targeted sync or automatic refresh.
+
+For the macOS Data volume, with the snapshot in your home directory:
+
+```sh
+"$BIN" create /System/Volumes/Data --output "$HOME/map.dmap"
+"$BIN" sync "$HOME/map.dmap"
+```
+
+Collection stays on one device and excludes discovered mounts (bulk also excludes
+firmlinks). Scanning `/` does **not** inventory all volumes. Permission errors can
+produce a partial map; the tool does not elevate privileges.
 
 `info` and `export` never check or refresh the source tree: they work even if it
 has been renamed or removed. `create`, `sync` and `info` emit one JSON summary;

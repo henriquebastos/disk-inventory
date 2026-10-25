@@ -1,8 +1,9 @@
 //! Saved-inventory lifecycle. Opening and entry access never consult the source tree.
-use crate::{Counters, Kind, Map, Method, invalid, scan, snapshot};
+use crate::{Counters, Kind, Map, Method, invalid, scan, scan_excluding_snapshot, snapshot};
 use std::{
-    fs, io,
-    os::unix::fs::MetadataExt,
+    fs,
+    io::{self, Read},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -60,7 +61,7 @@ impl Inventory {
     /// Create a new snapshot. A partial scan is saved and exposed through `is_partial`.
     pub fn create(root: &Path, output: &Path, options: ScanOptions) -> io::Result<Self> {
         options.validate()?;
-        let output = destination(root, output)?;
+        let output = destination(output)?;
         match fs::symlink_metadata(&output) {
             Ok(_) => {
                 return Err(io::Error::new(
@@ -87,9 +88,28 @@ impl Inventory {
     /// An `io::Error` containing `IncompleteSync` distinguishes a partial scan.
     pub fn sync(path: &Path, options: ScanOptions) -> io::Result<Self> {
         options.validate()?;
-        let root = Self::open(path)?.root().to_path_buf();
-        let path = destination(&root, path)?;
-        let map = scan(&root, Method::Bulk, options.workers)?.map;
+        let path = destination(path)?;
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(invalid("snapshot must be a regular file"));
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        let root = snapshot::decode(&bytes)?.root;
+        drop(bytes);
+        let map = scan_excluding_snapshot(
+            &root,
+            Method::Bulk,
+            options.workers,
+            Some((metadata.dev(), metadata.ino())),
+        )?
+        .map;
+        // Keep the old inode alive until all traversal workers have finished.
+        drop(file);
         if map.counters.errors != 0 {
             return Err(io::Error::other(IncompleteSync {
                 counters: map.counters,
@@ -132,13 +152,7 @@ impl Inventory {
     }
 }
 
-fn destination(root: &Path, output: &Path) -> io::Result<PathBuf> {
-    // Validate the same no-symlink root policy as the collector before resolving aliases.
-    if !root.is_absolute() {
-        return Err(invalid("root must be absolute"));
-    }
-    let root_metadata = crate::open_directory(root)?.metadata()?;
-    let root = fs::canonicalize(root)?;
+fn destination(output: &Path) -> io::Result<PathBuf> {
     let name = output
         .file_name()
         .ok_or_else(|| invalid("snapshot needs a file name"))?;
@@ -147,16 +161,6 @@ fn destination(root: &Path, output: &Path) -> io::Result<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let parent = fs::canonicalize(parent)?;
-    if parent.starts_with(&root) {
-        return Err(invalid("snapshot output must be outside the scanned root"));
-    }
-    // macOS firmlink aliases need not have the same canonical spelling.
-    for ancestor in parent.ancestors() {
-        let metadata = fs::metadata(ancestor)?;
-        if (metadata.dev(), metadata.ino()) == (root_metadata.dev(), root_metadata.ino()) {
-            return Err(invalid("snapshot output must be outside the scanned root"));
-        }
-    }
     let output = parent.join(name);
     // Sync must not follow a destination symlink to another snapshot.
     if fs::symlink_metadata(&output).is_ok_and(|m| m.file_type().is_symlink()) {

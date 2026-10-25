@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
 };
 
-const USAGE: &str = "disk-inventory create ABS_ROOT --output FILE [--workers 1|2|4|8]\ndisk-inventory sync FILE [--workers 1|2|4|8]\ndisk-inventory info FILE\ndisk-inventory export FILE --format csv|jsonl|tsv\nNative bulk collection; default workers: 4. Snapshot output must be outside root.\nCSV/TSV include headers; JSONL does not. Paths are relative; root path is empty.\nExit: 0 complete, 2 partial, 1 fatal. Only sync refreshes saved data.";
+const USAGE: &str = "disk-inventory create ABS_ROOT --output FILE [--workers 1|2|4|8]\ndisk-inventory sync FILE [--workers 1|2|4|8]\ndisk-inventory info FILE\ndisk-inventory export FILE --format csv|jsonl|tsv\nNative bulk collection; default workers: 4. Sync omits only the current snapshot and its hardlinks.\nCSV/TSV include headers; JSONL does not. Paths are relative; root path is empty.\nExit: 0 complete, 2 partial, 1 fatal. Only sync refreshes saved data.";
 
 enum Command {
     Create {

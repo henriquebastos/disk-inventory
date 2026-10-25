@@ -9,7 +9,7 @@ use disk_map_bench::{
 use std::{
     fs,
     io::{self, Write},
-    os::unix::fs::{PermissionsExt, symlink},
+    os::unix::fs::{MetadataExt, PermissionsExt, symlink},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -160,32 +160,169 @@ fn create_no_clobber_and_destination_safety() {
     assert_eq!(fs::read(&f.snapshot).unwrap(), b"old bytes");
     let alias = f.base.join("alias");
     symlink(&f.root, &alias).unwrap();
-    for output in [f.root.join("map"), alias.join("map")] {
-        let error = Inventory::create(&f.root, &output, ScanOptions::default()).unwrap_err();
-        assert!(error.to_string().contains("outside"));
-        assert!(!output.exists());
-    }
     assert!(Inventory::create(&alias, &f.base.join("new"), ScanOptions::default()).is_err());
-    let inside = f.root.join("legacy-map");
-    snapshot::save(&map, &inside).unwrap();
-    let old = fs::read(&inside).unwrap();
-    assert!(
-        Inventory::sync(&inside, ScanOptions::default())
-            .unwrap_err()
-            .to_string()
-            .contains("outside")
-    );
-    assert_eq!(fs::read(&inside).unwrap(), old);
     let link = f.base.join("map-link");
     symlink(&f.snapshot, &link).unwrap();
     assert!(snapshot::save_new(&map, &link).is_err());
+    assert!(Inventory::create(&f.root, &link, ScanOptions::default()).is_err());
     assert_eq!(fs::read(&f.snapshot).unwrap(), b"old bytes");
+    snapshot::save(&map, &f.snapshot).unwrap();
+    let valid_snapshot = fs::read(&f.snapshot).unwrap();
+    assert!(
+        Inventory::sync(&link, ScanOptions::default())
+            .unwrap_err()
+            .to_string()
+            .contains("symlink")
+    );
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(&f.snapshot).unwrap(), valid_snapshot);
     assert_eq!(fs::read_dir(&f.base).unwrap().count(), 4); // No leaked publication temporaries.
+}
+
+// Compare every typed/exported entry and the accounting, not just snapshot absence.
+fn assert_inventory_files(inventory: &Inventory, expected: &[&str]) {
+    let mut files: Vec<_> = inventory
+        .entries()
+        .filter(|e| e.kind == Kind::File)
+        .map(|e| String::from_utf8(e.relative_path).unwrap())
+        .collect();
+    files.sort();
+    let mut expected = expected.to_vec();
+    expected.sort();
+    assert_eq!(files, expected);
+    let mut identities = std::collections::HashSet::new();
+    let expected_files: u64 = expected
+        .iter()
+        .map(|name| {
+            let m = fs::symlink_metadata(inventory.root().join(name)).unwrap();
+            if identities.insert((m.dev(), m.ino())) {
+                m.blocks() * 512
+            } else {
+                0
+            }
+        })
+        .sum();
+    assert!(expected_files > 0);
+    let entries: Vec<_> = inventory.entries().collect();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| e.kind == Kind::File)
+            .map(|e| e.accounted_bytes)
+            .sum::<u64>(),
+        expected_files
+    );
+    let directories: u64 = entries
+        .iter()
+        .filter(|e| e.kind == Kind::Dir)
+        .map(|e| e.allocated_bytes)
+        .sum();
+    assert_eq!(inventory.subtree_bytes(), expected_files + directories);
+    assert_eq!(
+        inventory.subtree_bytes(),
+        entries.iter().map(|e| e.accounted_bytes).sum()
+    );
+    for format in [Format::Csv, Format::Jsonl, Format::Tsv] {
+        let output = String::from_utf8(exported(inventory, format)).unwrap();
+        assert!(!output.contains("map.dmap"));
+        assert!(!output.contains(".disk-map-bench-"));
+    }
+    let saved = Inventory::open(&inventory.root().join("map.dmap")).unwrap();
+    assert_eq!(saved.entries().collect::<Vec<_>>(), entries);
+}
+
+#[test]
+fn in_root_create_and_repeated_sync_omit_snapshot_from_entries_and_totals() {
+    let mut f = Fixture::new();
+    f.snapshot = f.root.join("map.dmap");
+    fs::write(f.root.join("payload"), vec![7; 65537]).unwrap();
+    let created = f.create();
+    assert_inventory_files(&created, &["payload"]);
+    for workers in [1, 2, 4, 8] {
+        let updated = Inventory::sync(&f.snapshot, ScanOptions { workers }).unwrap();
+        assert!(!updated.is_partial());
+        assert_inventory_files(&updated, &["payload"]);
+    }
+    // The benchmark/public scanner remains deliberately unfiltered.
+    for method in [Method::Bulk, Method::Stat] {
+        let map = scan(&f.root, method, 1).unwrap().map;
+        assert!(map.canonical().iter().any(|row| row.0 == b"map.dmap"));
+    }
+}
+
+#[test]
+fn aliased_parent_and_current_snapshot_hardlinks_exclude_only_current_identity() {
+    let f = Fixture::new();
+    let alias = f.base.join("parent-alias");
+    symlink(&f.root, &alias).unwrap();
+    fs::create_dir(f.root.join("nested")).unwrap();
+    fs::write(f.root.join("unrelated.bin"), vec![5; 32769]).unwrap();
+    fs::write(f.root.join("unrelated.dmap"), vec![6; 16385]).unwrap();
+    let output = alias.join("map.dmap");
+    let created = Inventory::create(&f.root, &output, ScanOptions::default()).unwrap();
+    assert_inventory_files(&created, &["unrelated.bin", "unrelated.dmap"]);
+    fs::hard_link(&output, f.root.join("old-generation")).unwrap();
+    fs::hard_link(&output, f.root.join("nested/old-alias")).unwrap();
+    let updated = Inventory::sync(&output, ScanOptions::default()).unwrap();
+    assert_inventory_files(&updated, &["unrelated.bin", "unrelated.dmap"]);
+    assert!(
+        !String::from_utf8(exported(&updated, Format::Jsonl))
+            .unwrap()
+            .contains("old-")
+    );
+    // Atomic replacement leaves the aliases pointing at a real, older generation.
+    let updated = Inventory::sync(&output, ScanOptions::default()).unwrap();
+    assert_inventory_files(
+        &updated,
+        &[
+            "unrelated.bin",
+            "unrelated.dmap",
+            "old-generation",
+            "nested/old-alias",
+        ],
+    );
+    let old: Vec<_> = updated
+        .entries()
+        .filter(|e| {
+            e.relative_path.ends_with(b"old-generation") || e.relative_path.ends_with(b"old-alias")
+        })
+        .collect();
+    assert_eq!(old.len(), 2);
+    assert!(old[0].allocated_bytes > 0);
+    assert_eq!(
+        old.iter().map(|e| e.accounted_bytes).sum::<u64>(),
+        old[0].allocated_bytes
+    );
+}
+
+#[test]
+fn legacy_snapshot_moved_or_copied_inside_root_can_sync() {
+    for copy in [false, true] {
+        let f = Fixture::new();
+        fs::write(f.root.join("payload"), vec![8; 65537]).unwrap();
+        // Existing version-1 format, saved without the lifecycle wrapper.
+        let map = scan(&f.root, Method::Bulk, 1).unwrap().map;
+        snapshot::save(&map, &f.snapshot).unwrap();
+        let inside = f.root.join("map.dmap");
+        if copy {
+            fs::copy(&f.snapshot, &inside).unwrap();
+        } else {
+            fs::rename(&f.snapshot, &inside).unwrap();
+        }
+        let updated = Inventory::sync(&inside, ScanOptions::default()).unwrap();
+        assert_inventory_files(&updated, &["payload"]);
+    }
 }
 
 #[test]
 fn cli_create_info_export_sync_and_missing_root() {
-    let f = Fixture::new();
+    let mut f = Fixture::new();
+    f.snapshot = f.root.join("map.dmap");
     fs::write(f.root.join("first"), b"fixture").unwrap();
     let create = Command::new(env!("CARGO_BIN_EXE_disk-inventory"))
         .arg("create")
@@ -236,6 +373,7 @@ fn cli_create_info_export_sync_and_missing_root() {
     let before = f.cli("export", &["--format", "jsonl"]);
     let bytes = fs::read(&f.snapshot).unwrap();
     fs::rename(&f.root, f.base.join("missing")).unwrap();
+    f.snapshot = f.base.join("missing/map.dmap");
     let after = f.cli("export", &["--format", "jsonl"]);
     success(&after);
     assert_eq!(before.stdout, after.stdout);
@@ -249,7 +387,8 @@ fn cli_create_info_export_sync_and_missing_root() {
 
 #[test]
 fn partial_sync_preserves_old_bytes_and_creation_reports_partial() {
-    let f = Fixture::new();
+    let mut f = Fixture::new();
+    f.snapshot = f.root.join("map.dmap");
     let denied = f.root.join("denied");
     fs::create_dir(&denied).unwrap();
     fs::write(denied.join("secret"), b"fixture").unwrap();

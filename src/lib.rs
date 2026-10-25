@@ -276,6 +276,7 @@ struct State {
     pending: VecDeque<u32>,
     active: usize,
     seen_dirs: HashSet<(u64, u64)>,
+    excluded_snapshot: Option<(u64, u64)>,
 }
 
 fn open_directory(path: &Path) -> io::Result<File> {
@@ -286,6 +287,16 @@ fn open_directory(path: &Path) -> io::Result<File> {
 }
 
 pub fn scan(root: &Path, method: Method, workers: usize) -> io::Result<Scan> {
+    scan_excluding_snapshot(root, method, workers, None)
+}
+
+// The caller must keep the snapshot open throughout collection to pin its identity.
+fn scan_excluding_snapshot(
+    root: &Path,
+    method: Method,
+    workers: usize,
+    excluded_snapshot: Option<(u64, u64)>,
+) -> io::Result<Scan> {
     if ![1, 2, 4, 8].contains(&workers) {
         return Err(invalid("workers must be 1, 2, 4, or 8"));
     }
@@ -322,6 +333,7 @@ pub fn scan(root: &Path, method: Method, workers: usize) -> io::Result<Scan> {
             pending: VecDeque::from([0]),
             active: 0,
             seen_dirs,
+            excluded_snapshot,
         }),
         Condvar::new(),
     );
@@ -465,6 +477,9 @@ fn merge(
             state.map.counters.mounts += 1;
             continue;
         }
+        if e.kind == Kind::File && state.excluded_snapshot == Some((e.dev, e.ino)) {
+            continue;
+        }
         let is_dir = e.kind == Kind::Dir;
         if is_dir && !state.seen_dirs.insert((e.dev, e.ino)) {
             state.map.counters.duplicate_dirs += 1;
@@ -480,4 +495,67 @@ fn merge(
         }
     }
     shared.1.notify_all();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_identity_exclusion_precedes_accounting_in_both_collectors() {
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let root = PathBuf::from(format!(
+            "/private/tmp/disk-inventory-exclusion-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let _fixture = Fixture(root.clone());
+        fs::create_dir(root.join("nested")).unwrap();
+        fs::write(root.join("map.dmap"), vec![3; 65537]).unwrap();
+        fs::hard_link(root.join("map.dmap"), root.join("nested/alias")).unwrap();
+        fs::write(root.join("other.bin"), vec![4; 32769]).unwrap();
+        let file = File::open(root.join("map.dmap")).unwrap();
+        let metadata = file.metadata().unwrap();
+        let identity = (metadata.dev(), metadata.ino());
+        for method in [Method::Bulk, Method::Stat] {
+            for workers in [1, 4] {
+                let full = scan(&root, method, workers).unwrap().map;
+                let filtered = scan_excluding_snapshot(&root, method, workers, Some(identity))
+                    .unwrap()
+                    .map;
+                assert_eq!(filtered.counters.errors, 0);
+                assert_eq!(filtered.nodes.len(), 3);
+                assert!(!filtered.nodes.iter().any(|n| (n.dev, n.ino) == identity));
+                assert_eq!(
+                    filtered
+                        .canonical()
+                        .iter()
+                        .map(|row| row.0.clone())
+                        .collect::<Vec<_>>(),
+                    [b"".to_vec(), b"nested".to_vec(), b"other.bin".to_vec()]
+                );
+                assert!(metadata.blocks() > 0);
+                assert_eq!(
+                    full.nodes[0].subtree - filtered.nodes[0].subtree,
+                    metadata.blocks() * 512
+                );
+                let directory = &full.nodes[0];
+                let unchanged = scan_excluding_snapshot(
+                    &root,
+                    method,
+                    workers,
+                    Some((directory.dev, directory.ino)),
+                )
+                .unwrap()
+                .map;
+                assert_eq!(unchanged.canonical(), full.canonical());
+            }
+        }
+        drop(file);
+    }
 }
