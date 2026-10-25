@@ -164,6 +164,7 @@ pub struct SessionState {
 pub struct UpdateWork {
     pub nodes_examined: usize,
     pub identity_comparisons: usize,
+    /// Group visits, including baseline capture and all propagation/attribution passes.
     pub identity_members: usize,
     pub ancestor_updates: usize,
     pub child_ids_copied: usize,
@@ -192,6 +193,8 @@ pub struct OperationSession<F: FileSystem> {
     work: UpdateWork,
     groups: BTreeSet<Identity>,
     observations: HashMap<Identity, index::FileObservation>,
+    baselines: HashMap<Identity, Option<u64>>,
+    unresolved_groups: HashSet<Identity>,
     survivor_groups: HashSet<Identity>,
     sort: HashSet<u32>,
     issues: Vec<String>,
@@ -213,6 +216,8 @@ impl<F: FileSystem> OperationSession<F> {
             work: UpdateWork::default(),
             groups: BTreeSet::new(),
             observations: HashMap::new(),
+            baselines: HashMap::new(),
+            unresolved_groups: HashSet::new(),
             survivor_groups: HashSet::new(),
             sort: HashSet::new(),
             issues: Vec::new(),

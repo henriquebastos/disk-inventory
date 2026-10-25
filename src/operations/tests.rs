@@ -406,7 +406,8 @@ fn incremental_work_is_independent_of_unrelated_entries_and_batched_per_parent()
         let mut s = with_unrelated(count);
         let c = s.prepare(handle(&s, 2), Action::PermanentlyDelete).unwrap();
         let r = s.execute(c).unwrap();
-        assert!(r.update.work.identity_comparisons < 32);
+        // Two logarithmic lookups: pre-update baseline and final attribution.
+        assert!(r.update.work.identity_comparisons < 64);
         assert_eq!(r.update.work.nodes_examined, 3);
         work.push((
             r.update.work.child_ids_copied,
@@ -965,7 +966,7 @@ fn hardlink_observations_are_batched_for_new_and_changed_aliases() {
     }
     for (count, members) in measurements {
         assert!(
-            members <= 4 * (count as usize + 1),
+            members <= 5 * (count as usize + 1),
             "{count} aliases visited {members} times"
         );
     }
@@ -1087,4 +1088,252 @@ fn conflicting_hardlink_observations_preserve_previous_allocations() {
         }
     }
     assert_consistent(&s);
+}
+
+struct ListingOrder {
+    inner: MemoryFileSystem,
+    reverse: bool,
+}
+impl FileSystem for ListingOrder {
+    type Pin = <MemoryFileSystem as FileSystem>::Pin;
+    fn pin(&mut self, t: &Target) -> io::Result<Self::Pin> {
+        self.inner.pin(t)
+    }
+    fn snapshot_identity(&self) -> Option<Identity> {
+        self.inner.snapshot_identity()
+    }
+    fn metadata(&mut self, p: &Path) -> io::Result<LiveMetadata> {
+        self.inner.metadata(p)
+    }
+    fn read_directory(&mut self, t: &Target) -> io::Result<Vec<DirectoryEntry>> {
+        let mut entries = self.inner.read_directory(t)?;
+        if self.reverse {
+            entries.reverse();
+        }
+        Ok(entries)
+    }
+    fn trash(&mut self, t: &Target, p: &Self::Pin) -> Mutation {
+        self.inner.trash(t, p)
+    }
+    fn remove(&mut self, t: &Target, p: &Self::Pin) -> Mutation {
+        self.inner.remove(t, p)
+    }
+    fn classify_destination(&mut self, p: &Path, r: Identity) -> DestinationScope {
+        self.inner.classify_destination(p, r)
+    }
+}
+#[test]
+fn newly_appended_conflicting_aliases_retain_baseline_in_both_orders() {
+    for (first, last) in [(100, 500), (500, 100)] {
+        for reverse_listing in [false, true] {
+            let mut s = session();
+            let rows = vec![("/scope/a/alias-a", first), ("/scope/a/alias-b", last)];
+            for (path, raw) in rows {
+                s.filesystem.insert(path, meta(5, Kind::File, raw));
+            }
+            let mut s = OperationSession::new(
+                s.explorer,
+                ListingOrder {
+                    inner: s.filesystem,
+                    reverse: reverse_listing,
+                },
+            );
+            let r = s.refresh_directory(s.explorer.handle(1)).unwrap();
+            println!(
+                "new conflict first={first} reverse_listing={reverse_listing} total={} work={:?}",
+                total(&s),
+                r.work
+            );
+            assert_eq!(total(&s), 360);
+            assert!(r.state.stale);
+            let aliases: Vec<_> = s
+                .explorer
+                .children(s.explorer.handle(1), 0, 10)
+                .unwrap()
+                .entries
+                .into_iter()
+                .filter(|e| e.basename.starts_with(b"alias"))
+                .collect();
+            assert_eq!(aliases.len(), 2);
+            for a in aliases {
+                assert_eq!(a.allocated_bytes, 200);
+                assert_eq!(
+                    a.accounted_bytes,
+                    if a.basename == b"alias-a" { 200 } else { 0 }
+                );
+            }
+            assert_eq!(
+                s.explorer
+                    .entry(s.explorer.handle(4))
+                    .unwrap()
+                    .accounted_bytes,
+                0
+            );
+            assert_consistent(&s);
+        }
+    }
+}
+#[test]
+fn conflicting_new_aliases_retain_baseline_when_old_alias_is_removed() {
+    let mut s = session();
+    // This identity is an overlay entry, not an original baseline-index slot.
+    s.filesystem
+        .insert("/scope/a/old", meta(20, Kind::File, 200));
+    s.refresh_directory(handle(&s, 1)).unwrap();
+    let before = total(&s);
+    s.filesystem.erase(Path::new("/scope/a/old"));
+    s.filesystem
+        .insert("/scope/a/alias-a", meta(20, Kind::File, 100));
+    s.filesystem
+        .insert("/scope/a/alias-b", meta(20, Kind::File, 500));
+    let r = s.refresh_directory(handle(&s, 1)).unwrap();
+    println!("removed baseline total={} work={:?}", total(&s), r.work);
+    assert!(r.state.stale);
+    assert_eq!(total(&s), before);
+    for a in s.explorer.children(handle(&s, 1), 0, 10).unwrap().entries {
+        if a.basename.starts_with(b"alias") {
+            assert_eq!(a.allocated_bytes, 200);
+        }
+    }
+    assert_consistent(&s);
+}
+#[test]
+fn entirely_new_conflicting_identity_remains_unattributed_until_consistent() {
+    for (first, last) in [(100, 500), (500, 100)] {
+        let mut s = session();
+        for (path, raw) in [("/scope/a/alias-a", first), ("/scope/a/alias-b", last)] {
+            s.filesystem.insert(path, meta(20, Kind::File, raw));
+        }
+        for iteration in 0..2 {
+            let r = s.refresh_directory(handle(&s, 1)).unwrap();
+            println!(
+                "unknown conflict iteration={iteration} first={first} total={} work={:?}",
+                total(&s),
+                r.work
+            );
+            assert_eq!(total(&s), 360);
+            assert!(r.state.stale);
+            assert!(r.issues.iter().any(
+                |issue| issue.contains("no prior allocation") && issue.contains("unattributed")
+            ));
+            for a in s.explorer.children(handle(&s, 1), 0, 10).unwrap().entries {
+                if a.basename.starts_with(b"alias") {
+                    assert_eq!(a.accounted_bytes, 0);
+                    assert_eq!(
+                        a.allocated_bytes,
+                        if a.basename == b"alias-a" {
+                            first
+                        } else {
+                            last
+                        }
+                    );
+                }
+            }
+            assert_consistent(&s);
+        }
+        // Both fresh values now equal already stored raw values at some alias.
+        s.filesystem
+            .insert("/scope/a/alias-b", meta(20, Kind::File, first));
+        let r = s.refresh_directory(handle(&s, 1)).unwrap();
+        assert!(r.issues.is_empty());
+        assert_eq!(total(&s), 360 + first);
+        assert_consistent(&s);
+    }
+}
+#[test]
+fn known_zero_allocation_is_not_an_unknown_conflict_baseline() {
+    let mut s = session();
+    s.filesystem
+        .insert("/scope/z/zero", meta(20, Kind::File, 0));
+    s.refresh_directory(handle(&s, 3)).unwrap();
+    s.filesystem
+        .insert("/scope/a/alias-a", meta(20, Kind::File, 100));
+    s.filesystem
+        .insert("/scope/a/alias-b", meta(20, Kind::File, 500));
+    let r = s.refresh_directory(handle(&s, 1)).unwrap();
+    assert_eq!(total(&s), 360);
+    assert!(r.state.stale);
+    assert!(
+        r.issues
+            .iter()
+            .all(|issue| !issue.contains("no prior allocation"))
+    );
+    for a in s.explorer.children(handle(&s, 1), 0, 10).unwrap().entries {
+        if a.basename.starts_with(b"alias") {
+            assert_eq!(a.allocated_bytes, 0);
+            assert_eq!(a.accounted_bytes, 0);
+        }
+    }
+    assert_consistent(&s);
+}
+
+#[test]
+fn unknown_group_recovers_from_unchanged_raw_observation_in_one_region() {
+    let mut s = session();
+    s.filesystem
+        .insert("/scope/a/alias", meta(20, Kind::File, 100));
+    s.filesystem
+        .insert("/scope/z/alias", meta(20, Kind::File, 500));
+    s.refresh_directory(s.explorer.root_handle()).unwrap();
+    assert_eq!(total(&s), 360);
+    assert!(
+        s.unresolved_groups
+            .contains(&meta(20, Kind::File, 0).identity)
+    );
+    s.filesystem
+        .insert("/scope/z/alias", meta(20, Kind::File, 100));
+    let r = s.refresh_directory(handle(&s, 1)).unwrap();
+    println!(
+        "unchanged raw recovery total={} work={:?}",
+        total(&s),
+        r.work
+    );
+    assert!(r.issues.is_empty());
+    assert_eq!(total(&s), 460);
+    assert!(s.unresolved_groups.is_empty());
+    assert_consistent(&s);
+}
+#[test]
+fn removing_all_unknown_aliases_prunes_uncertainty_without_reusing_a_baseline() {
+    let mut s = session();
+    for iteration in 0..2 {
+        s.filesystem
+            .insert("/scope/a/alias-a", meta(20, Kind::File, 100));
+        s.filesystem
+            .insert("/scope/a/alias-b", meta(20, Kind::File, 500));
+        let r = s.refresh_directory(handle(&s, 1)).unwrap();
+        assert_eq!(total(&s), 360);
+        assert!(r.issues.iter().any(|i| i.contains("no prior allocation")));
+        assert_eq!(s.unresolved_groups.len(), 1);
+        s.filesystem.erase(Path::new("/scope/a/alias-a"));
+        s.filesystem.erase(Path::new("/scope/a/alias-b"));
+        let r = s.refresh_directory(handle(&s, 1)).unwrap();
+        println!("unknown cleanup iteration={iteration} work={:?}", r.work);
+        assert_eq!(total(&s), 360);
+        assert!(s.unresolved_groups.is_empty());
+        assert_consistent(&s);
+    }
+}
+#[test]
+fn conflicting_alias_baselines_keep_group_work_linear() {
+    for count in [100, 1000] {
+        let mut s = session();
+        for i in 0..count {
+            s.filesystem.insert(
+                format!("/scope/a/alias-{i:04}"),
+                meta(5, Kind::File, if i % 2 == 0 { 100 } else { 500 }),
+            );
+        }
+        let r = s.refresh_directory(handle(&s, 1)).unwrap();
+        println!(
+            "conflicting_aliases={count} total={} work={:?}",
+            total(&s),
+            r.work
+        );
+        assert_eq!(total(&s), 360);
+        assert!(r.state.stale);
+        assert!(r.work.identity_members <= 5 * (count + 1));
+        assert_eq!(s.baselines.capacity(), 0);
+        assert_consistent(&s);
+    }
 }

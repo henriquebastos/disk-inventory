@@ -102,6 +102,8 @@ fn timed(s: OperationSession<MemoryFileSystem>) -> OperationSession<TimedMemory>
         work: s.work,
         groups: s.groups,
         observations: s.observations,
+        baselines: s.baselines,
+        unresolved_groups: s.unresolved_groups,
         survivor_groups: s.survivor_groups,
         sort: s.sort,
         issues: s.issues,

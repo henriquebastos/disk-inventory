@@ -107,6 +107,25 @@ impl<F: FileSystem> OperationSession<F> {
             self.explorer.map.nodes[id as usize].accounted = bytes;
         }
     }
+    fn capture_baseline(&mut self, key: Identity) {
+        if self.baselines.contains_key(&key) {
+            return;
+        }
+        let mut allocation = None;
+        if !self.unresolved_groups.contains(&key) {
+            // Capture before the first append/removal/update, including overlay
+            // members. A known zero is Some(0), not an unknown observation.
+            for id in self.members(key) {
+                self.work.identity_members += 1;
+                let node = &self.explorer.map.nodes[id as usize];
+                if node.kind == Kind::File {
+                    allocation = Some(node.raw);
+                    break;
+                }
+            }
+        }
+        self.baselines.insert(key, allocation);
+    }
     fn observe_file(&mut self, m: &ScanMetadata) {
         let previous = self
             .observations
@@ -114,15 +133,27 @@ impl<F: FileSystem> OperationSession<F> {
             .or_insert_with(|| FileObservation::new(m));
         if previous.allocation != m.allocated_bytes {
             previous.conflicting = true;
-            self.issue("conflicting allocation observations for one inode; previous recorded allocations retained");
         } else {
             previous.links = m.links;
+        }
+        // Recovery cannot depend on raw-value change detection: an unknown group
+        // may become consistent at a value already stored on one or all aliases.
+        if self.unresolved_groups.contains(&m.identity) {
+            self.capture_baseline(m.identity);
+            self.groups.insert(m.identity);
         }
     }
     pub(super) fn reaccount(&mut self) {
         for key in std::mem::take(&mut self.groups) {
             let members = self.members(key);
-            if self.survivor_groups.contains(&key) {
+            if members.is_empty() {
+                self.unresolved_groups.remove(&key);
+                continue;
+            }
+            let conflicting = self.observations.get(&key).is_some_and(|m| m.conflicting);
+            // One post-removal alias cannot resolve contradictory observations
+            // from the same refresh. Nonconflicting survivor freshness is unchanged.
+            if self.survivor_groups.contains(&key) && !conflicting {
                 // A removed directory's old descendant allocation is not evidence
                 // of the current size of its aliases elsewhere in scope.
                 if let Some(&survivor) = members.first() {
@@ -144,6 +175,22 @@ impl<F: FileSystem> OperationSession<F> {
                 .get(&key)
                 .filter(|m| !m.conflicting)
                 .copied();
+            let baseline = self.baselines.get(&key).copied();
+            let allocation = observation.map(|m| m.allocation).or(baseline.flatten());
+            let unattributed = observation.is_none()
+                && (self.unresolved_groups.contains(&key) || baseline == Some(None));
+            if observation.is_some() {
+                self.unresolved_groups.remove(&key);
+            } else if unattributed {
+                self.unresolved_groups.insert(key);
+                self.issue(if conflicting {
+                    "conflicting allocation observations for one inode; no prior allocation; group left unattributed"
+                } else {
+                    "no prior allocation after failed observation; group left unattributed"
+                });
+            } else if conflicting {
+                self.issue("conflicting allocation observations for one inode; previous recorded allocation retained");
+            }
             let mut owner = None;
             let mut owner_path = Vec::new();
             for &id in &members {
@@ -152,11 +199,16 @@ impl<F: FileSystem> OperationSession<F> {
                 if n.kind != Kind::File {
                     continue;
                 }
-                if let Some(m) = observation {
-                    if n.raw != m.allocation || n.links != m.links {
+                if let Some(allocation) = allocation {
+                    if n.raw != allocation {
                         self.state.dirty = true;
                     }
-                    n.raw = m.allocation;
+                    n.raw = allocation;
+                }
+                if let Some(m) = observation {
+                    if n.links != m.links {
+                        self.state.dirty = true;
+                    }
                     n.links = m.links;
                 }
                 let path = self.explorer.map.relative_path(id as usize);
@@ -174,11 +226,19 @@ impl<F: FileSystem> OperationSession<F> {
             }
             if let Some(id) = owner {
                 self.work.identity_members += 1;
-                self.accounted(id, self.explorer.map.nodes[id as usize].raw);
+                self.accounted(
+                    id,
+                    if unattributed {
+                        0
+                    } else {
+                        self.explorer.map.nodes[id as usize].raw
+                    },
+                );
             }
         }
         // These are operation-local observations, not another retained inode index.
         self.observations = HashMap::new();
+        self.baselines = HashMap::new();
         self.survivor_groups = HashSet::new();
     }
     pub(super) fn set_metadata(&mut self, id: u32, m: &ScanMetadata) {
@@ -195,6 +255,7 @@ impl<F: FileSystem> OperationSession<F> {
         }
         self.state.dirty = true;
         if m.kind == Kind::File {
+            self.capture_baseline(m.identity);
             self.groups.insert(m.identity);
         } else {
             self.explorer.map.nodes[id as usize].raw = m.allocated_bytes;
@@ -220,6 +281,9 @@ impl<F: FileSystem> OperationSession<F> {
             return Err(invalid(
                 "duplicate directory identity; new alias not traversed",
             ));
+        }
+        if m.kind == Kind::File {
+            self.capture_baseline(m.identity);
         }
         let id = self.explorer.map.add(
             parent,
@@ -276,11 +340,14 @@ impl<F: FileSystem> OperationSession<F> {
             self.work.nodes_examined += 1;
             self.work.child_ids_copied += self.explorer.child_ids(id).len();
             pending.extend_from_slice(self.explorer.child_ids(id));
-            let n = &mut self.explorer.map.nodes[id as usize];
+            let n = &self.explorer.map.nodes[id as usize];
             if n.kind == Kind::File {
-                self.groups.insert(identity(n));
-                self.survivor_groups.insert(identity(n));
+                let key = identity(n);
+                self.capture_baseline(key);
+                self.groups.insert(key);
+                self.survivor_groups.insert(key);
             }
+            let n = &mut self.explorer.map.nodes[id as usize];
             n.accounted = 0;
             n.subtree = 0;
             self.explorer.invalidate(id);

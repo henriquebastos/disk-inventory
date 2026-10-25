@@ -52,8 +52,16 @@ entries, discovered mounts and firmlinks. Failed enumeration is never an empty l
 Hardlink ownership remains the smallest raw relative path, including aliases outside
 the refreshed/moved region. Allocation/link observations are staged per identity;
 propagation and canonical ownership are applied once per affected group, then the
-observation tables are released. Conflicting
-allocation observations mark stale and retain previous recorded allocations. After
+observation tables are released. A baseline is captured before the first group edit,
+independently of newly appended aliases. Conflicts retain that allocation (including
+known zero) across canonical-owner transfer and removal of old aliases. With no
+trustworthy baseline, raw observations remain visible but the group is unattributed:
+zero accounted bytes means **unknown, not measured zero**. An explicit issue and
+stale state require presentation as a partial/stale total. Repeated conflicts cannot
+promote those observations to a baseline. Consistent fresh observations resolve the
+group even if raw values are unchanged; empty groups lose their uncertainty marker.
+A single survivor observation does not override conflicting records from the same
+refresh. After
 removal (including an outside move), surviving groups receive a targeted identity-
 validated alias observation; failure retains recorded allocation and marks stale.
 Directory-own allocation remains separate.
@@ -64,7 +72,8 @@ bounded by the changed/selected region, affected parent fanout, ancestor depth a
 identity groups (including tombstoned group members), **not solely changed entries**.
 Affected parents are sorted once per update when ordering changes; deletion-only
 child filtering preserves order. `UpdateWork` charges visited entries, baseline
-identity comparisons and group visits (lookup, propagation/owner choice, attribution),
+identity comparisons and group visits (baseline capture, lookup, propagation/owner
+choice, attribution),
 ancestor validation/updates, child IDs copied/sorted
 and refresh directory reads. It does not count adapter I/O or safety preflight scans.
 Navigation/layout budgets are unchanged. Arenas/tombstones/overlays grow for the
@@ -127,6 +136,18 @@ Additional regressions in [src/operations/tests.rs](../src/operations/tests.rs):
 - "native_owned_bulk_refresh_performance" explicitly measures an owned 25,000-file
   fixture (normally ignored). Native directory time and total refresh time are separate;
   this is not fake-adapter timing or a production latency guarantee.
+
+Conflict-baseline regressions in [src/operations/tests.rs](../src/operations/tests.rs):
+
+- "newly_appended_conflicting_aliases_retain_baseline_in_both_orders" reverses
+  observed values and actual enumeration order.
+- "conflicting_new_aliases_retain_baseline_when_old_alias_is_removed" and
+  "known_zero_allocation_is_not_an_unknown_conflict_baseline".
+- "entirely_new_conflicting_identity_remains_unattributed_until_consistent",
+  "unknown_group_recovers_from_unchanged_raw_observation_in_one_region" and
+  "removing_all_unknown_aliases_prunes_uncertainty_without_reusing_a_baseline".
+- "conflicting_alias_baselines_keep_group_work_linear" bounds 100/1,000 aliases;
+  all baseline and propagation visits remain charged.
 
 [src/operations/native.rs](../src/operations/native.rs)
 "bulk_fallback_checks_directory_identity_and_preserves_symlink_identity" verifies
