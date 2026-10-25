@@ -136,6 +136,46 @@ fn unrepresentable_subdivisions_preserve_the_parent_region() {
 }
 
 #[test]
+fn rejected_subdivisions_consume_the_global_work_budget() {
+    let mut map = tree();
+    map.nodes[0].raw = 0;
+    for directory in 0..8 {
+        let parent = add(
+            &mut map,
+            0,
+            format!("directory{directory}").as_bytes(),
+            Kind::Dir,
+            1,
+        );
+        for file in 0..8 {
+            add(
+                &mut map,
+                parent,
+                format!("file{file}").as_bytes(),
+                Kind::File,
+                1_000_000_000_000,
+            );
+        }
+    }
+    let explorer = explorer(map);
+    for max_rectangles in [32, 16, 64] {
+        let options = LayoutOptions {
+            viewport: Rect {
+                x: 1e16,
+                y: 1e16,
+                width: 16.0,
+                height: 16.0,
+            },
+            max_rectangles,
+            min_area: 0.0,
+            max_depth: 4,
+        };
+        let layout = explorer.layout(explorer.root_handle(), options).unwrap();
+        validate(&layout, options);
+    }
+}
+
+#[test]
 fn hierarchy_hardlinks_rollups_and_immediate_selection() {
     let mut map = tree();
     let a = add(&mut map, 0, b"a", Kind::Dir, 11);
@@ -381,6 +421,28 @@ fn varied_hierarchies_have_bounded_proportional_deterministic_layouts() {
             };
             let a = ex.layout(ex.handle(focus), opts).unwrap();
             let b = ex.layout(ex.handle(focus), opts).unwrap();
+            let translated_options = LayoutOptions {
+                viewport: Rect {
+                    x: opts.viewport.x + 137.0,
+                    y: opts.viewport.y + 251.0,
+                    ..opts.viewport
+                },
+                ..opts
+            };
+            let translated = ex.layout(ex.handle(focus), translated_options).unwrap();
+            validate(&translated, translated_options);
+            assert_eq!(
+                a.tiles
+                    .iter()
+                    .map(|tile| (tile.kind, tile.bytes))
+                    .collect::<Vec<_>>(),
+                translated
+                    .tiles
+                    .iter()
+                    .map(|tile| (tile.kind, tile.bytes))
+                    .collect::<Vec<_>>(),
+                "ordinary coordinate rounding must not remove detail"
+            );
             validate(&a, opts);
             assert_eq!(a.work, b.work);
             assert_eq!(

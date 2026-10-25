@@ -37,6 +37,21 @@ impl Rect {
             && self.x + self.width > self.x
             && self.y + self.height > self.y
     }
+    fn contains(self, other: Self) -> bool {
+        // Allow ordinary coordinate roundoff without accepting drift comparable
+        // to a region's size at large origins.
+        let slack = |origin: f64, extent: f64| {
+            let magnitude = origin.abs().max((origin + extent).abs()).max(extent);
+            (magnitude * f64::EPSILON * 16.0).min(extent * 1e-9)
+        };
+        let x_slack = slack(self.x, self.width);
+        let y_slack = slack(self.y, self.height);
+        other.valid()
+            && other.x >= self.x - x_slack
+            && other.y >= self.y - y_slack
+            && other.x + other.width <= self.x + self.width + x_slack
+            && other.y + other.height <= self.y + self.height + y_slack
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct LayoutOptions {
@@ -76,6 +91,7 @@ pub struct Group {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutWork {
     pub entries_examined: usize,
+    /// At most twice the rectangle budget, including rejected subdivisions.
     pub child_ids_examined: usize,
     pub directories_expanded: usize,
 }
@@ -176,7 +192,11 @@ impl Explorer {
                 - pending.len()
                 - 1;
             let children = self.child_ids(id);
-            if tile.depth >= options.max_depth
+            // Rejected subdivisions still consume work, even though their output
+            // slots remain available to other regions.
+            let child_budget = 2 * options.max_rectangles - result.work.child_ids_examined;
+            if child_budget == 0
+                || tile.depth >= options.max_depth
                 || slots < 2
                 || children.is_empty()
                 || tile.rect.area() < options.min_area
@@ -187,7 +207,7 @@ impl Explorer {
             let mut parts = Vec::new();
             let mut remaining = tile.bytes;
             // Reserve one slot for a rollup; this also bounds work on huge fanout.
-            for &child in children.iter().take(slots - 1) {
+            for &child in children.iter().take((slots - 1).min(child_budget)) {
                 result.work.child_ids_examined += 1;
                 let bytes = self.map.nodes[child as usize].subtree;
                 if bytes == 0
@@ -220,10 +240,9 @@ impl Explorer {
                     parent: Some(self.handle(id)),
                 });
             }
-            squarify(&mut parts, tile.rect, tile.bytes);
-            // Rounded endpoints can collapse distinct regions. Keep their parent
-            // intact rather than emit overlapping or zero-extent allocations.
-            if parts.iter().any(|part| !part.rect.valid()) {
+            // Rounded endpoints can collapse or escape a subdivision. Keep the
+            // parent intact when its children cannot form valid regions.
+            if !squarify(&mut parts, tile.rect, tile.bytes) {
                 result.tiles.push(tile);
                 continue;
             }
@@ -254,10 +273,14 @@ impl Explorer {
 
 // Squarified rows, O(k log k) for a bounded prefix, not the inventory. Ratios of
 // remaining integer weights avoid catastrophic cancellation on skewed trees.
-fn squarify(parts: &mut [Tile], mut rect: Rect, mut remaining: u64) {
+fn squarify(parts: &mut [Tile], mut rect: Rect, mut remaining: u64) -> bool {
+    let bounds = rect;
     parts.sort_by_key(|part| std::cmp::Reverse(part.bytes));
     let mut start = 0;
     while start < parts.len() {
+        if !bounds.contains(rect) {
+            return false;
+        }
         let side = rect.width.min(rect.height);
         let scale = rect.area() / remaining as f64;
         let mut end = start + 1;
@@ -275,6 +298,20 @@ fn squarify(parts: &mut [Tile], mut rect: Rect, mut remaining: u64) {
         let vertical = rect.width >= rect.height;
         let fraction = weight as f64 / remaining as f64;
         let thickness = if vertical { rect.width } else { rect.height } * fraction;
+        let row = if vertical {
+            Rect {
+                width: thickness,
+                ..rect
+            }
+        } else {
+            Rect {
+                height: thickness,
+                ..rect
+            }
+        };
+        if !rect.contains(row) {
+            return false;
+        }
         let mut offset = if vertical { rect.y } else { rect.x };
         for part in &mut parts[start..end] {
             let length = if vertical { rect.height } else { rect.width }
@@ -294,6 +331,9 @@ fn squarify(parts: &mut [Tile], mut rect: Rect, mut remaining: u64) {
                     height: thickness,
                 }
             };
+            if !row.contains(part.rect) {
+                return false;
+            }
             offset += length;
         }
         let rest = (remaining - weight) as f64 / remaining as f64;
@@ -307,4 +347,5 @@ fn squarify(parts: &mut [Tile], mut rect: Rect, mut remaining: u64) {
         remaining -= weight;
         start = end;
     }
+    true
 }
