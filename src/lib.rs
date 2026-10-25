@@ -1,4 +1,8 @@
 #![cfg(target_os = "macos")]
+#[cfg(feature = "bridge")]
+pub mod bridge;
+#[cfg(feature = "bridge")]
+uniffi::setup_scaffolding!();
 pub mod explorer;
 pub mod export;
 pub mod inventory;

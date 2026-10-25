@@ -4,8 +4,22 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = []
+bridge = ["dep:uniffi"]
+bridge-build = ["bridge", "uniffi/cli"]
+
+[[bin]]
+name = "bridge-bindgen"
+path = "src/bin/bridge-bindgen.rs"
+required-features = ["bridge-build"]
+
 [dependencies]
 libc = "=0.2.186"
+uniffi = { version = "=0.32.2", optional = true }
 
 [profile.release]
 debug = 1

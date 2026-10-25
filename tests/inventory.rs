@@ -113,7 +113,7 @@ fn core_lifecycle_and_hardlink_accounting() {
     assert_eq!(alias.accounted_bytes, 0);
     assert_eq!(
         inventory.subtree_bytes(),
-        entries.iter().map(|e| e.accounted_bytes).sum()
+        entries.iter().map(|e| e.accounted_bytes).sum::<u64>()
     );
     assert_eq!(
         fs::metadata(&f.snapshot).unwrap().permissions().mode() & 0o777,
@@ -225,7 +225,7 @@ fn assert_inventory_files(inventory: &Inventory, expected: &[&str]) {
     assert_eq!(inventory.subtree_bytes(), expected_files + directories);
     assert_eq!(
         inventory.subtree_bytes(),
-        entries.iter().map(|e| e.accounted_bytes).sum()
+        entries.iter().map(|e| e.accounted_bytes).sum::<u64>()
     );
     for format in [Format::Csv, Format::Jsonl, Format::Tsv] {
         let output = String::from_utf8(exported(inventory, format)).unwrap();

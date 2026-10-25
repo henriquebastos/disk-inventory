@@ -4,8 +4,9 @@ A macOS allocated-storage inventory with a reusable Rust core and a small CLI:
 **create, sync, info, export**. Scan once, then use saved data with external tools
 such as jq, sort or SQLite. There is no filtering or sorting language. The CLI never
 deletes source files. The reusable [operation session](docs/operations.md)
-adds explicitly confirmed Trash/removal and local refresh for native clients. No
-source-file contents are read.
+adds explicitly confirmed Trash/removal and local refresh for native clients.
+The optional [generated Swift bridge](docs/bridge.md) exposes owned sessions and
+bounded views, with native-free fixture scenarios. No source-file contents are read.
 
 Opening a snapshot eagerly reads and validates the entire file, reconstructs its
 arrays and recomputes accounting. Export streams entries from that in-memory map;
