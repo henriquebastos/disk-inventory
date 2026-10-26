@@ -1,0 +1,57 @@
+name: DiskInventory
+options:
+  deploymentTarget:
+    # Match the installed Rust standard library archive's minimum OS.
+    macOS: '26.0'
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    CODE_SIGN_IDENTITY: '-'
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: NO
+    GENERATE_INFOPLIST_FILE: YES
+    SWIFT_INCLUDE_PATHS: '$(BRIDGE_ROOT)/generated'
+    HEADER_SEARCH_PATHS: '$(BRIDGE_ROOT)/generated'
+    OTHER_LDFLAGS: ['$(BRIDGE_ROOT)/target/release/libdisk_map_bench.a', '-framework', Foundation]
+targets:
+  DiskInventory:
+    type: application
+    platform: macOS
+    sources:
+      - path: ${REPO_ROOT}/native/Explorer
+      - path: ${BRIDGE_ROOT}/generated/disk_map_bench.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.diskinventory.explorer
+        INFOPLIST_KEY_CFBundleDisplayName: Disk Inventory
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+  ExplorerModelTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: ${REPO_ROOT}/native/ExplorerModelTests
+    dependencies:
+      - target: DiskInventory
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.diskinventory.explorer.modeltests
+  ExplorerUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: ${REPO_ROOT}/native/ExplorerTests
+    dependencies:
+      - target: DiskInventory
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.diskinventory.explorer.uitests
+        TEST_TARGET_NAME: DiskInventory
+schemes:
+  DiskInventory:
+    build:
+      targets:
+        DiskInventory: all
+        ExplorerUITests: [test]
+        ExplorerModelTests: [test]
+    test:
+      targets: [ExplorerModelTests, ExplorerUITests]

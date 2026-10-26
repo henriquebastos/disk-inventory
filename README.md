@@ -6,7 +6,9 @@ such as jq, sort or SQLite. There is no filtering or sorting language. The CLI n
 deletes source files. The reusable [operation session](docs/operations.md)
 adds explicitly confirmed Trash/removal and local refresh for native clients.
 The optional [generated Swift bridge](docs/bridge.md) exposes owned sessions and
-bounded views, with native-free fixture scenarios. No source-file contents are read.
+bounded views, with native-free fixture scenarios. The [native explorer](docs/native-explorer.md)
+adds a SwiftUI/AppKit table, treemap, async inspector and explicitly confirmed
+operations. No source-file contents are read.
 
 Opening a snapshot eagerly reads and validates the entire file, reconstructs its
 arrays and recomputes accounting. Export streams entries from that in-memory map;

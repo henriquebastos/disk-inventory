@@ -140,5 +140,6 @@ Discover entries through bounded queries: `small-files/small-00` through
 
 The Swift smoke exercises these generated conversions and operation flows, plus
 one explicitly owned one-file create followed by unavailable-source open. It
-never requests native Trash or permanent deletion. GUI/XCUITest, native Trash,
-hostile namespace races, non-macOS and Intel linking remain untested here.
+never requests native Trash or permanent deletion. Native GUI/XCUITest behavior
+is documented in [native-explorer.md](native-explorer.md). Native Trash, hostile
+namespace races, non-macOS and Intel linking remain untested here.
