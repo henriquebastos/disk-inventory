@@ -22,6 +22,9 @@ import SwiftUI
     window.delegate = self
     window.isReleasedWhenClosed = false
     window.isRestorable = false
+    if model.fixtureMode && ProcessInfo.processInfo.arguments.contains("--minimum-window") {
+      window.setFrame(NSRect(origin: .zero, size: window.minSize), display: false)
+    }
     window.center()
     if model.fixtureMode, let screen = NSScreen.screens.first {
       window.setFrameOrigin(
@@ -38,19 +41,23 @@ import SwiftUI
 
 struct ExplorerView: View {
   @Bindable var model: ExplorerModel
+  @State private var showsConfirmationHex = false
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack {
         Button("Open Snapshot…", systemImage: "folder", action: model.openSnapshot).disabled(
-          model.fixtureMode || model.working
+          model.fixtureMode || model.working || model.replacingSession
         ).accessibilityIdentifier("open-snapshot")
         Button("Create Inventory…", systemImage: "plus", action: model.createSnapshot).disabled(
-          model.fixtureMode || model.working
+          model.fixtureMode || model.working || model.replacingSession
         ).accessibilityIdentifier("create-inventory")
         Spacer()
-        if model.loading || model.working {
+        if model.loading || model.working || model.replacingSession {
           ProgressView().controlSize(.small)
-          Text("Working…").font(.caption)
+          Text(
+            model.replacingSession
+              ? "Loading new inventory… Previous view is read-only." : "Working…"
+          ).font(.caption)
         }
       }.padding(12).background(.bar)
       Divider()
@@ -95,9 +102,13 @@ struct ExplorerView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .sheet(item: $model.pending, onDismiss: model.cancelConfirmation) { pending in
+    .sheet(item: $model.pending, onDismiss: dismissConfirmation) { pending in
       confirmation(pending)
     }
+  }
+  private func dismissConfirmation() {
+    model.cancelConfirmation()
+    showsConfirmationHex = false
   }
   func header(_ r: ViewRecords) -> some View {
     VStack(alignment: .leading, spacing: 9) {
@@ -144,8 +155,10 @@ struct ExplorerView: View {
             Text(entryName(r.focus)).fontWeight(.semibold).accessibilityIdentifier("focus-name")
           }
         }.scrollIndicators(.hidden)
-        Button("Refresh Directory", action: model.refresh).disabled(model.working || model.loading)
-          .accessibilityIdentifier("refresh")
+        Button("Refresh Directory", action: model.refresh).disabled(
+          model.working || model.loading || model.replacingSession
+        )
+        .accessibilityIdentifier("refresh")
       }
     }.padding(16)
   }
@@ -277,30 +290,53 @@ struct ExplorerView: View {
   }
   func confirmation(_ pending: PendingConfirmation) -> some View {
     let permanent = pending.details.action == .permanentlyDelete
+    let directory = pending.details.metadata.kind == .directory
+    let target = directory ? "this directory and its contents" : "this file"
     return VStack(alignment: .leading, spacing: 16) {
-      Text(permanent ? "Permanently delete this target?" : "Move this target to Trash?").font(
-        .title2.weight(.semibold))
+      Text(permanent ? "Permanently delete \(target)?" : "Move \(target) to Trash?")
+        .font(.title2.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("confirmation-title")
       if model.records?.status.simulated == true {
         Text("SIMULATED • Memory filesystem only").accessibilityIdentifier("confirmation-simulated")
       }
-      Text(displayPath(pending.details.rawPath)).font(.body.monospaced()).textSelection(.enabled)
-        .accessibilityIdentifier("confirmation-path")
-      DisclosureGroup("Byte-exact target path (hex)") {
-        Text(pending.details.rawPath.map { String(format: "%02x", $0) }.joined()).font(
-          .caption.monospaced()
-        ).textSelection(.enabled)
-      }
-      Text("Fresh prepared metadata · Rust identity pin held until confirmation or cancellation")
-        .font(.caption).foregroundStyle(.secondary)
-      value("Logical size", exactBytes(pending.details.metadata.logicalBytes))
-      value("Allocated", exactBytes(pending.details.metadata.allocatedBytes))
-      value(
-        "Device / inode", "\(pending.details.metadata.device) / \(pending.details.metadata.inode)")
+      ScrollView {
+        VStack(alignment: .leading, spacing: 16) {
+          Text(displayPath(pending.details.rawPath)).font(.body.monospaced()).textSelection(
+            .enabled
+          )
+          .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("confirmation-path")
+          Toggle("Show byte-exact target path (hex)", isOn: $showsConfirmationHex)
+            .toggleStyle(.checkbox).accessibilityIdentifier("show-target-hex")
+          if showsConfirmationHex {
+            Text(pending.details.rawPath.map { String(format: "%02x", $0) }.joined())
+              .font(.caption.monospaced()).textSelection(.enabled)
+              .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier(
+                "confirmation-hex")
+          }
+          Text("Fresh prepared metadata · Target identity held until confirmation or cancellation")
+            .font(.caption).foregroundStyle(.secondary)
+          if directory {
+            Text(
+              "Directory entry only, excluding contents. These sizes do not measure everything affected."
+            )
+            .font(.caption).accessibilityIdentifier("directory-size-scope")
+          }
+          value(
+            directory ? "Logical size (directory entry only)" : "Logical size",
+            exactBytes(pending.details.metadata.logicalBytes))
+          value(
+            directory ? "Allocated (directory entry only)" : "Allocated",
+            exactBytes(pending.details.metadata.allocatedBytes))
+          value(
+            "Device / inode",
+            "\(pending.details.metadata.device) / \(pending.details.metadata.inode)")
+        }.frame(maxWidth: .infinity, alignment: .leading)
+      }.frame(height: 260).accessibilityIdentifier("confirmation-details")
       Text(
         permanent
           ? "This cannot be undone. A directory may be only partly removed if an error occurs."
           : "No permanent-delete fallback. Trash inside this inventory moves allocation rather than reducing scope usage."
-      )
+      ).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("confirmation-warning")
       HStack {
         Spacer()
         Button("Cancel", role: .cancel, action: model.cancelConfirmation).keyboardShortcut(

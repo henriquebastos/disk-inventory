@@ -92,13 +92,22 @@ struct Treemap: NSViewRepresentable {
   var onSelect: (EntryRecord) -> Void
   var onFocus: (EntryKey) -> Void
   var onRollup: (EntryKey, UInt64) -> Void
-  func makeNSView(context: Context) -> MapView { MapView() }
+  func makeNSView(context: Context) -> MapView {
+    let view = MapView()
+    view.setAccessibilityElement(true)
+    view.setAccessibilityEnabled(true)
+    view.setAccessibilityRole(.group)
+    view.setAccessibilityLabel("Treemap")
+    return view
+  }
   func updateNSView(_ view: MapView, context: Context) {
     view.content = self
+    view.updateAccessibilityHeaders()
     view.needsDisplay = true
   }
   @MainActor final class MapView: NSView {
     var content: Treemap?
+    private var headerElements: [GroupHeaderElement] = []
     override var isFlipped: Bool { true }
     let colors: [NSColor] = [
       NSColor(red: 0.22, green: 0.43, blue: 0.49, alpha: 1),
@@ -111,10 +120,11 @@ struct Treemap: NSViewRepresentable {
       NSColor.windowBackgroundColor.setFill()
       bounds.fill()
       guard let c = content else { return }
-      let headers = c.records.layout.groups.enumerated().compactMap {
-        i, group -> (NSRect, String)? in
-        guard let r = headerRect(group) else { return nil }
-        return (r, entryName(c.records.groupEntries[i]))
+      let headers = headerRegions().map { region in
+        (
+          region.rect, entryName(c.records.groupEntries[region.index]),
+          c.selected?.key.sameEntry(other: c.records.layout.groups[region.index].directory) == true
+        )
       }
       for (i, tile) in c.records.layout.tiles.enumerated() {
         let r = rect(tile.rect)
@@ -162,17 +172,84 @@ struct Treemap: NSViewRepresentable {
         border.lineWidth = 2
         border.stroke()
       }
-      for (r, title) in headers {
-        NSColor.black.withAlphaComponent(0.75).setFill()
+      // Selection is an overlay on the core group rectangle, never additional area.
+      for group in c.records.layout.groups
+      where c.selected?.key.sameEntry(other: group.directory) == true {
+        let r = rect(group.rect).insetBy(dx: 3, dy: 3)
+        NSColor.black.setStroke()
+        let border = NSBezierPath(rect: r)
+        border.lineWidth = 6
+        border.stroke()
+        NSColor.white.setStroke()
+        border.lineWidth = 3
+        border.stroke()
+      }
+      for (r, title, selected) in headers {
+        (selected ? NSColor.controlAccentColor : NSColor.black.withAlphaComponent(0.75)).setFill()
         r.fill()
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
-        (title as NSString).draw(
+        ((selected ? "Selected · " : "") + title as NSString).draw(
           in: r.insetBy(dx: 4, dy: 2),
           withAttributes: [
             .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
             .foregroundColor: NSColor.white, .paragraphStyle: paragraph,
           ])
+      }
+    }
+    override func accessibilityChildren() -> [Any]? { headerElements }
+    override func viewDidMoveToWindow() { updateAccessibilityHeaders() }
+    override func layout() {
+      super.layout()
+      updateAccessibilityHeaders()
+    }
+    func updateAccessibilityHeaders() {
+      guard let c = content, let window else { return }
+      headerElements = headerRegions().map { region in
+        let i = region.index
+        let group = c.records.layout.groups[i]
+        let rect = region.rect
+        let element = GroupHeaderElement()
+        element.setAccessibilityElement(true)
+        element.setAccessibilityEnabled(true)
+        element.setAccessibilityRole(.button)
+        element.setAccessibilityFrame(window.convertToScreen(convert(rect, to: nil)))
+        element.setAccessibilityLabel(entryName(c.records.groupEntries[i]))
+        element.setAccessibilityParent(self)
+        element.setAccessibilityIdentifier("group-header-\(c.records.groupEntries[i].displayName)")
+        element.setAccessibilityValue(
+          c.selected?.key.sameEntry(other: group.directory) == true
+            ? "Selected directory region" : "Directory region")
+        element.select = { c.onSelect(c.records.groupEntries[i]) }
+        return element
+      }
+    }
+    @MainActor final class GroupHeaderElement: NSAccessibilityElement {
+      var select: (() -> Void)?
+      override func accessibilityPerformPress() -> Bool {
+        select?()
+        return select != nil
+      }
+    }
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+      headerElements.reversed().first { $0.accessibilityFrame().contains(point) } ?? self
+    }
+    // Labels are overlays: omit occluded headers, prioritizing the selected directory.
+    // Drawing, accessibility and mouse input share the same visible header regions.
+    func headerRegions() -> [(index: Int, rect: NSRect)] {
+      guard let c = content else { return [] }
+      var regions = c.records.layout.groups.enumerated().compactMap {
+        i, group -> (index: Int, rect: NSRect)? in
+        guard let rect = headerRect(group) else { return nil }
+        return (i, rect)
+      }
+      if let selected = regions.firstIndex(where: {
+        c.selected?.key.sameEntry(other: c.records.layout.groups[$0.index].directory) == true
+      }) {
+        regions.append(regions.remove(at: selected))
+      }
+      return regions.enumerated().compactMap { i, region in
+        regions.dropFirst(i + 1).contains(where: { $0.rect.intersects(region.rect) }) ? nil : region
       }
     }
     func headerRect(_ group: GroupRecord) -> NSRect? {
@@ -183,10 +260,9 @@ struct Treemap: NSViewRepresentable {
     override func mouseDown(with event: NSEvent) {
       guard let c = content else { return }
       let point = convert(event.locationInWindow, from: nil)
-      for (i, group) in c.records.layout.groups.enumerated().reversed()
-      where headerRect(group)?.contains(point) == true {
-        c.onSelect(c.records.groupEntries[i])
-        if event.clickCount == 2 { c.onFocus(group.directory) }
+      for region in headerRegions().reversed() where region.rect.contains(point) {
+        c.onSelect(c.records.groupEntries[region.index])
+        if event.clickCount == 2 { c.onFocus(c.records.layout.groups[region.index].directory) }
         return
       }
       for (i, tile) in c.records.layout.tiles.enumerated() where rect(tile.rect).contains(point) {

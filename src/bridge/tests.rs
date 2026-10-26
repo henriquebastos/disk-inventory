@@ -405,3 +405,49 @@ fn presentation_and_delay_fixtures_are_isolated() {
         (1u64 << 53) + 123
     );
 }
+
+#[test]
+fn visual_details_fixture_has_nested_groups_and_long_directory_confirmation() {
+    let s = session("visual-details");
+    let status = s.status().unwrap();
+    assert!(status.simulated);
+    let collection = find(&s, b"collection");
+    let nested = s
+        .children(collection, 0, 100)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.basename == b"nested-group")
+        .unwrap()
+        .key;
+    let layout = s.layout(status.root.key.clone(), request()).unwrap();
+    assert!(
+        layout
+            .groups
+            .iter()
+            .any(|g| g.directory.same_entry(nested.clone()))
+    );
+    assert_eq!(memory(&s, |f| f.calls), MemoryCalls::default());
+    let mut key = find(&s, b"long-path");
+    for _ in 0..4 {
+        let page = s.children(key, 0, 100).unwrap();
+        assert_eq!(page.entries.len(), 1);
+        key = page.entries[0].key.clone();
+    }
+    let saved = s.selection(key.clone()).unwrap();
+    assert_eq!(saved.entry.basename, b"target-directory");
+    assert!(saved.relative_path.len() > 590);
+    assert_eq!(saved.entry.subtree_bytes, 6164);
+    for kind in [ActionKind::Trash, ActionKind::PermanentlyDelete] {
+        let prepared = s.prepare(key.clone(), kind).unwrap();
+        let details = prepared.details();
+        assert!(matches!(details.metadata.kind, EntryKind::Directory));
+        assert_eq!(details.metadata.allocated_bytes, 20);
+        assert_eq!(details.metadata.logical_bytes, 37);
+        assert!(details.raw_path.len() > 600);
+        assert_eq!(memory(&s, |f| f.pinned_count()), 1);
+        prepared.cancel().unwrap();
+        assert_eq!(memory(&s, |f| f.pinned_count()), 0);
+    }
+    assert!(!s.status().unwrap().dirty);
+}

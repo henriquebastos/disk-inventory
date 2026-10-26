@@ -117,4 +117,83 @@ import XCTest
     XCTAssertNil(model.metadata)
   }
 
+  func testReplacementBlocksRetainedViewActionsUntilInstallation() async throws {
+    let model = try await model("presentation")
+    let oldSession = try XCTUnwrap(model.session)
+    let oldRoot = model.records!.status.root.key
+    let oldTarget = try entry("large-file", model)
+    let oldTotal = model.records!.status.root.subtreeBytes
+    let gate = DispatchSemaphore(value: 0)
+    defer { gate.signal() }
+    model.load {
+      gate.wait()
+      return try ExplorerSession.fixture(scenario: "ordinary")
+    }
+    // Reproduce the independent old-view update that clears shared view loading.
+    await model.updateView(focus: oldRoot)
+    model.select(oldTarget)
+    XCTAssertFalse(model.canAct, "Old view completion must not enable actions during replacement")
+    let attempted = model.prepare(.permanentlyDelete)
+    XCTAssertNil(attempted)
+    await attempted?.value
+    gate.signal()
+    try await waitUntil { model.session !== oldSession && model.records != nil && !model.loading }
+    XCTAssertNil(model.pending, "An old confirmation must not survive session installation")
+    model.execute()
+    let retainedTotal = try await Task.detached { try oldSession.status().root.subtreeBytes }.value
+    XCTAssertEqual(retainedTotal, oldTotal)
+    XCTAssertGreaterThan(model.records!.status.root.subtreeBytes, 1 << 53)
+    XCTAssertNil(model.error)
+  }
+
+  func testReplacementCancelsPreparedPinBeforeInstallingNewSession() async throws {
+    let model = try await model("presentation")
+    let oldSession = try XCTUnwrap(model.session)
+    model.select(try entry("large-file", model))
+    await model.prepare(.trash)?.value
+    let action = try XCTUnwrap(model.pending?.action)
+    model.load { try ExplorerSession.fixture(scenario: "ordinary") }
+    try await waitUntil { model.session !== oldSession && model.records != nil && !model.loading }
+    XCTAssertNil(model.pending)
+    // A retained real capability must already be consumed by cancellation, not just hidden in Swift.
+    let result = await Task.detached { Result { try oldSession.execute(action: action) } }.value
+    guard case .failure(BridgeError.ConsumedAction) = result else {
+      return XCTFail("The old prepared pin was not cancelled: \(result)")
+    }
+    let status = try await Task.detached { try oldSession.status() }.value
+    XCTAssertFalse(status.dirty)
+  }
+
+  func testStalePreparationCompletionCannotPublishAfterReplacement() async throws {
+    let model = try await model("metadata-delay")
+    let oldSession = try XCTUnwrap(model.session)
+    // Assign a real saved row without starting inspector metadata: isBusy below belongs to prepare.
+    model.selected = try entry("large-file", model)
+    let preparation = try XCTUnwrap(model.prepare(.trash))
+    try await waitUntil { oldSession.isBusy() }
+    model.load { try ExplorerSession.fixture(scenario: "ordinary") }
+    try await waitUntil { model.session !== oldSession && model.records != nil && !model.loading }
+    await preparation.value
+    XCTAssertNil(model.pending)
+    XCTAssertFalse(model.working)
+    let status = try await Task.detached { try oldSession.status() }.value
+    XCTAssertFalse(status.dirty)
+    XCTAssertGreaterThan(model.records!.status.root.subtreeBytes, 1 << 53)
+  }
+
+  func testSuspendedRecoveryDoesNotOverwriteLaterNavigation() async throws {
+    let model = try await model("metadata-delay")
+    let session = try XCTUnwrap(model.session)
+    let directory = try entry("small-files", model).key
+    model.select(try entry("large-file", model))
+    try await waitUntil { session.isBusy() }
+    // Recovery clears selection synchronously, then blocks behind the real delayed metadata call.
+    let recovery = Task { await model.recoverView(session) }
+    try await waitUntil { model.selected == nil }
+    model.focus(directory)
+    await recovery.value
+    try await waitUntil { !model.loading }
+    XCTAssertTrue(model.records!.focus.key.sameEntry(other: directory))
+  }
+
 }

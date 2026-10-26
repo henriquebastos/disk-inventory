@@ -83,10 +83,58 @@ fn build_map(presentation: bool) -> Result<Map, BridgeError> {
     map.aggregate()?;
     Ok(map)
 }
+// Bounded visual edge cases, separate from every accepted boundary/failure scenario.
+fn visual_details_map() -> Result<Map, BridgeError> {
+    let mut map = Map {
+        root: PathBuf::from("/simulated-inventory"),
+        nodes: vec![],
+        names: vec![],
+        counters: Counters::default(),
+        error_samples: vec![],
+    };
+    let mut inode = 2000;
+    let mut add = |parent, name: &[u8], kind, bytes| {
+        inode += 1;
+        map.add(
+            parent,
+            name,
+            Entry {
+                kind,
+                dev: 1,
+                ino: inode,
+                flags: 0,
+                links: 1,
+                allocation: Some(bytes),
+                mount: 0,
+            },
+        )
+    };
+    add(0, b"", Kind::Dir, 10)?;
+    let collection = add(0, b"collection", Kind::Dir, 20)?;
+    let nested = add(collection, b"nested-group", Kind::Dir, 30)?;
+    add(nested, b"first-file", Kind::File, 2048)?;
+    add(nested, b"second-file", Kind::File, 2048)?;
+    add(collection, b"sibling-file", Kind::File, 2048)?;
+    let mut parent = add(0, b"long-path", Kind::Dir, 20)?;
+    for i in 0..3 {
+        parent = add(
+            parent,
+            format!("segment-{i}-{}", "long-name-".repeat(18)).as_bytes(),
+            Kind::Dir,
+            20,
+        )?;
+    }
+    let target = add(parent, b"target-directory", Kind::Dir, 20)?;
+    add(target, b"payload", Kind::File, 6144)?;
+    map.aggregate()?;
+    Ok(map)
+}
+
 pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSystem>, BridgeError> {
     if ![
         "ordinary",
         "presentation",
+        "visual-details",
         "metadata-delay",
         "trash-inside",
         "trash-outside",
@@ -105,7 +153,9 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
             message: format!("unknown simulated scenario: {scenario}"),
         });
     }
-    let map = if matches!(scenario, "presentation" | "metadata-delay") {
+    let map = if scenario == "visual-details" {
+        visual_details_map()?
+    } else if matches!(scenario, "presentation" | "metadata-delay") {
         build_map(true)?
     } else {
         map()?

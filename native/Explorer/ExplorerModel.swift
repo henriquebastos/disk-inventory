@@ -32,6 +32,7 @@ struct PendingConfirmation: Identifiable {
   var metadata: MetadataRecord?
   var metadataState = "Select an entry"
   var loading = false
+  private(set) var replacingSession = false
   var working = false
   var error: String?
   var outcome: String?
@@ -56,6 +57,7 @@ struct PendingConfirmation: Identifiable {
   private var metadataRequest: MetadataRequest?
   private var metadataWorkerRunning = false
   private var preparing = false
+  private var cancellationTask: Task<Void, Never>?
   private var requestedFocus: EntryKey?
   private var resizeTask: Task<Void, Never>?
 
@@ -88,9 +90,12 @@ struct PendingConfirmation: Identifiable {
     viewVersion += 1
     selectionVersion += 1
     let version = sessionVersion
+    replacingSession = true
     loading = true
     error = nil
+    let cancellation = cancellationTask
     Task {
+      await cancellation?.value
       do {
         let result = try await Task.detached(priority: .userInitiated) {
           let s = try constructor()
@@ -98,6 +103,10 @@ struct PendingConfirmation: Identifiable {
         }.value
         guard version == sessionVersion else { return }
         if fixtureMode && !result.1.simulated { throw CocoaError(.fileReadNoPermission) }
+        // No confirmation or late preparation from the retained picture may cross this install.
+        cancelConfirmation()
+        await cancellationTask?.value
+        guard version == sessionVersion else { return }
         // Also invalidate old-session work started while its previous view remained visible.
         viewVersion += 1
         selectionVersion += 1
@@ -113,7 +122,10 @@ struct PendingConfirmation: Identifiable {
         offset = 0
         await updateView(focus: result.1.root.key)
       } catch { if version == sessionVersion { self.error = String(describing: error) } }
-      if version == sessionVersion { loading = false }
+      if version == sessionVersion {
+        loading = false
+        replacingSession = false
+      }
     }
   }
 
@@ -249,15 +261,18 @@ struct PendingConfirmation: Identifiable {
       await updateView(focus: key, pageOffset: offset)
     }
   }
-  var canAct: Bool { selected?.parent != nil && !working && !loading && pending == nil }
-  func prepare(_ kind: ActionKind) {
-    guard canAct, let entry = selected, let s = session else { return }
+  var canAct: Bool {
+    selected?.parent != nil && !working && !loading && !replacingSession && pending == nil
+  }
+  @discardableResult
+  func prepare(_ kind: ActionKind) -> Task<Void, Never>? {
+    guard canAct, let entry = selected, let s = session else { return nil }
     preparing = true
     working = true
     actionVersion += 1
     let version = actionVersion
     let generation = sessionVersion
-    Task {
+    return Task {
       do {
         let action = try await Task.detached(priority: .userInitiated) {
           let action = try s.prepare(key: entry.key, action: kind)
@@ -277,7 +292,9 @@ struct PendingConfirmation: Identifiable {
   }
   func cancelConfirmation() {
     actionVersion += 1
-    if let action = pending?.action { Task.detached { try? action.cancel() } }
+    if let action = pending?.action {
+      cancellationTask = Task.detached { _ = try? action.cancel() }
+    }
     pending = nil
     if preparing {
       preparing = false
@@ -286,7 +303,7 @@ struct PendingConfirmation: Identifiable {
     // Executing work cannot be cancelled; its captured session remains alive.
   }
   func execute() {
-    guard let confirmation = pending, let s = session else { return }
+    guard !replacingSession, let confirmation = pending, let s = session else { return }
     pending = nil
     working = true
     let generation = sessionVersion
@@ -327,6 +344,7 @@ struct PendingConfirmation: Identifiable {
   }
   func recoverView(_ s: ExplorerSession) async {
     let generation = sessionVersion
+    let navigation = viewVersion
     metadataRequest = nil
     selectionVersion += 1
     selected = nil
@@ -339,14 +357,14 @@ struct PendingConfirmation: Identifiable {
       for key in candidates { if (try? s.selection(key: key)) != nil { return key } }
       return try? s.status().root.key
     }.value
-    guard generation == sessionVersion else { return }
+    guard generation == sessionVersion, navigation == viewVersion else { return }
     if let key {
       requestedFocus = key
       await updateView(focus: key)
     }
   }
   func refresh() {
-    guard !working, let s = session, let key = records?.focus.key else { return }
+    guard !working, !replacingSession, let s = session, let key = records?.focus.key else { return }
     working = true
     let generation = sessionVersion
     Task {
@@ -363,7 +381,7 @@ struct PendingConfirmation: Identifiable {
     }
   }
   func openSnapshot() {
-    guard !fixtureMode, !working else { return }
+    guard !fixtureMode, !working, !replacingSession else { return }
     let panel = NSOpenPanel()
     panel.canChooseDirectories = false
     panel.allowsMultipleSelection = false
@@ -373,7 +391,7 @@ struct PendingConfirmation: Identifiable {
     load { try ExplorerSession.openSnapshot(snapshotPath: path) }
   }
   func createSnapshot() {
-    guard !fixtureMode, !working else { return }
+    guard !fixtureMode, !working, !replacingSession else { return }
     let panel = NSOpenPanel()
     panel.canChooseFiles = false
     panel.canChooseDirectories = true

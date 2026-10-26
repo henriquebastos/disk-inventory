@@ -114,6 +114,7 @@ Discover entries through bounded queries: `small-files/small-00` through
 |---|---|
 | `presentation` | Balanced 4096-byte large file and 128 small children for native UI pagination |
 | `metadata-delay` | Presentation inventory; only large-file MemoryFileSystem metadata sleeps one second |
+| `visual-details` | Isolated nested groups and a long directory path; entry-only metadata differs from subtree bytes |
 | `ordinary`, `trash-outside` | Trash moves to `/simulated-outside/moved` |
 | `trash-inside` | Moves to `trash/moved` within scope |
 | `metadata-failure` | `large-file` metadata denied; selection still works |
@@ -127,6 +128,8 @@ Discover entries through bounded queries: `small-files/small-00` through
 [src/bridge/tests.rs](../src/bridge/tests.rs) names the invariants:
 
 - "presentation_and_delay_fixtures_are_isolated": original scenarios unchanged; delay default-off.
+- "visual_details_fixture_has_nested_groups_and_long_directory_confirmation": nested groups,
+  long target paths, directory-entry-only sizes and pin release on cancellation.
 - "saved_views_are_bounded_native_free_and_byte_exact": zero adapter calls for views.
 - "confirmation_pins_cancel_drop_replay_and_cross_session_are_real": pin lifecycle.
 - "changed_after_prepare_consumes_action_without_mutating_replacement": stale target.

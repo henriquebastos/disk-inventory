@@ -48,7 +48,10 @@ separate. Tiny/zero-attribution entries remain reachable through Contents.
 
 The AppKit treemap draws only Rust-returned rectangles: at most 160 tiles plus
 groups, depth eight. Borders/related colors identify directory groups; group
-labels overlay area and never add bytes. Rollups select an explanation and a
+labels overlay area and never add bytes. Selected groups have an outline and an
+accented “Selected” header, without changing geometry. Occluded headers are omitted,
+with selection taking precedence; visible headers share drawing, mouse and
+accessibility hit regions. Rollups select an explanation and a
 Show Directory Contents action, never a deletion target.
 
 The inspector separates saved inventory bytes from requested live logical size,
@@ -68,12 +71,19 @@ immediate local highlight, indeterminate work feedback and retaining the prior v
 [ExplorerModel](../native/Explorer/ExplorerModel.swift) publishes selection before
 running synchronous bridge calls in detached tasks. Metadata has one active and
 one replaceable queued request. Session/selection/view generations reject obsolete
-results; resize requests debounce 180ms. Swift retains only current bounded views,
+results; resize requests debounce 180ms. A separate replacement state keeps the
+retained previous view read-only until installation completes, even if an old view
+request finishes first. Recovery checks navigation as well as session generation.
+Swift retains only current bounded views,
 selection, small navigation history and operation diagnostics, not the inventory.
 
 Trash and permanent deletion prepare off-main and retain the actual PreparedAction
 through a separate confirmation with fresh metadata, target path and byte-exact hex.
-Cancel, window close and session replacement release pending pins. Root operations
+Directory confirmations explicitly include contents; fresh sizes are labeled as
+directory-entry-only, not subtree sizes. Path, optional hex and metadata scroll
+within bounded details; warnings and Cancel/Confirm remain outside the scroller.
+Cancel, window close and session replacement release pending pins; replacement
+awaits cancellation before installing a new session. Root operations
 are visibly disabled and remain protected by Rust. Executing operations cannot be
 cancelled; there is no Trash-to-delete fallback or permanent-delete Undo.
 
@@ -99,6 +109,12 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
 - "testImmediateSelectionAndObsoleteMetadataDiscarded": later selection during the
   latency scenario; XCUITest timing includes automation waits, not paint latency.
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.
+- "testDirectoryConfirmationsStateRecursiveScopeAndEntryOnlySizes": both action
+  scopes and entry-only metadata labels, distinct from saved subtree bytes.
+- "testGroupHeaderSelectionIsVisibleWithoutChangingFocus": root-child and nested
+  group feedback, inspector synchronization and double-click navigation.
+- "testLongDirectoryPathAndExpandedHexAtMinimumWindow": long target and hex scrolling,
+  visible size disclaimer and accessible fixed controls at the minimum window size.
 
 Every destructive UI flow first asserts the simulated indicator. `--fixture-mode`,
 `--scenario`, or `DI_UI_TEST` locks the app into fixture-only mode; incomplete or
@@ -113,12 +129,23 @@ unknown configuration is an error, never a native fallback.
 - "testCancelPendingPreparationAndRootProtection" covers cancellation during preparation.
 - "testStaleFocusRecoversAndRollupIsNotAnActionTarget" checks invalid keys and rollups.
 - "testFixtureModeRejectsAbsentAndUnknownConfiguration" checks closed constructors.
+- "testReplacementBlocksRetainedViewActionsUntilInstallation" reproduces old-view
+  completion during a gated replacement; preparation is rejected without mutation.
+- "testReplacementCancelsPreparedPinBeforeInstallingNewSession" checks that a
+  retained real action is consumed by cancellation, not merely hidden.
+- "testStalePreparationCompletionCannotPublishAfterReplacement" awaits actual
+  delayed preparation completion and rejects an obsolete confirmation.
+- "testSuspendedRecoveryDoesNotOverwriteLaterNavigation" overlaps recovery and
+  navigation behind the real delayed metadata lock.
 
 Fixture isolation is tested by "presentation_and_delay_fixtures_are_isolated" in
-[src/bridge/tests.rs](../src/bridge/tests.rs). The original >2^53 fixture is unchanged.
+[src/bridge/tests.rs](../src/bridge/tests.rs).
+"visual_details_fixture_has_nested_groups_and_long_directory_confirmation" in the
+same file verifies nested groups, long paths, entry-only sizes and cancelled pins.
+The original >2^53 fixture is unchanged.
 
 Untested limits: real Trash, native GUI picker lifecycle, hostile namespace races,
 VoiceOver traversal of the drawing (the table is the accessible alternative),
-light-mode/minimum-window screenshot review, large-inventory GUI paint latency,
+light-mode screenshot review, large-inventory GUI paint latency,
 and cancellation of executing work. XCUITest requires an unlocked interactive
 console; do not change security settings to force automation.
