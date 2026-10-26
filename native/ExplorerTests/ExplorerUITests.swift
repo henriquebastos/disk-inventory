@@ -18,8 +18,13 @@ import XCTest
     let element = app.staticTexts[id]
     XCTAssertTrue(element.waitForExistence(timeout: timeout))
     let predicate = NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", value, value)
-    expectation(for: predicate, evaluatedWith: element)
-    waitForExpectations(timeout: timeout)
+    let result = XCTWaiter.wait(
+      for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout)
+    if result != .completed {
+      screenshot("failure-\(id)")
+      print("UI_STATE id=\(id) actual=\(String(describing: element.value))")
+    }
+    XCTAssertEqual(result, .completed, "\(id) must contain \(value)")
   }
   func screenshot(_ name: String) {
     let attachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
@@ -34,27 +39,50 @@ import XCTest
     XCTAssertTrue(app.staticTexts["confirmation-simulated"].waitForExistence(timeout: 8))
     text("confirmation-path", contains: target)
   }
-  func testSelectionNavigationPaginationAndUsage() {
+  func disclosure(_ name: String) -> XCUIElement {
+    app.descendants(matching: .disclosureTriangle).matching(identifier: "disclosure-\(name)")
+      .firstMatch
+  }
+  func testDisclosureKeyboardZoomBackAndUsage() throws {
     launch()
     row("small-files").click()
-    text("selected-name", contains: "small-files")
+    disclosure("small-files").click()
     text("focus-name", contains: "Inventory root")
+    XCTAssertTrue(row("small-00").waitForExistence(timeout: 8))
+    row("small-00").click()
+    app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+    text("selected-name", contains: "small-01")
+    text("selected-usage", contains: "64 bytes")
+    app.typeKey(XCUIKeyboardKey.leftArrow, modifierFlags: [])
+    text("selected-name", contains: "small-files")
+    screenshot("expanded-tree-linked-selection")
     row("small-files").doubleClick()
     text("focus-name", contains: "small-files")
-    text("page-range", contains: "of 128")
-    app.buttons["next-page"].click()
-    text("page-range", contains: "101–128")
-    row("small-72").click()
-    text("selected-name", contains: "small-72")
-    app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
-    text("selected-name", contains: "small-73")
-    text("selected-usage", contains: "64 bytes")
-    screenshot("tiny-entry-summary")
-    app.buttons["breadcrumb-0"].click()
-    text("focus-name", contains: "Inventory root")
     app.buttons["back"].click()
+    text("focus-name", contains: "Inventory root")
+    XCTAssertTrue(row("small-00").waitForExistence(timeout: 8))
+    text("selected-name", contains: "small-files")
+    screenshot("restored-tree-context")
+    app.outlines["entry-tree"].scroll(byDeltaX: 0, deltaY: -600)
+    let scrollbar = app.scrollBars.firstMatch
+    let before = try XCTUnwrap(Double(String(describing: try XCTUnwrap(scrollbar.value))))
+    XCTAssertGreaterThan(before, 0.1)
+    XCTAssertFalse(row("small-files").isHittable)
+    screenshot("scrolled-tree-before-zoom")
+    app.buttons["focus-selected"].click()
     text("focus-name", contains: "small-files")
-    app.buttons["breadcrumb-0"].click()
+    app.buttons["back"].click()
+    text("focus-name", contains: "Inventory root")
+    text("selected-name", contains: "small-files")
+    let after = try XCTUnwrap(Double(String(describing: try XCTUnwrap(scrollbar.value))))
+    // Scroll history stores a row, so restoration can round by less than one row.
+    XCTAssertEqual(after, before, accuracy: 0.02)
+    XCTAssertFalse(row("small-files").isHittable)
+    screenshot("scrolled-tree-restored")
+    app.outlines["entry-tree"].scroll(byDeltaX: 0, deltaY: 600)
+    XCTAssertTrue(disclosure("small-files").isHittable)
+    disclosure("small-files").click()
+    XCTAssertTrue(row("small-00").waitForNonExistence(timeout: 8))
     row("large-file").click()
     text("selected-usage", contains: "4,096 bytes")
     screenshot("balanced-overview")
@@ -80,6 +108,7 @@ import XCTest
       launch(scenario)
       let before = app.staticTexts["scope-total"].value as? String
       prepare("trash", target: "large-file")
+      screenshot("\(scenario)-confirmation")
       app.buttons["confirm-action"].click()
       text(
         "outcome",
@@ -191,22 +220,47 @@ import XCTest
     }
   }
 
-  func testGroupHeaderSelectionIsVisibleWithoutChangingFocus() {
-    for (scenario, name) in [("presentation", "small-files"), ("visual-details", "nested-group")] {
-      launch(scenario)
-      let header = app.buttons["group-header-\(name)"]
-      XCTAssertTrue(header.waitForExistence(timeout: 8))
-      screenshot("unselected-group-\(name)")
-      header.click()
-      text("selected-name", contains: name)
-      text("focus-name", contains: "Inventory root")
-      XCTAssertEqual(header.value as? String, "Selected directory region")
-      if name == "nested-group" { XCTAssertFalse(row(name).exists) }
-      screenshot("selected-group-\(name)")
-      header.doubleClick()
-      text("focus-name", contains: name)
-      app.terminate()
-    }
+  func testDenseMapHoverClickRevealAndTinyDirectoryZoom() {
+    launch("dix")
+    let target = app.buttons.matching(
+      NSPredicate(format: "identifier BEGINSWITH %@", "map-file-asset-")
+    ).firstMatch
+    XCTAssertTrue(target.waitForExistence(timeout: 8))
+    let name = target.label
+    screenshot("dix-dense-overview")
+    row("Movie.mov").click()
+    target.hover()
+    text("hover-name", contains: name)
+    text("selected-name", contains: "Movie.mov")
+    screenshot("dix-independent-hover")
+    target.click()
+    text("selected-name", contains: name)
+    text("focus-name", contains: "Inventory root")
+    XCTAssertTrue(row(name).waitForExistence(timeout: 8))
+    screenshot("dix-linked-reveal")
+    XCTAssertTrue(disclosure("Projects").isEnabled)
+    disclosure("Projects").click()
+    // Disclosure publishes a Rust worker result asynchronously; event delivery is not publication.
+    XCTAssertTrue(row(name).waitForNonExistence(timeout: 8))
+    text("selected-name", contains: name)
+    screenshot("dix-disclosure-collapsed")
+    row("Tiny files").doubleClick()
+    text("focus-name", contains: "Tiny files")
+    screenshot("dix-tiny-directory")
+    row("Notes").doubleClick()
+    text("focus-name", contains: "Notes")
+    let small = app.buttons["map-file-four-KiB.txt"]
+    XCTAssertTrue(small.waitForExistence(timeout: 8))
+    small.hover()
+    text("hover-name", contains: "four-KiB.txt")
+    small.click()
+    text("selected-name", contains: "four-KiB.txt")
+    text("selected-usage", contains: "4,096 bytes")
+    XCTAssertTrue(row("empty.txt").exists)
+    screenshot("dix-tiny-zoom")
+    app.buttons["back"].click()
+    text("focus-name", contains: "Tiny files")
+    screenshot("dix-back-context")
   }
 
   func testLongDirectoryPathAndSimpleConfirmationAtMinimumWindow() {

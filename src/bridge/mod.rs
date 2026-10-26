@@ -1,6 +1,7 @@
 //! Generated native-client facade. All methods are synchronous; dispatch off the UI thread.
 mod fixture;
 mod records;
+mod views;
 use crate::{
     explorer::{EntryHandle, Explorer},
     inventory::{Inventory, ScanOptions},
@@ -18,9 +19,10 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
+pub use views::*;
 
 /// Opaque saved identity, not an operation capability. Swift cannot manufacture keys.
 #[derive(Debug, uniffi::Object)]
@@ -93,6 +95,8 @@ pub struct ExplorerSession {
     backend: Mutex<Backend>,
     // Counts both queued and running calls, independent of the backend lock.
     active: AtomicUsize,
+    revision: AtomicU64,
+    selection_queries: AtomicU64,
 }
 struct ActiveCall<'a>(&'a AtomicUsize);
 impl Drop for ActiveCall<'_> {
@@ -118,6 +122,8 @@ impl ExplorerSession {
         Arc::new(Self {
             backend: Mutex::new(backend),
             active: AtomicUsize::new(0),
+            revision: AtomicU64::new(0),
+            selection_queries: AtomicU64::new(0),
         })
     }
     fn with<T>(
@@ -165,6 +171,10 @@ impl ExplorerSession {
     pub fn is_busy(&self) -> bool {
         self.active.load(Ordering::Acquire) != 0
     }
+    /// Calls queued on or currently holding the backend lock; diagnostic, not a lock barrier.
+    pub fn active_call_count(&self) -> u64 {
+        self.active.load(Ordering::Acquire) as u64
+    }
     pub fn status(&self) -> Result<SessionStatus, BridgeError> {
         self.with(|b| {
             let e = b.explorer();
@@ -205,8 +215,13 @@ impl ExplorerSession {
             })
         })
     }
+    /// Saved selection queries actually entered under the backend lock, including invalid keys.
+    pub fn selection_query_count(&self) -> u64 {
+        self.selection_queries.load(Ordering::Relaxed)
+    }
     pub fn selection(&self, key: Arc<EntryKey>) -> Result<SelectionRecord, BridgeError> {
         self.with(|b| {
+            self.selection_queries.fetch_add(1, Ordering::Relaxed);
             let h = b.validate(&key)?;
             Ok(SelectionRecord {
                 entry: b.explorer().entry(h)?.into(),
@@ -273,6 +288,7 @@ impl ExplorerSession {
             let pin = lock(&action.pin)?
                 .take()
                 .ok_or(BridgeError::ConsumedAction)?;
+            self.revision.fetch_add(1, Ordering::AcqRel);
             let report = match (b, pin) {
                 (Backend::Native(s), PinnedAction::Native(c)) => s.execute(c)?,
                 (Backend::Memory(s), PinnedAction::Memory(c)) => s.execute(c)?,
@@ -284,6 +300,7 @@ impl ExplorerSession {
     pub fn refresh_directory(&self, key: Arc<EntryKey>) -> Result<UpdateRecord, BridgeError> {
         self.with(|b| {
             let h = b.validate(&key)?;
+            self.revision.fetch_add(1, Ordering::AcqRel);
             Ok(dispatch!(b, s => s.refresh_directory(h))?.into())
         })
     }

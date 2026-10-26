@@ -170,8 +170,18 @@ fn rejected_subdivisions_consume_the_global_work_budget() {
             min_area: 0.0,
             max_depth: 4,
         };
-        let layout = explorer.layout(explorer.root_handle(), options).unwrap();
-        validate(&layout, options);
+        for fixed in [false, true] {
+            let layout = explorer
+                .layout_with_limits(
+                    explorer.root_handle(),
+                    options,
+                    MAX_RECTANGLES,
+                    MAX_DEPTH,
+                    fixed,
+                )
+                .unwrap();
+            validate(&layout, options);
+        }
     }
 }
 
@@ -601,4 +611,183 @@ fn explorer_release_performance() {
         groups as f64 / iterations as f64,
         examined as f64 / iterations as f64
     );
+}
+
+#[test]
+fn virtual_tree_large_fanout_reveal_and_collapse_are_sparse() {
+    let mut map = tree();
+    let directory = add(&mut map, 0, b"directory", Kind::Dir, 0);
+    let nested = add(&mut map, directory, b"nested", Kind::Dir, 0);
+    let target = add(&mut map, nested, b"target.txt", Kind::File, 8000);
+    for i in 0..100_000 {
+        add(
+            &mut map,
+            directory,
+            format!("file-{i:06}").as_bytes(),
+            Kind::File,
+            4096,
+        );
+    }
+    let e = explorer(map);
+    let mut view = crate::tree_view::TreeView::new(&e, e.root_handle()).unwrap();
+    assert_eq!(view.row_count(), 1);
+    view.expand(&e, e.handle(directory), true).unwrap();
+    assert_eq!(view.row_count(), 100_002);
+    let page = view.rows(&e, 99_990, 12).unwrap();
+    assert_eq!(page.rows.len(), 12);
+    assert!(page.visits <= 24);
+    assert_eq!(view.expanded_count(), 1);
+    assert!(view.expansion_payload_bytes() < 4096);
+    let row = view.reveal(&e, e.handle(target)).unwrap();
+    let page = view.rows(&e, row, 1).unwrap();
+    assert_eq!(page.rows[0].entry.handle, e.handle(target));
+    assert_eq!(page.rows[0].depth, 2);
+    assert_eq!(view.row_count(), 100_003);
+    view.expand(&e, e.handle(directory), false).unwrap();
+    assert_eq!(view.row_count(), 1);
+    assert_eq!(view.expanded_count(), 0);
+}
+#[test]
+fn diagram_pixel_detail_and_zoom_preserve_weights_and_hit_authority() {
+    let mut map = tree();
+    let dir = add(&mut map, 0, b"dense", Kind::Dir, 4096);
+    for i in 0..500 {
+        add(
+            &mut map,
+            dir,
+            format!("image-{i}.png").as_bytes(),
+            Kind::File,
+            4096,
+        );
+    }
+    let tiny = add(&mut map, 0, b"tiny", Kind::Dir, 0);
+    let small = add(&mut map, tiny, b"4k.txt", Kind::File, 4096);
+    add(&mut map, tiny, b"8k.txt", Kind::File, 8192);
+    add(&mut map, tiny, b"empty", Kind::File, 0);
+    let e = explorer(map);
+    let frame = e.diagram(e.root_handle(), 640, 400).unwrap();
+    assert!(frame.stats.tiles > 160);
+    assert_eq!(
+        frame.layout.tiles.iter().map(|t| t.bytes).sum::<u64>(),
+        frame.layout.total_bytes
+    );
+    assert!(frame.stats.child_visits <= 2 * crate::diagram::MAX_REGIONS);
+    assert_eq!(frame.rgba().len(), 640 * 400 * 4);
+    let zoom = e.diagram(e.handle(tiny), 100, 100).unwrap();
+    let r = zoom.region(e.handle(small)).unwrap();
+    let hit = zoom
+        .hit((r.x + r.width / 2.0) as u32, (r.y + r.height / 2.0) as u32)
+        .unwrap();
+    assert_eq!(hit.key, e.handle(small));
+    assert!(hit.actionable);
+    assert_eq!(hit.bytes, 4096);
+    assert!(e.diagram(e.root_handle(), u32::MAX, u32::MAX).is_err());
+    let one = e.diagram(e.root_handle(), 1, 1).unwrap();
+    assert!(!one.hit(0, 0).unwrap().actionable);
+    let again = e.diagram(e.root_handle(), 640, 400).unwrap();
+    assert_eq!(frame.rgba(), again.rgba());
+}
+
+#[test]
+fn diagram_fixed_strips_align_equal_siblings_in_wide_tall_and_retina_frames() {
+    let mut map = tree();
+    map.nodes[0].raw = 0;
+    map.nodes[0].accounted = 0;
+    map.nodes[0].subtree = 0;
+    for i in 0..72 {
+        add(&mut map, 0, format!("{i}.png").as_bytes(), Kind::File, 4096);
+    }
+    let e = explorer(map);
+    for (width, height) in [(1000, 300), (300, 1000), (2000, 600), (600, 2000)] {
+        let frame = e.diagram(e.root_handle(), width, height).unwrap();
+        assert_eq!(frame.layout.tiles.len(), 72);
+        let mut starts = std::collections::BTreeMap::new();
+        for tile in &frame.layout.tiles {
+            let start = if width > height {
+                tile.rect.y
+            } else {
+                tile.rect.x
+            };
+            *starts.entry(start.to_bits()).or_insert(0) += 1;
+            let expected = width as f64 * height as f64 / 72.0;
+            assert!((tile.rect.area() - expected).abs() < expected * 1e-9);
+        }
+        assert_eq!(starts.len(), 3);
+        assert!(starts.values().all(|&count| count == 24));
+        for y in 0..height {
+            for x in 0..width {
+                let hit = frame.hit(x, y).expect("no pixel-center gaps");
+                assert!(hit.actionable);
+                assert!(
+                    x as f64 + 0.5 >= hit.rect.x && (x as f64 + 0.5) < hit.rect.x + hit.rect.width
+                );
+                assert!(
+                    y as f64 + 0.5 >= hit.rect.y && (y as f64 + 0.5) < hit.rect.y + hit.rect.height
+                );
+            }
+        }
+        assert!(frame.hit(width, 0).is_none());
+        assert!(frame.hit(0, height).is_none());
+    }
+}
+
+#[test]
+fn diagram_skewed_nested_geometry_keeps_area_coverage_zero_and_budget_semantics() {
+    let mut map = tree();
+    let mut parent = 0;
+    for i in 0..80 {
+        parent = add(
+            &mut map,
+            parent,
+            format!("deep-{i}").as_bytes(),
+            Kind::Dir,
+            0,
+        );
+    }
+    let deep = add(&mut map, parent, b"deep.png", Kind::File, 1_000_000);
+    let zero = add(&mut map, 0, b"empty", Kind::File, 0);
+    for d in 0..9 {
+        let dir = add(&mut map, 0, format!("dir-{d}").as_bytes(), Kind::Dir, d);
+        for n in 1..=31 {
+            add(
+                &mut map,
+                dir,
+                format!("f-{n}.swift").as_bytes(),
+                Kind::File,
+                n * n * 13 + 1,
+            );
+        }
+    }
+    let e = explorer(map);
+    for (w, h) in [(713, 421), (421, 713), (1426, 842)] {
+        let f = e.diagram(e.root_handle(), w, h).unwrap();
+        assert!(f.region(e.handle(deep)).is_some(), "no fixed depth policy");
+        assert!(f.region(e.handle(zero)).is_none());
+        assert_eq!(
+            f.layout.tiles.iter().map(|t| t.bytes).sum::<u64>(),
+            f.layout.total_bytes
+        );
+        for tile in &f.layout.tiles {
+            let expected = w as f64 * h as f64 * tile.bytes as f64 / f.layout.total_bytes as f64;
+            assert!((tile.rect.area() - expected).abs() < expected * 1e-9);
+        }
+        for y in 0..h {
+            for x in 0..w {
+                assert!(f.hit(x, y).is_some());
+            }
+        }
+        assert!(
+            f.stats.child_visits <= 2 * (w as usize * h as usize).min(crate::diagram::MAX_REGIONS)
+        );
+        // Raster construction additionally asserts that no pixel receives two owners.
+    }
+    let mut empty = tree();
+    empty.nodes[0].raw = 0;
+    empty.nodes[0].accounted = 0;
+    empty.nodes[0].subtree = 0;
+    add(&mut empty, 0, b"zero", Kind::File, 0);
+    let e = explorer(empty);
+    let frame = e.diagram(e.root_handle(), 32, 32).unwrap();
+    assert!(frame.layout.tiles.is_empty());
+    assert!(frame.hit(0, 0).is_none());
 }

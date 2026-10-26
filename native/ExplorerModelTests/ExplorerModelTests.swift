@@ -17,7 +17,7 @@ import XCTest
     return model
   }
   func entry(_ name: String, _ model: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(model.records?.page.entries.first { $0.displayName == name })
+    try XCTUnwrap(model.outline?.rows.map(\.entry).first { $0.displayName == name })
   }
   func holdBridge(_ model: ExplorerModel) async throws -> Task<MetadataRecord, Error> {
     let session = try XCTUnwrap(model.session)
@@ -106,20 +106,29 @@ import XCTest
     try await waitUntil { model.pending != nil }
     model.execute()
     try await waitUntil { !model.working && model.pending == nil }
-    XCTAssertFalse(model.records!.page.entries.contains { $0.displayName == "small-files" })
+    XCTAssertFalse(model.outline!.rows.contains { $0.entry.displayName == "small-files" })
     model.focus(target.key)
     try await waitUntil { model.outcome?.contains("known live ancestor") == true && !model.loading }
     XCTAssertNil(model.records!.focus.parent)
+    let session = model.session!
+    let focus = model.records!.focus.key
+    let layout = try await Task.detached {
+      try session.layout(
+        focus: focus,
+        request: LayoutRequest(
+          viewport: Rectangle(x: 0, y: 0, width: 100, height: 100), maxRectangles: 16, minArea: 20,
+          maxDepth: 8))
+    }.value
     let rollup = try XCTUnwrap(
-      model.records!.layout.tiles.first {
+      layout.tiles.first {
         if case .rollup = $0.kind { return true }
         return false
       })
-    if case .rollup(let directory, let count) = rollup.kind {
-      model.selectRollup(directory, count: count)
+    if case .rollup(let directory, _) = rollup.kind {
+      model.selectAggregate(directory, bytes: rollup.bytes)
       XCTAssertNil(model.selected)
       XCTAssertFalse(model.canAct)
-      XCTAssertNotNil(model.rollupText)
+      XCTAssertNotNil(model.aggregateText)
     }
   }
 

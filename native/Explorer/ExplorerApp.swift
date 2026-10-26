@@ -65,19 +65,11 @@ struct ExplorerView: View {
         selectionSummary
         Divider()
         HSplitView {
-          contents(records).frame(minWidth: 300, idealWidth: 330, maxWidth: 420)
+          ContentsTree(model: model).frame(minWidth: 300, idealWidth: 360, maxWidth: 460)
           VStack(alignment: .leading, spacing: 8) {
             Text("DISK USAGE").font(.caption.weight(.semibold)).foregroundStyle(
               .secondary)
-            GeometryReader { geometry in
-              Treemap(
-                records: records, selected: model.selected, onSelect: model.select,
-                onFocus: { model.focus($0) }, onRollup: model.selectRollup
-              )
-              .clipped()
-              .onAppear { model.resize(geometry.size) }
-              .onChange(of: geometry.size) { _, size in model.resize(size) }
-            }
+            DiagramView(model: model)
             Text(
               "Select a block or a row. Double-click a directory to open it."
             )
@@ -160,28 +152,6 @@ struct ExplorerView: View {
       }
     }.padding(16)
   }
-  func contents(_ r: ViewRecords) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("Contents").font(.headline)
-      Text("Single click selects · Double click opens a directory").font(.caption).foregroundStyle(
-        .secondary)
-      ContentsTable(
-        entries: r.page.entries, selected: model.selected, onSelect: model.select,
-        onFocus: { model.focus($0) })
-      HStack {
-        Button("Previous") { model.page(model.offset >= 100 ? model.offset - 100 : 0) }.disabled(
-          model.offset == 0 || model.loading)
-        Spacer()
-        Button("Next") { if let next = r.page.nextOffset { model.page(next) } }.disabled(
-          r.page.nextOffset == nil || model.loading
-        ).accessibilityIdentifier("next-page")
-      }
-      Text(
-        "\(model.offset + (r.page.entries.isEmpty ? 0 : 1))–\(model.offset + UInt64(r.page.entries.count)) of \(r.page.total)"
-      )
-      .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("page-range")
-    }.padding(12)
-  }
   var selectionSummary: some View {
     HStack(alignment: .center, spacing: 16) {
       if let entry = model.selected {
@@ -220,9 +190,9 @@ struct ExplorerView: View {
           .accessibilityIdentifier("trash")
         Button("Permanently Delete…", role: .destructive) { model.prepare(.permanentlyDelete) }
           .disabled(!model.canAct).accessibilityIdentifier("delete")
-      } else if let text = model.rollupText {
+      } else if let text = model.aggregateText {
         Text(text).foregroundStyle(.secondary)
-        Button("Show Directory Contents") { if let key = model.rollup { model.focus(key) } }
+        Button("Show Directory Contents") { if let key = model.aggregate { model.focus(key) } }
       } else {
         Text("Select a file or directory to see its size and free up space.").foregroundStyle(
           .secondary)
@@ -257,8 +227,20 @@ struct ExplorerView: View {
           }.frame(maxHeight: 100)
         }.accessibilityIdentifier("issues")
       }
-      Text("Recorded disk usage · Shared space is counted once · Deleting may free less space")
+      Text(
+        model.hover.map {
+          ($0.actionable ? "" : "Grouped in ")
+            + ($0.relativePath.isEmpty ? entryName($0.entry) : displayPath($0.relativePath)) + " · "
+            + exactBytes($0.bytes)
+        } ?? "Recorded disk usage · Shared space is counted once · Deleting may free less space"
+      )
+      .lineLimit(1).frame(height: 18).accessibilityIdentifier("hover-name")
+      if let p = model.picture, p.bitmap.aggregatePixels > 0 || model.rasterReduced {
+        Text(
+          "Some map detail is grouped or reduced at this scale; zoom or expand the tree to see more."
+        )
         .foregroundStyle(.secondary)
+      }
     }.font(.caption).padding(12)
   }
   func confirmation(_ pending: PendingConfirmation) -> some View {

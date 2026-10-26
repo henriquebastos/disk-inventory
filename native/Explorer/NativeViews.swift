@@ -1,280 +1,368 @@
 import AppKit
 import SwiftUI
 
-struct ContentsTable: NSViewRepresentable {
-  var entries: [EntryRecord]
-  var selected: EntryRecord?
-  var onSelect: (EntryRecord) -> Void
-  var onFocus: (EntryKey) -> Void
-  func makeCoordinator() -> Coordinator { Coordinator(self) }
+struct ContentsTree: NSViewRepresentable {
+  let model: ExplorerModel
+  func makeCoordinator() -> Coordinator { Coordinator(model) }
   func makeNSView(context: Context) -> NSScrollView {
     let scroll = NSScrollView()
-    let table = NSTableView()
-    table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
-    table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("bytes")))
-    table.tableColumns[0].title = "Name"
-    table.tableColumns[0].width = 170
-    table.tableColumns[1].title = "Disk usage"
-    table.tableColumns[1].width = 135
-    table.rowHeight = 28
+    let table = Table()
+    table.setAccessibilityIdentifier("entry-tree")
+    table.setAccessibilityRole(.outline)
+    table.rowHeight = 26
     table.usesAlternatingRowBackgroundColors = true
+    let name = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
+    name.title = "Name"
+    name.width = 240
+    let size = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
+    size.title = "Disk usage"
+    size.width = 120
+    table.addTableColumn(name)
+    table.addTableColumn(size)
     table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
-    table.dataSource = context.coordinator
     table.delegate = context.coordinator
+    table.dataSource = context.coordinator
     table.target = context.coordinator
-    table.doubleAction = #selector(Coordinator.openDirectory)
-    table.setAccessibilityIdentifier("contents-table")
+    table.doubleAction = #selector(Coordinator.open)
+    table.keyboard = { context.coordinator.key($0) }
+    scroll.contentView.postsBoundsChangedNotifications = true
+    context.coordinator.scrollObserver = NotificationCenter.default.addObserver(
+      forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
+    ) { [weak table, weak model] _ in
+      MainActor.assumeIsolated {
+        if let table, let clip = table.enclosingScrollView?.contentView {
+          let top = table.convert(
+            NSPoint(x: clip.bounds.minX, y: clip.bounds.minY + clip.contentInsets.top), from: clip)
+          model?.scrollRow = UInt64(max(0, table.row(at: top)))
+        }
+      }
+    }
     scroll.documentView = table
     scroll.hasVerticalScroller = true
     return scroll
   }
+  static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+    if let observer = coordinator.scrollObserver {
+      NotificationCenter.default.removeObserver(observer)
+    }
+    coordinator.scrollObserver = nil
+  }
   func updateNSView(_ scroll: NSScrollView, context: Context) {
+    guard let table = scroll.documentView as? Table else { return }
     let c = context.coordinator
-    c.parent = self
-    guard let table = scroll.documentView as? NSTableView else { return }
+    c.model = model
     c.updating = true
-    let changed =
-      c.byteCounts != entries.map(\.subtreeBytes) || c.keys.count != entries.count
-      || zip(c.keys, entries).contains { !$0.sameEntry(other: $1.key) }
-    if changed {
-      c.keys = entries.map(\.key)
-      c.byteCounts = entries.map(\.subtreeBytes)
+    if c.offset != model.outline?.offset || c.rows !== model.outlineToken {
+      c.offset = model.outline?.offset
+      c.rows = model.outlineToken
       table.reloadData()
     }
-    if let selected,
-      let index = entries.firstIndex(where: { $0.key.sameEntry(other: selected.key) })
-    {
-      table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+    if let row = model.selectedRow, row < table.numberOfRows {
+      table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+      if c.revealSerial != model.revealSerial { table.scrollRowToVisible(row) }
+      c.revealSerial = model.revealSerial
     } else {
       table.deselectAll(nil)
     }
+    if c.scrollSerial != model.scrollSerial {
+      // Save/restore the top unobscured row, accounting for AppKit's automatic header inset.
+      let clip = scroll.contentView
+      clip.scroll(
+        to: NSPoint(
+          x: clip.bounds.minX,
+          y: table.rect(ofRow: model.restoredScrollRow).minY - clip.contentInsets.top))
+      scroll.reflectScrolledClipView(clip)
+      c.scrollSerial = model.scrollSerial
+    }
     c.updating = false
   }
+  @MainActor final class Table: NSTableView {
+    var keyboard: ((UInt16) -> Bool)?
+    var createdCells = 0
+    override func keyDown(with event: NSEvent) {
+      if keyboard?(event.keyCode) != true { super.keyDown(with: event) }
+    }
+  }
+  @MainActor final class Cell: NSTableCellView {
+    let disclosure = NSButton()
+    let name = NSTextField(labelWithString: "")
+    var depth: UInt32 = 0
+    override init(frame: NSRect) {
+      super.init(frame: frame)
+      addSubview(disclosure)
+      addSubview(name)
+      disclosure.setButtonType(.onOff)
+      disclosure.bezelStyle = .disclosure
+      disclosure.setAccessibilityRole(.disclosureTriangle)
+      disclosure.title = ""
+      name.lineBreakMode = .byTruncatingMiddle
+      textField = name
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layout() {
+      super.layout()
+      let indent = min(CGFloat(depth) * 14, 120)
+      disclosure.frame = NSRect(x: indent + 2, y: 3, width: 18, height: 20)
+      name.frame = NSRect(
+        x: indent + 24, y: 4, width: max(0, bounds.width - indent - 28), height: 18)
+    }
+  }
   @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-    var parent: ContentsTable
+    var model: ExplorerModel
     var updating = false
-    var keys: [EntryKey] = []
-    var byteCounts: [UInt64] = []
-    init(_ parent: ContentsTable) { self.parent = parent }
-    func numberOfRows(in tableView: NSTableView) -> Int { parent.entries.count }
+    var offset: UInt64?
+    var rows: NSObject?
+    var revealSerial = 0
+    var scrollSerial = 0
+    var scrollObserver: NSObjectProtocol?
+    init(_ model: ExplorerModel) { self.model = model }
+    func numberOfRows(in tableView: NSTableView) -> Int { Int(model.outline?.total ?? 0) }
+    func record(_ row: Int) -> OutlineRow? {
+      guard row >= 0, let p = model.outline else { return nil }
+      let at = Int64(row) - Int64(p.offset)
+      guard at >= 0, at < Int64(p.rows.count) else {
+        model.requestRows(UInt64(max(0, row / 128 * 128)))
+        return nil
+      }
+      return p.rows[Int(at)]
+    }
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
-      let entry = parent.entries[row]
       let name = column?.identifier.rawValue == "name"
-      let text = NSTextField(
-        labelWithString: name
-          ? (entry.kind == .directory ? "▸ " : "") + entryName(entry)
-          : entry.subtreeBytes.formatted())
-      text.lineBreakMode = .byTruncatingMiddle
-      text.font =
-        name ? .systemFont(ofSize: 12) : .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-      text.setAccessibilityIdentifier(
-        name ? "entry-\(entry.displayName)" : "bytes-\(entry.displayName)")
-      text.toolTip = name ? entryName(entry) : exactBytes(entry.subtreeBytes)
-      return text
+      let id = NSUserInterfaceItemIdentifier(name ? "tree-name" : "tree-size")
+      let value = record(row)
+      if name {
+        let cell =
+          (tableView.makeView(withIdentifier: id, owner: self) as? Cell) ?? Cell(frame: .zero)
+        if cell.identifier == nil { (tableView as? Table)?.createdCells += 1 }
+        cell.identifier = id
+        cell.depth = value?.depth ?? 0
+        cell.name.stringValue = value.map { entryName($0.entry) } ?? "Loading…"
+        cell.name.setAccessibilityIdentifier(
+          value.map { "entry-\(entryName($0.entry))" } ?? "loading-row")
+        cell.disclosure.isHidden = value?.entry.kind != .directory || value?.entry.childCount == 0
+        cell.disclosure.state = value?.expanded == true ? .on : .off
+        cell.disclosure.target = self
+        cell.disclosure.action = #selector(toggle(_:))
+        cell.disclosure.tag = row
+        cell.disclosure.setAccessibilityIdentifier(
+          value.map { "disclosure-\(entryName($0.entry))" } ?? "loading-disclosure")
+        cell.disclosure.setAccessibilityLabel(
+          value.map { ($0.expanded ? "Collapse " : "Expand ") + entryName($0.entry) } ?? "Loading")
+        cell.disclosure.isEnabled =
+          !model.loading && !model.working && !model.replacingSession && !model.treeEditing
+        cell.needsLayout = true
+        return cell
+      }
+      let cell =
+        (tableView.makeView(withIdentifier: id, owner: self) as? NSTextField)
+        ?? NSTextField(labelWithString: "")
+      cell.identifier = id
+      cell.stringValue = value.map { exactBytes($0.entry.subtreeBytes) } ?? ""
+      cell.lineBreakMode = .byTruncatingTail
+      cell.toolTip = cell.stringValue
+      return cell
     }
-    func tableViewSelectionDidChange(_ notification: Notification) {
-      guard !updating, let table = notification.object as? NSTableView,
-        parent.entries.indices.contains(table.selectedRow)
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+      let view = NSTableRowView()
+      let item = record(row)
+      view.setAccessibilityEnabled(true)
+      view.setAccessibilityDisclosureLevel(Int(item?.depth ?? 0))
+      if let item, item.entry.kind == .directory, item.entry.childCount > 0 {
+        view.setAccessibilityExpanded(item.expanded)
+      }
+      return view
+    }
+    func tableViewSelectionDidChange(_ note: Notification) {
+      guard !updating, let table = note.object as? NSTableView, let r = record(table.selectedRow)
       else { return }
-      parent.onSelect(parent.entries[table.selectedRow])
+      let selectedRow = table.selectedRow
+      model.select(r.entry)
+      model.selectedRow = selectedRow
     }
-    @objc func openDirectory(_ table: NSTableView) {
-      guard parent.entries.indices.contains(table.clickedRow) else { return }
-      let entry = parent.entries[table.clickedRow]
-      if entry.kind == .directory { parent.onFocus(entry.key) }
+    @objc func toggle(_ sender: NSButton) {
+      if let row = record(sender.tag) { model.expand(row.entry, expanded: !row.expanded) }
+    }
+    @objc func open(_ sender: NSTableView) {
+      if let row = record(sender.clickedRow), row.entry.kind == .directory {
+        model.focus(row.entry.key)
+      }
+    }
+    func key(_ code: UInt16) -> Bool {
+      guard code == 123 || code == 124 else { return false }
+      guard !model.working, !model.loading, !model.replacingSession, model.pending == nil else {
+        return true
+      }
+      guard let index = model.selectedRow, let row = record(index) else { return false }
+      if code == 124 {
+        guard row.entry.kind == .directory, row.entry.childCount > 0 else { return true }
+        if !row.expanded {
+          model.expand(row.entry, expanded: true)
+        } else if let child = record(index + 1),
+          child.entry.parent?.sameEntry(other: row.entry.key) == true
+        {
+          model.select(child.entry)
+        }
+      } else if row.expanded {
+        model.expand(row.entry, expanded: false)
+      } else {
+        model.selectParent(row.entry)
+      }
+      return true
     }
   }
 }
 
-struct Treemap: NSViewRepresentable {
-  var records: ViewRecords
-  var selected: EntryRecord?
-  var onSelect: (EntryRecord) -> Void
-  var onFocus: (EntryKey) -> Void
-  var onRollup: (EntryKey, UInt64) -> Void
-  func makeNSView(context: Context) -> MapView {
-    let view = MapView()
-    view.setAccessibilityElement(true)
-    view.setAccessibilityEnabled(true)
-    view.setAccessibilityRole(.group)
-    view.setAccessibilityLabel("Treemap")
-    return view
-  }
+struct DiagramView: NSViewRepresentable {
+  let model: ExplorerModel
+  func makeNSView(context: Context) -> MapView { MapView() }
   func updateNSView(_ view: MapView, context: Context) {
-    view.content = self
-    view.updateAccessibilityHeaders()
-    view.needsDisplay = true
+    view.model = model
+    view.hoverRect = model.hover?.rect
+    view.selectionRect = model.selectedRegion
+    view.updatePicture()
   }
   @MainActor final class MapView: NSView {
-    var content: Treemap?
-    private var headerElements: [GroupHeaderElement] = []
+    var model: ExplorerModel?
+    var hoverRect: Rectangle?
+    var selectionRect: Rectangle?
+    var image: NSImage?
+    var frameObject: DiagramFrame?
+    var elements: [Target] = []
+    var area: NSTrackingArea?
+    var drawCount = 0
+    var lastDrawDuration: Duration = .zero
     override var isFlipped: Bool { true }
-    let colors: [NSColor] = [
-      NSColor(red: 0.22, green: 0.43, blue: 0.49, alpha: 1),
-      NSColor(red: 0.44, green: 0.37, blue: 0.58, alpha: 1),
-      NSColor(red: 0.30, green: 0.48, blue: 0.37, alpha: 1),
-      NSColor(red: 0.58, green: 0.36, blue: 0.24, alpha: 1),
-    ]
-    func rect(_ r: Rectangle) -> NSRect { NSRect(x: r.x, y: r.y, width: r.width, height: r.height) }
-    override func draw(_ dirtyRect: NSRect) {
-      NSColor.windowBackgroundColor.setFill()
-      bounds.fill()
-      guard let c = content else { return }
-      let headers = headerRegions().map { region in
-        (
-          region.rect, entryName(c.records.groupEntries[region.index]),
-          c.selected?.key.sameEntry(other: c.records.layout.groups[region.index].directory) == true
-        )
-      }
-      for (i, tile) in c.records.layout.tiles.enumerated() {
-        let r = rect(tile.rect)
-        // Color is presentation only: siblings share their core-returned parent group.
-        let group =
-          c.records.layout.groups.firstIndex { group in
-            tile.parent?.sameEntry(other: group.directory) == true
-          } ?? 0
-        colors[group % colors.count].setFill()
-        r.fill()
-        NSColor.white.withAlphaComponent(0.65).setStroke()
-        NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5)).stroke()
-        let entry = c.records.tileEntries[i]
-        if let key = entry?.key, c.selected?.key.sameEntry(other: key) == true {
-          NSColor.selectedControlColor.setStroke()
-          let border = NSBezierPath(rect: r.insetBy(dx: 2, dy: 2))
-          border.lineWidth = 4
-          border.stroke()
-        }
-        if r.width > 72 && r.height > 38 {
-          let text: String
-          if let entry {
-            text = "\(entryName(entry))\n\(tile.bytes.formatted()) B"
-          } else {
-            text = "Other entries +\ndirectory allocation"
-          }
-          let paragraph = NSMutableParagraphStyle()
-          paragraph.lineBreakMode = .byTruncatingTail
-          var labelRect = r.insetBy(dx: 7, dy: 6)
-          if headers.contains(where: { $0.0.intersects(labelRect) }) {
-            labelRect.origin.y += 22
-            labelRect.size.height = max(0, labelRect.height - 22)
-          }
-          (text as NSString).draw(
-            in: labelRect,
-            withAttributes: [
-              .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-              .foregroundColor: NSColor.white, .paragraphStyle: paragraph,
-            ])
-        }
-      }
-      for group in c.records.layout.groups {
-        NSColor.labelColor.withAlphaComponent(0.8).setStroke()
-        let border = NSBezierPath(rect: rect(group.rect).insetBy(dx: 1, dy: 1))
-        border.lineWidth = 2
-        border.stroke()
-      }
-      // Selection is an overlay on the core group rectangle, never additional area.
-      for group in c.records.layout.groups
-      where c.selected?.key.sameEntry(other: group.directory) == true {
-        let r = rect(group.rect).insetBy(dx: 3, dy: 3)
-        NSColor.black.setStroke()
-        let border = NSBezierPath(rect: r)
-        border.lineWidth = 6
-        border.stroke()
-        NSColor.white.setStroke()
-        border.lineWidth = 3
-        border.stroke()
-      }
-      for (r, title, selected) in headers {
-        (selected ? NSColor.controlAccentColor : NSColor.black.withAlphaComponent(0.75)).setFill()
-        r.fill()
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingTail
-        ((selected ? "Selected · " : "") + title as NSString).draw(
-          in: r.insetBy(dx: 4, dy: 2),
-          withAttributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: NSColor.white, .paragraphStyle: paragraph,
-          ])
-      }
+    override init(frame: NSRect) {
+      super.init(frame: frame)
+      setAccessibilityElement(false)
+      setAccessibilityIdentifier("disk-map")
+      setAccessibilityLabel("Disk usage map")
     }
-    override func accessibilityChildren() -> [Any]? { headerElements }
-    override func viewDidMoveToWindow() { updateAccessibilityHeaders() }
+    required init?(coder: NSCoder) { nil }
+    func updatePicture() {
+      if frameObject !== model?.picture?.frame {
+        frameObject = model?.picture?.frame
+        image = model?.picture.map {
+          NSImage(
+            cgImage: $0.image,
+            size: NSSize(width: Int($0.bitmap.width), height: Int($0.bitmap.height)))
+        }
+        updateTargets()
+      }
+      needsDisplay = true
+    }
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      if let area { removeTrackingArea(area) }
+      area = NSTrackingArea(
+        rect: bounds,
+        options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
+        owner: self)
+      addTrackingArea(area!)
+    }
+    override func viewDidChangeBackingProperties() {
+      super.viewDidChangeBackingProperties()
+      reportSize()
+    }
+    override func viewDidMoveToWindow() {
+      window?.acceptsMouseMovedEvents = true
+      updateTargets()
+      reportSize()
+    }
     override func layout() {
       super.layout()
-      updateAccessibilityHeaders()
+      updateTargets()
+      reportSize()
     }
-    func updateAccessibilityHeaders() {
-      guard let c = content, let window else { return }
-      headerElements = headerRegions().map { region in
-        let i = region.index
-        let group = c.records.layout.groups[i]
-        let rect = region.rect
-        let element = GroupHeaderElement()
-        element.setAccessibilityElement(true)
-        element.setAccessibilityEnabled(true)
-        element.setAccessibilityRole(.button)
-        element.setAccessibilityFrame(window.convertToScreen(convert(rect, to: nil)))
-        element.setAccessibilityLabel(entryName(c.records.groupEntries[i]))
-        element.setAccessibilityParent(self)
-        element.setAccessibilityIdentifier("group-header-\(c.records.groupEntries[i].displayName)")
-        element.setAccessibilityValue(
-          c.selected?.key.sameEntry(other: group.directory) == true
-            ? "Selected directory region" : "Directory region")
-        element.select = { c.onSelect(c.records.groupEntries[i]) }
-        return element
+    func reportSize() {
+      let scale = window?.backingScaleFactor ?? 1
+      model?.resize(CGSize(width: bounds.width * scale, height: bounds.height * scale))
+    }
+    func rect(_ r: Rectangle) -> NSRect {
+      guard let p = model?.picture else { return .zero }
+      let sx = bounds.width / CGFloat(p.bitmap.width)
+      let sy = bounds.height / CGFloat(p.bitmap.height)
+      return NSRect(x: r.x * sx, y: r.y * sy, width: r.width * sx, height: r.height * sy)
+    }
+    override func draw(_ dirtyRect: NSRect) {
+      let start = ContinuousClock.now
+      NSColor.windowBackgroundColor.setFill()
+      bounds.fill()
+      image?.draw(
+        in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true,
+        hints: [.interpolation: NSImageInterpolation.none.rawValue])
+      if let r = hoverRect {
+        NSColor.white.withAlphaComponent(0.7).setStroke()
+        NSBezierPath(rect: rect(r).insetBy(dx: 0.5, dy: 0.5)).stroke()
       }
-    }
-    @MainActor final class GroupHeaderElement: NSAccessibilityElement {
-      var select: (() -> Void)?
-      override func accessibilityPerformPress() -> Bool {
-        select?()
-        return select != nil
+      if let r = selectionRect {
+        let path = NSBezierPath(rect: rect(r).insetBy(dx: 1.5, dy: 1.5))
+        NSColor.black.setStroke()
+        path.lineWidth = 4
+        path.stroke()
+        NSColor.white.setStroke()
+        path.lineWidth = 2
+        path.stroke()
       }
+      drawCount += 1
+      lastDrawDuration = start.duration(to: .now)
     }
-    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
-      headerElements.reversed().first { $0.accessibilityFrame().contains(point) } ?? self
-    }
-    // Labels are overlays: omit occluded headers, prioritizing the selected directory.
-    // Drawing, accessibility and mouse input share the same visible header regions.
-    func headerRegions() -> [(index: Int, rect: NSRect)] {
-      guard let c = content else { return [] }
-      var regions = c.records.layout.groups.enumerated().compactMap {
-        i, group -> (index: Int, rect: NSRect)? in
-        guard let rect = headerRect(group) else { return nil }
-        return (i, rect)
-      }
-      if let selected = regions.firstIndex(where: {
-        c.selected?.key.sameEntry(other: c.records.layout.groups[$0.index].directory) == true
-      }) {
-        regions.append(regions.remove(at: selected))
-      }
-      return regions.enumerated().compactMap { i, region in
-        regions.dropFirst(i + 1).contains(where: { $0.rect.intersects(region.rect) }) ? nil : region
-      }
-    }
-    func headerRect(_ group: GroupRecord) -> NSRect? {
-      let r = rect(group.rect)
-      guard group.depth > 0, r.width > 120, r.height > 80 else { return nil }
-      return NSRect(x: r.minX + 3, y: r.minY + 3, width: min(r.width - 6, 180), height: 20)
-    }
-    override func mouseDown(with event: NSEvent) {
-      guard let c = content else { return }
-      let point = convert(event.locationInWindow, from: nil)
-      for region in headerRegions().reversed() where region.rect.contains(point) {
-        c.onSelect(c.records.groupEntries[region.index])
-        if event.clickCount == 2 { c.onFocus(c.records.layout.groups[region.index].directory) }
+    func pointer(_ event: NSEvent, click: Bool) {
+      guard let p = model?.picture, bounds.width > 0, bounds.height > 0 else { return }
+      let at = convert(event.locationInWindow, from: nil)
+      guard bounds.contains(at) else {
+        model?.clearHover()
         return
       }
-      for (i, tile) in c.records.layout.tiles.enumerated() where rect(tile.rect).contains(point) {
-        switch tile.kind {
-        case .entry:
-          if let entry = c.records.tileEntries[i] {
-            c.onSelect(entry)
-            if event.clickCount == 2 && entry.kind == .directory { c.onFocus(entry.key) }
-          }
-        case .rollup(let directory, let count): c.onRollup(directory, count)
+      let x = UInt32(at.x / bounds.width * CGFloat(p.bitmap.width))
+      let y = UInt32(at.y / bounds.height * CGFloat(p.bitmap.height))
+      // Tracking/move events reject clickCount with an AppKit exception.
+      model?.point(x, y, click: click, doubleClick: click && event.clickCount == 2)
+    }
+    override func mouseMoved(with event: NSEvent) { pointer(event, click: false) }
+    override func mouseEntered(with event: NSEvent) { pointer(event, click: false) }
+    override func mouseDown(with event: NSEvent) { pointer(event, click: true) }
+    override func mouseExited(with event: NSEvent) {
+      model?.clearHover()
+    }
+    func updateTargets() {
+      guard let model, let picture = model.picture, let window else {
+        elements = []
+        setAccessibilityChildren([])
+        return
+      }
+      elements = picture.targets.map { hit in
+        let frame = picture.frame
+        let x = UInt32(hit.rect.x + hit.rect.width / 2)
+        let y = UInt32(hit.rect.y + hit.rect.height / 2)
+        // Accessibility clients may retain old targets; do not retain their frame or bitmap.
+        let e = Target { [weak model, weak frame] in
+          guard let model, let frame, model.picture?.frame === frame, !model.loading,
+            !model.replacingSession
+          else { return false }
+          model.point(x, y, click: true)
+          return true
         }
-        break
+        e.setAccessibilityElement(true)
+        e.setAccessibilityEnabled(true)
+        e.setAccessibilityParent(self)
+        e.setAccessibilityRole(.button)
+        e.setAccessibilityIdentifier("map-file-\(entryName(hit.entry))")
+        e.setAccessibilityLabel(entryName(hit.entry))
+        e.setAccessibilityFrame(window.convertToScreen(convert(rect(hit.rect), to: nil)))
+        return e
+      }
+      setAccessibilityChildren(elements)
+    }
+    @MainActor final class Target: NSAccessibilityElement {
+      let press: @MainActor @Sendable () -> Bool
+      init(press: @escaping @MainActor @Sendable () -> Bool) {
+        self.press = press
+        super.init()
+      }
+      override func accessibilityPerformPress() -> Bool {
+        let action = press
+        return MainActor.assumeIsolated { action() }
       }
     }
   }

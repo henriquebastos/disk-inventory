@@ -16,10 +16,10 @@ pub struct Rect {
     pub height: f64,
 }
 impl Rect {
-    fn area(self) -> f64 {
+    pub(crate) fn area(self) -> f64 {
         self.width * self.height
     }
-    fn valid(self) -> bool {
+    pub(crate) fn valid(self) -> bool {
         [
             self.x,
             self.y,
@@ -37,7 +37,7 @@ impl Rect {
             && self.x + self.width > self.x
             && self.y + self.height > self.y
     }
-    fn contains(self, other: Self) -> bool {
+    pub(crate) fn contains(self, other: Self) -> bool {
         // Allow ordinary coordinate roundoff without accepting drift comparable
         // to a region's size at large origins.
         let slack = |origin: f64, extent: f64| {
@@ -134,6 +134,16 @@ impl Explorer {
     /// are read; the remainder is known by subtracting from saved subtree totals.
     /// Repeated calls do not scan, sort or reconstruct the inventory.
     pub fn layout(&self, focus: EntryHandle, options: LayoutOptions) -> io::Result<Layout> {
+        self.layout_with_limits(focus, options, MAX_RECTANGLES, MAX_DEPTH, false)
+    }
+    pub(crate) fn layout_with_limits(
+        &self,
+        focus: EntryHandle,
+        options: LayoutOptions,
+        rectangle_limit: usize,
+        depth_limit: u32,
+        fixed_strips: bool,
+    ) -> io::Result<Layout> {
         let id = self.resolve(focus)?;
         if self.map.nodes[id as usize].kind != Kind::Dir {
             return Err(invalid("layout focus must be a directory"));
@@ -141,8 +151,8 @@ impl Explorer {
         if !options.viewport.valid()
             || !options.min_area.is_finite()
             || options.min_area < 0.0
-            || !(1..=MAX_RECTANGLES).contains(&options.max_rectangles)
-            || options.max_depth > MAX_DEPTH
+            || !(1..=rectangle_limit).contains(&options.max_rectangles)
+            || options.max_depth > depth_limit
         {
             return Err(invalid("invalid treemap geometry or detail limits"));
         }
@@ -242,7 +252,12 @@ impl Explorer {
             }
             // Rounded endpoints can collapse or escape a subdivision. Keep the
             // parent intact when its children cannot form valid regions.
-            if !squarify(&mut parts, tile.rect, tile.bytes) {
+            let placed = if fixed_strips {
+                crate::diagram::place_strips(&mut parts, tile.rect, tile.bytes)
+            } else {
+                squarify(&mut parts, tile.rect, tile.bytes)
+            };
+            if !placed {
                 result.tiles.push(tile);
                 continue;
             }

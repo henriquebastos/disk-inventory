@@ -3,6 +3,7 @@
 pub mod bridge;
 #[cfg(feature = "bridge")]
 uniffi::setup_scaffolding!();
+pub mod diagram;
 pub mod explorer;
 pub mod export;
 pub mod inventory;
@@ -10,6 +11,7 @@ pub mod layout;
 pub mod native;
 pub mod operations;
 pub mod snapshot;
+pub mod tree_view;
 use std::os::darwin::fs::MetadataExt as DarwinMetadataExt;
 
 use std::{

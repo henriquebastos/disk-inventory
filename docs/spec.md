@@ -156,3 +156,8 @@ deduplicated; totals need not match `df`. Cloud hydration is not deliberately re
 Controlled mounts/firmlinks, compressed files, cloud placeholders, concurrent mutation,
 publication fault injection and crash recovery are untested. APFS may reject nonUTF8
 fixture names; synthetic parser/snapshot/export tests guarantee byte coverage.
+
+The native bitmap diagram and sparse virtual tree are additional presentation APIs;
+see [native-diagram.md](native-diagram.md) for their pixel/work bounds, fixed-strip
+placement, revision invalidation and source-named tests. The legacy bounded layout
+API retains its existing placement and behavior.

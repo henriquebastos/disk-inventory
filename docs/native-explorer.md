@@ -27,7 +27,7 @@ For native-free manual exploration:
 
 ```sh
 open -n "$G/DerivedData/Build/Products/Debug/DiskInventory.app" \
-  --args --fixture-mode --scenario presentation
+  --args --fixture-mode --scenario dix
 ```
 
 Normal launch scans nothing. Open Snapshot reads saved data without checking its
@@ -39,20 +39,28 @@ by automated GUI tests; the generated bridge smoke covers owned create/offline o
 
 ## 1b Navigation and presentation
 
-Contents is an NSTableView with 100-entry core pages, keyboard selection and visible
-Previous/Next controls. It is not a locally sorted substitute for the whole directory.
-Single click selects; double-click directories or Open Directory navigates.
-Back retains at most 64 focus keys. Breadcrumbs retain at most 64 ancestors; deeper
-paths truncate older ancestors, not the inventory root label. Root and focus are
-separate. Tiny/zero-attribution entries remain reachable through Contents.
+Contents is a virtual NSTableView with real disclosure buttons and outline/row
+accessibility semantics. Rust owns sparse expansion state and size-descending
+virtual row addressing; Swift caches one slice of at most 256 rows. Native datasource
+callbacks use cached records only, scheduling missing slices asynchronously. There
+are no Previous/Next pages. Right/left arrows expand/collapse or move to child/parent.
+Disclosure never zooms. Map clicks reveal a descendant by expanding its ancestors;
+explicit Open Directory or directory double-click changes both tree and map root.
 
-The AppKit treemap draws only Rust-returned rectangles: at most 160 tiles plus
-groups, depth eight. Borders/related colors identify directory groups; group
-labels overlay area and never add bytes. Selected groups have an outline and an
-accented “Selected” header, without changing geometry. Occluded headers are omitted,
-with selection taking precedence; visible headers share drawing, mouse and
-accessibility hit regions. Rollups select an explanation and a
-Show Directory Contents action, never a deletion target.
+Back/ancestor navigation retains at most 64 sparse Rust tree handles, focus/selection
+keys and scroll positions, never row pages or bitmap history. It restores context,
+rebuilds obsolete trees off-main, and clamps scroll positions. Replacement and
+mutation recovery discard history. Breadcrumbs retain at most 64 ancestors; deeper
+paths truncate older ancestors, not the inventory root label. Tiny, zero-attribution
+and shared entries remain reachable in the tree.
+
+The map displays an immutable Rust cushion-shaded bitmap with stable saved-name
+extension colors. Placement, refinement, pixel ownership, bounds and tests are
+specified in [native-diagram.md](native-diagram.md). Hover identifies the pixel
+owner in a fixed-height footer independently of destructive selection. Click links
+selection between tree/map; no directory header covers file pixels. Unresolved
+aggregates explain grouped detail and offer directory navigation, never file removal.
+The map reports reduced/grouped detail instead of promising every file is visible.
 
 There is no inspector pane. A compact strip shows the selected name/path, one
 recorded usage measure (directory subtree or file accounted allocation), and
@@ -63,20 +71,20 @@ not guaranteed reclaimable space; detailed errors stay behind a disclosure.
 
 The design applies Laws of UX: Jakob to native selection/navigation and panels;
 Fitts to the table alternative; Hick to two startup choices and separate action
-confirmation; Common Region/Similarity to directory boundaries/colors; Doherty to
+confirmation; Common Region/Similarity to directory strips and file-type colors; Doherty to
 immediate local highlight, indeterminate work feedback and retaining the prior view.
 
 ## 1c Asynchronous ownership and operations
 
 [ExplorerModel](../native/Explorer/ExplorerModel.swift) publishes selection before
 running synchronous bridge calls in detached tasks. Ordinary selection and navigation
-use saved data only: the GUI never calls liveMetadata. Selected-path lookup has one
-active and one replaceable queued request. Session/selection/view generations reject obsolete
+use saved data only: the GUI never calls liveMetadata. Path, bitmap, hover/click and selection-region requests are bounded/coalesced.
+Tree requests serialize mutations and coalesce reads/reveals. Session/selection/view generations reject obsolete
 results; resize requests debounce 180ms. A separate replacement state keeps the
 retained previous view read-only until installation completes, even if an old view
 request finishes first. Recovery checks navigation as well as session generation.
-Swift retains only current bounded views,
-selection, small navigation history and operation diagnostics, not the inventory.
+Swift retains current bounded views, selection, sparse navigation history and
+operation diagnostics, not the inventory. Hover/selection never rebuild the diagram.
 
 Trash and permanent deletion prepare off-main and retain the actual PreparedAction
 through a separate confirmation. Rust still validates fresh metadata, raw paths and
@@ -99,8 +107,9 @@ not reopened, rescanned or rewritten. Invalid focus recovers to a known live anc
 [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift) runs the compiled
 app against real generated Rust sessions and stateful MemoryFileSystem scenarios:
 
-- "testSelectionNavigationPaginationAndUsage": click versus focus, double-click,
-  breadcrumbs/Back, second page, arrow-key selection and recorded usage.
+- "testDisclosureKeyboardZoomBackAndUsage": disclosure versus zoom,
+  double-click/Back, arrow-key selection, recorded usage and restored native scroll
+  position while the selected directory remains above the visible viewport.
 - "testConfirmationCancelDeleteAndStaleHandleRecovery": cancellation, confirmed
   deletion, disappeared target, dirty inventory and root protection.
 - "testTrashInsideAndOutside": real prepared Trash, changed views and scope totals.
@@ -113,8 +122,9 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.
 - "testDirectoryConfirmationsKeepOnlyTargetScopeAndWarnings": both action scopes,
   explicit warnings, cancellation, and absence of misleading entry-only sizes/hex.
-- "testGroupHeaderSelectionIsVisibleWithoutChangingFocus": root-child and nested
-  group feedback, summary synchronization and double-click navigation.
+- "testDenseMapHoverClickRevealAndTinyDirectoryZoom": independent hover, linked
+  descendant reveal without zoom, disclosure and 4/8 KiB zoom visibility. Collapse
+  assertions await asynchronous row publication, not just input delivery.
 - "testLongDirectoryPathAndSimpleConfirmationAtMinimumWindow": direct double-click
   from an unselected row, full long target and fixed controls at minimum window size.
 
@@ -150,7 +160,9 @@ same file verifies nested groups, long paths, entry-only sizes and cancelled pin
 The original >2^53 fixture is unchanged.
 
 Untested limits: real Trash, native GUI picker lifecycle, hostile namespace races,
-VoiceOver traversal of the drawing (the table is the accessible alternative),
+full VoiceOver traversal (the tree is the exhaustive accessible alternative),
 light-mode screenshot review, large-inventory GUI paint latency,
-and cancellation of executing work. XCUITest requires an unlocked interactive
+and cancellation of executing work. The additional native model/geometry tests
+are linked from [native-diagram.md](native-diagram.md); offscreen callback tests
+do not substitute for foreground input/screenshot acceptance. XCUITest requires an unlocked interactive
 console; do not change security settings to force automation.

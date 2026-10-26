@@ -133,6 +133,9 @@ fn changed_after_prepare_consumes_action_without_mutating_replacement() {
     let s = session("ordinary");
     let key = find(&s, b"large-file");
     let a = s.prepare(key, ActionKind::PermanentlyDelete).unwrap();
+    let root = s.status().unwrap().root.key;
+    let old_tree = s.clone().tree(root.clone()).unwrap();
+    let old_frame = s.clone().diagram(root.clone(), 64, 32).unwrap();
     memory(&s, |f| {
         f.insert(
             "/simulated-inventory/large-file",
@@ -143,6 +146,10 @@ fn changed_after_prepare_consumes_action_without_mutating_replacement() {
     assert!(matches!(s.execute(a), Err(BridgeError::ConsumedAction)));
     assert_eq!(memory(&s, |f| f.calls.remove), 0);
     assert_eq!(memory(&s, |f| f.pinned_count()), 0);
+    assert!(old_tree.rows(0, 1).is_err());
+    assert!(old_frame.hit(0, 0).is_err());
+    assert!(s.clone().tree(root.clone()).unwrap().rows(0, 1).is_ok());
+    assert!(s.diagram(root, 64, 32).unwrap().hit(0, 0).is_ok());
 }
 #[test]
 fn fixture_trash_scopes_failures_and_partial_updates_survive_conversion() {
@@ -369,6 +376,7 @@ fn presentation_and_delay_fixtures_are_isolated() {
         std::time::Duration::from_secs(1)
     );
     for s in [&presentation, &delayed] {
+        assert_eq!(s.selection_query_count(), 0);
         assert!(s.status().unwrap().simulated);
         assert_eq!(
             s.selection(find(s, b"large-file"))
@@ -388,6 +396,8 @@ fn presentation_and_delay_fixtures_are_isolated() {
                 .len(),
             28
         );
+        assert_eq!(s.selection_query_count(), 1);
+        assert_eq!(s.active_call_count(), 0);
     }
     assert_eq!(
         ordinary
@@ -450,4 +460,57 @@ fn visual_details_fixture_has_nested_groups_and_long_directory_confirmation() {
         assert_eq!(memory(&s, |f| f.pinned_count()), 0);
     }
     assert!(!s.status().unwrap().dirty);
+}
+
+#[test]
+fn diagram_and_virtual_tree_are_native_free_bounded_and_revision_guarded() {
+    let s = session("dix-wide");
+    let root = s.status().unwrap().root.key;
+    let tree = s.clone().tree(root.clone()).unwrap();
+    let initial = tree.rows(0, 32).unwrap();
+    let projects = initial
+        .rows
+        .iter()
+        .find(|r| r.entry.display_name == "Projects")
+        .unwrap()
+        .entry
+        .key
+        .clone();
+    tree.expand(projects.clone(), true).unwrap();
+    let tail = tree.rows(99_990, 16).unwrap();
+    assert!(tail.total > 100_000 && tail.rows.len() <= 16 && tail.visits <= 32);
+    assert!(tail.expansion_payload_bytes < 4096 && tail.expanded_directories == 1);
+    let tail_key = tail.rows[0].entry.key.clone();
+    assert_eq!(tree.visible_row(tail_key.clone()).unwrap(), Some(99_990));
+    tree.expand(projects.clone(), false).unwrap();
+    assert_eq!(tree.visible_row(tail_key).unwrap(), None);
+    assert!(
+        tree.visible_row(session("dix").status().unwrap().root.key)
+            .is_err()
+    );
+    tree.expand(projects.clone(), true).unwrap();
+    let frame = s.clone().diagram(root, 640, 400).unwrap();
+    let image = frame.bitmap();
+    assert!(
+        image.tiles > 160,
+        "tiles={} groups={} visits={}",
+        image.tiles,
+        image.groups,
+        image.child_visits
+    );
+    assert_eq!(image.rgba.len(), 640 * 400 * 4);
+    for x in [0, 100, 300, 639] {
+        let _ = frame.hit(x, 100).unwrap();
+    }
+    assert_eq!(memory(&s, |f| f.calls), MemoryCalls::default());
+    let target = find(&s, b"Movie.mov");
+    let action = s
+        .prepare(target.clone(), ActionKind::PermanentlyDelete)
+        .unwrap();
+    s.execute(action).unwrap();
+    assert!(frame.hit(0, 0).is_err());
+    assert!(frame.region(target).is_err());
+    assert!(tree.rows(0, 16).is_err());
+    assert!(tree.visible_row(projects.clone()).is_err());
+    assert!(tree.reveal(projects).is_err());
 }

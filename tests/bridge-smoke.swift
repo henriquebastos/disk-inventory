@@ -38,7 +38,9 @@ struct BridgeSmoke {
         require(initial.simulated && !initial.stale && !initial.dirty, "visible simulated status")
         require(!session.isBusy(), "idle after synchronous call")
         let large = try find(session, "large-file")
+        require(session.activeCallCount() == 0 && session.selectionQueryCount() == 0, "idle diagnostic counters")
         let selected = try session.selection(key: large)
+        require(session.selectionQueryCount() == 1, "actual saved-selection backend entry")
         require(selected.entry.allocatedBytes == (UInt64(1) << 53) + 123, "lossless UInt64")
         require(selected.entry.parent!.sameEntry(other: initial.root.key), "parent handle")
         require(try session.selection(key: find(session, "zero-byte")).entry.subtreeBytes == 0, "zero row")
@@ -114,6 +116,32 @@ struct BridgeSmoke {
         require(unattributed.allocatedBytes == 100 && unattributed.accountedBytes == 0, "unknown is not measured zero")
         try expectError({ if case .InvalidInput = $0 { true } else { false } }) { try ExplorerSession.fixture(scenario: "not-a-mode") }
 
+        let dix = try ExplorerSession.fixture(scenario: "dix")
+        let dixRoot = try dix.status().root.key
+        let tree = try dix.tree(root: dixRoot)
+        let projects = try find(dix, "Projects")
+        require(try tree.expand(key: projects, expanded: true) == 2003, "virtual expansion")
+        require(try tree.rows(offset: 250, limit: 256).rows.count == 256, "bounded row transfer")
+        let diagram = try dix.diagram(focus: dixRoot, width: 640, height: 400)
+        let bitmap = diagram.bitmap()
+        require(bitmap.rgba.count == 640 * 400 * 4 && bitmap.tiles > 160, "flat detailed bitmap")
+        let target = try diagram.targets().first!
+        let hit = try diagram.hit(x: UInt32(target.rect.x + target.rect.width / 2), y: UInt32(target.rect.y + target.rect.height / 2))!
+        require(hit.actionable && hit.entry.key.sameEntry(other: target.entry.key), "pixel owner")
+        let virtualRow = try tree.reveal(key: hit.entry.key)
+        require(try tree.rows(offset: virtualRow, limit: 1).rows[0].entry.key.sameEntry(other: hit.entry.key), "linked reveal")
+        require(try tree.visibleRow(key: hit.entry.key) == virtualRow, "read-only visible row")
+        _ = try tree.expand(key: projects, expanded: false)
+        require(try tree.visibleRow(key: find(dix, "Movie.mov")) == 1, "shifted sibling row")
+        if hit.relativePath.starts(with: Data("Projects/".utf8)) {
+            require(try tree.visibleRow(key: hit.entry.key) == nil, "collapsed descendant remains hidden")
+        }
+        require(try diagram.region(key: projects) != nil, "directory selection region")
+        _ = try dix.refreshDirectory(key: dixRoot)
+        try expectError({ if case .InvalidInput = $0 { true } else { false } }) { try diagram.hit(x: 0, y: 0) }
+        try expectError({ if case .InvalidInput = $0 { true } else { false } }) { try tree.rows(offset: 0, limit: 1) }
+        try expectError({ if case .InvalidInput = $0 { true } else { false } }) { try tree.visibleRow(key: projects) }
+
         // One explicitly owned one-file source tests create and offline native snapshot open.
         // No native Trash/permanent operation is ever requested.
         let base = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
@@ -129,6 +157,6 @@ struct BridgeSmoke {
         _ = try offline.selection(key: savedKey)
         _ = try offline.layout(focus: offline.status().root.key, request: request)
         try expectError({ if case .NotFound = $0 { true } else { false } }) { try offline.liveMetadata(key: savedKey) }
-        print("Swift generated bridge smoke passed: views, bytes, pins, scopes, failures, refresh, create/offline open")
+        print("Swift generated bridge smoke passed: diagram/tree/revisions, views, bytes, pins, scopes, failures, refresh, create/offline open")
     }
 }

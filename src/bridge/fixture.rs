@@ -132,6 +132,9 @@ fn visual_details_map() -> Result<Map, BridgeError> {
 
 pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSystem>, BridgeError> {
     if ![
+        "dix",
+        "dix-wide",
+        "dix-deep",
         "ordinary",
         "presentation",
         "visual-details",
@@ -153,7 +156,16 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
             message: format!("unknown simulated scenario: {scenario}"),
         });
     }
-    let map = if scenario == "visual-details" {
+    let map = if matches!(scenario, "dix" | "dix-wide" | "dix-deep") {
+        dix_map(
+            if scenario == "dix-wide" {
+                100_000
+            } else {
+                2000
+            },
+            scenario == "dix-deep",
+        )?
+    } else if scenario == "visual-details" {
         visual_details_map()?
     } else if matches!(scenario, "presentation" | "metadata-delay") {
         build_map(true)?
@@ -203,4 +215,62 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         _ => {}
     }
     Ok(OperationSession::new(Explorer::from_map(map)?, fs))
+}
+
+fn dix_map(count: u32, deep: bool) -> Result<Map, BridgeError> {
+    let mut map = Map {
+        root: "/simulated-inventory".into(),
+        nodes: vec![],
+        names: vec![],
+        counters: Counters::default(),
+        error_samples: vec![],
+    };
+    let mut inode = 10_000;
+    let mut add = |parent, name: &[u8], kind, bytes| {
+        inode += 1;
+        map.add(
+            parent,
+            name,
+            Entry {
+                kind,
+                dev: 1,
+                ino: inode,
+                flags: 0,
+                links: 1,
+                allocation: Some(bytes),
+                mount: 0,
+            },
+        )
+    };
+    add(0, b"", Kind::Dir, 4096)?;
+    if deep {
+        let mut parent = 0;
+        for i in 0..80 {
+            parent = add(parent, format!("level-{i}").as_bytes(), Kind::Dir, 0)?;
+        }
+        add(parent, b"bottom.txt", Kind::File, 4096)?;
+        map.aggregate()?;
+        return Ok(map);
+    }
+    let dense = add(0, b"Projects", Kind::Dir, 4096)?;
+    for i in 0..count {
+        add(
+            dense,
+            format!(
+                "asset-{i:06}.{}",
+                ["png", "rs", "txt", "mp3"][i as usize % 4]
+            )
+            .as_bytes(),
+            Kind::File,
+            4096 * (1 + (i % 16) as u64),
+        )?;
+    }
+    let tiny = add(0, b"Tiny files", Kind::Dir, 4096)?;
+    let nested = add(tiny, b"Notes", Kind::Dir, 4096)?;
+    add(nested, b"four-KiB.txt", Kind::File, 4096)?;
+    add(nested, b"eight-KiB.png", Kind::File, 8192)?;
+    add(nested, b"empty.txt", Kind::File, 0)?;
+    add(0, b"Movie.mov", Kind::File, 64 * 1024 * 1024)?;
+    map.aggregate()?;
+    Ok(map)
 }

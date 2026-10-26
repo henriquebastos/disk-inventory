@@ -51,7 +51,7 @@ save/refresh is exposed. Open pins the snapshot without validating its source.
 `ExplorerSession` methods are `status()`, `children(parent:offset:limit:)`,
 `selection(key:)`, `layout(focus:request:)`, `liveMetadata(key:)`,
 `prepare(key:action:)`, `execute(action:)`, `refreshDirectory(key:)` (all throwing),
-and nonthrowing `isBusy()`. Records are defined in
+and nonthrowing `isBusy()`, `activeCallCount()`, `selectionQueryCount()`. Records are defined in
 [records.rs](../src/bridge/records.rs). Byte arrays generate **Data**, u64 generates
 **UInt64**, and raw paths remain authoritative; display names alone are lossy.
 Errors generate `BridgeError` cases including `InvalidEntry`, `WrongSession`,
@@ -78,7 +78,13 @@ The session mutex serializes all saved reads and live operations. Dispatch calls
 including constructors, off the main thread. `isBusy()` reads an independent
 atomic count of queued/running calls without acquiring that mutex; retain the
 last visible records while busy. Constructors have no handle to poll until they
-return, so callers own their loading indicator. There are no callbacks or async
+return, so callers own their loading indicator. `activeCallCount()` exposes that
+queued/running count. `selectionQueryCount()` counts saved-selection calls actually
+entered under the backend lock, including invalid keys, not merely dispatched work.
+These atomic diagnostics are not lock barriers. "presentation_and_delay_fixtures_are_isolated"
+in [src/bridge/tests.rs](../src/bridge/tests.rs) and the parent-request tests in
+[IntegrationFixTests.swift](../native/ExplorerModelTests/IntegrationFixTests.swift)
+check the counters and rejection of obsolete pending work. There are no callbacks or async
 Rust methods. Generated handles are Sendable; this does not make calls nonblocking.
 
 `prepare` returns a Rust-owned `PreparedAction` retaining the actual core pin.
@@ -146,3 +152,13 @@ one explicitly owned one-file create followed by unavailable-source open. It
 never requests native Trash or permanent deletion. Native GUI/XCUITest behavior
 is documented in [native-explorer.md](native-explorer.md). Native Trash, hostile
 namespace races, non-macOS and Intel linking remain untested here.
+
+## Native presentation views
+
+`ExplorerSession.tree` returns a sparse `ExplorerTree` with bounded `rows`, `expand`
+and `reveal`, plus read-only `visible_row` (Swift `visibleRow`) for a selected
+key's optional position without opening collapsed ancestors. `diagram` returns an immutable `DiagramFrame` with flat RGBA `bitmap`,
+owner `hit`, selection `region` and bounded accessibility `targets`. Neither view
+is an action capability. Execution/refresh revisions reject obsolete queries.
+Bounds, payload-versus-RSS distinctions and exact tests are specified in
+[native-diagram.md](native-diagram.md). Legacy children/layout methods are unchanged.
