@@ -19,38 +19,59 @@ import XCTest
   func entry(_ name: String, _ model: ExplorerModel) throws -> EntryRecord {
     try XCTUnwrap(model.records?.page.entries.first { $0.displayName == name })
   }
-  func testImmediateSelectionWhileRustBusyDiscardsObsoleteMetadata() async throws {
+  func holdBridge(_ model: ExplorerModel) async throws -> Task<MetadataRecord, Error> {
+    let session = try XCTUnwrap(model.session)
+    let key = try entry("large-file", model).key
+    let task = Task.detached { try session.liveMetadata(key: key) }
+    try await waitUntil { session.isBusy() }
+    return task
+  }
+  func testImmediateSelectionWhileRustBusyDiscardsObsoletePath() async throws {
     let model = try await model("metadata-delay")
+    let blocker = try await holdBridge(model)
     model.select(try entry("large-file", model))
-    try await waitUntil { model.session?.isBusy() == true }
     let start = ContinuousClock.now
     model.select(try entry("zero-byte", model))
     let elapsed = start.duration(to: .now)
     XCTAssertEqual(model.selected?.displayName, "zero-byte")
-    XCTAssertNil(model.metadata)
-    XCTAssertEqual(model.metadataState, "Loading live metadata…")
+    XCTAssertNil(model.selectionPath)
     XCTAssertTrue(model.session?.isBusy() == true)
     print("RESPONSIVENESS main-actor select+property publication while Rust busy: \(elapsed)")
     XCTAssertLessThan(elapsed, .milliseconds(100))
-    // Poll throughout both real calls, not just their final value: old data must never publish.
     for _ in 0..<180 {
-      if let metadata = model.metadata { XCTAssertEqual(metadata.logicalBytes, 17) }
+      if let path = model.selectionPath { XCTAssertEqual(path, "zero-byte") }
       XCTAssertEqual(model.selected?.displayName, "zero-byte")
       try await Task.sleep(for: .milliseconds(10))
     }
-    XCTAssertEqual(model.metadata?.logicalBytes, 17)
+    _ = try await blocker.value
+    XCTAssertEqual(model.selectionPath, "zero-byte")
   }
-  func testSessionReplacementDiscardsOldMetadataAndViews() async throws {
+  func testSelectionAndNavigationUseSavedDataWithoutLiveMetadata() async throws {
     let model = try await model("metadata-delay")
+    let start = ContinuousClock.now
     model.select(try entry("large-file", model))
-    try await waitUntil { model.session?.isBusy() == true }
+    try await waitUntil { model.selectionPath == "large-file" }
+    let directory = try entry("small-files", model).key
+    model.focus(directory)
+    try await waitUntil { !model.loading }
+    XCTAssertTrue(model.records!.focus.key.sameEntry(other: directory))
+    let elapsed = start.duration(to: .now)
+    // This real fixture sleeps one second for live metadata, but not indexed queries.
+    XCTAssertLessThan(elapsed, .milliseconds(750))
+    print("SAVED-ONLY selection path + directory publication: \(elapsed); not paint latency")
+  }
+  func testSessionReplacementDiscardsOldSelectionAndViews() async throws {
+    let model = try await model("metadata-delay")
+    let blocker = try await holdBridge(model)
+    model.select(try entry("large-file", model))
     model.load { try ExplorerSession.fixture(scenario: "ordinary") }
     try await waitUntil {
       !model.loading && model.records?.status.root.subtreeBytes ?? 0 > (1 << 53)
     }
+    _ = try await blocker.value
     try await Task.sleep(for: .milliseconds(1200))
     XCTAssertNil(model.selected)
-    XCTAssertNil(model.metadata)
+    XCTAssertNil(model.selectionPath)
     XCTAssertGreaterThan(model.records!.status.root.subtreeBytes, 1 << 53)
   }
   func testCancelPendingPreparationAndRootProtection() async throws {
@@ -106,15 +127,15 @@ import XCTest
     let model = try await model("metadata-delay")
     let root = model.records!.status.root.key
     let directory = try entry("small-files", model).key
-    model.select(try entry("large-file", model))
-    try await waitUntil { model.session?.isBusy() == true }
+    let blocker = try await holdBridge(model)
     model.focus(directory)
     model.focus(root)
     try await waitUntil { !model.loading }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
     try await Task.sleep(for: .milliseconds(1200))
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
-    XCTAssertNil(model.metadata)
+    _ = try await blocker.value
+    XCTAssertNil(model.selectionPath)
   }
 
   func testReplacementBlocksRetainedViewActionsUntilInstallation() async throws {
@@ -167,7 +188,7 @@ import XCTest
   func testStalePreparationCompletionCannotPublishAfterReplacement() async throws {
     let model = try await model("metadata-delay")
     let oldSession = try XCTUnwrap(model.session)
-    // Assign a real saved row without starting inspector metadata: isBusy below belongs to prepare.
+    // isBusy below belongs to explicit preparation, not saved-data selection.
     model.selected = try entry("large-file", model)
     let preparation = try XCTUnwrap(model.prepare(.trash))
     try await waitUntil { oldSession.isBusy() }
@@ -186,12 +207,13 @@ import XCTest
     let session = try XCTUnwrap(model.session)
     let directory = try entry("small-files", model).key
     model.select(try entry("large-file", model))
-    try await waitUntil { session.isBusy() }
+    let blocker = try await holdBridge(model)
     // Recovery clears selection synchronously, then blocks behind the real delayed metadata call.
     let recovery = Task { await model.recoverView(session) }
     try await waitUntil { model.selected == nil }
     model.focus(directory)
     await recovery.value
+    _ = try await blocker.value
     try await waitUntil { !model.loading }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: directory))
   }

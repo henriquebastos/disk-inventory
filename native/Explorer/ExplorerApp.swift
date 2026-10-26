@@ -41,7 +41,6 @@ import SwiftUI
 
 struct ExplorerView: View {
   @Bindable var model: ExplorerModel
-  @State private var showsConfirmationHex = false
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack {
@@ -63,11 +62,12 @@ struct ExplorerView: View {
       Divider()
       if let records = model.records {
         header(records)
+        selectionSummary
         Divider()
         HSplitView {
           contents(records).frame(minWidth: 300, idealWidth: 330, maxWidth: 420)
           VStack(alignment: .leading, spacing: 8) {
-            Text("AREA = ACCOUNTED ALLOCATION").font(.caption.weight(.semibold)).foregroundStyle(
+            Text("DISK USAGE").font(.caption.weight(.semibold)).foregroundStyle(
               .secondary)
             GeometryReader { geometry in
               Treemap(
@@ -79,14 +79,13 @@ struct ExplorerView: View {
               .onChange(of: geometry.size) { _, size in model.resize(size) }
             }
             Text(
-              "Borders group directories; they add no bytes. Tiny and zero-attribution entries remain accessible in Contents."
+              "Select a block or a row. Double-click a directory to open it."
             )
             .font(.caption).foregroundStyle(.secondary)
           }.padding(14).frame(minWidth: 350)
-          inspector.frame(width: 290)
         }
         Divider()
-        footer(records)
+        footer
       } else {
         VStack(spacing: 16) {
           Image(systemName: "externaldrive").font(.system(size: 48)).foregroundStyle(.secondary)
@@ -97,27 +96,26 @@ struct ExplorerView: View {
           if model.fixtureMode {
             Text("Fixture mode • Native access disabled").accessibilityIdentifier("fixture-locked")
           }
-          if let error = model.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+          if let error = model.error {
+            Text("Could not open the inventory.").foregroundStyle(.red)
+            DisclosureGroup("Details") { Text(error).textSelection(.enabled) }
+          }
           if model.loading { ProgressView("Loading inventory…") }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .sheet(item: $model.pending, onDismiss: dismissConfirmation) { pending in
+    .sheet(item: $model.pending, onDismiss: model.cancelConfirmation) { pending in
       confirmation(pending)
     }
-  }
-  private func dismissConfirmation() {
-    model.cancelConfirmation()
-    showsConfirmationHex = false
   }
   func header(_ r: ViewRecords) -> some View {
     VStack(alignment: .leading, spacing: 9) {
       HStack(alignment: .top) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Where the allocated space is").font(.title.weight(.semibold))
+          Text("Disk usage").font(.title.weight(.semibold))
           Text("Inventory root: \(displayPath(r.status.rootPath))").textSelection(.enabled)
             .lineLimit(2)
-          Text(exactBytes(r.status.root.subtreeBytes) + " accounted in scope").font(.headline)
+          Text(exactBytes(r.status.root.subtreeBytes) + " recorded").font(.headline)
             .accessibilityIdentifier("scope-total")
         }
         Spacer()
@@ -131,10 +129,10 @@ struct ExplorerView: View {
               "partial")
           }
           if r.status.stale {
-            Text("STALE • Unknown allocations; totals incomplete").accessibilityIdentifier("stale")
+            Text("INCOMPLETE • Some sizes unknown").accessibilityIdentifier("stale")
           }
           if r.status.dirty {
-            Text("LIVE INVENTORY CHANGED • Saved snapshot unchanged").accessibilityIdentifier(
+            Text("CHANGED • Snapshot not saved").accessibilityIdentifier(
               "dirty")
           }
         }.font(.caption).foregroundStyle(.primary).padding(10).background(
@@ -179,113 +177,88 @@ struct ExplorerView: View {
         ).accessibilityIdentifier("next-page")
       }
       Text(
-        "\(model.offset + (r.page.entries.isEmpty ? 0 : 1))–\(model.offset + UInt64(r.page.entries.count)) of \(r.page.total) • Core order, not a global size ranking"
+        "\(model.offset + (r.page.entries.isEmpty ? 0 : 1))–\(model.offset + UInt64(r.page.entries.count)) of \(r.page.total)"
       )
       .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("page-range")
     }.padding(12)
   }
-  var inspector: some View {
-    VStack(spacing: 0) {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 14) {
-          Text("Inspector").font(.headline)
-          if let entry = model.selected {
-            Text(entryName(entry)).font(.title3.weight(.semibold)).textSelection(.enabled)
-              .accessibilityIdentifier("selected-name")
-            if let path = model.selectionPath {
-              Text(path.isEmpty ? "/" : path).font(.caption).textSelection(.enabled)
-            }
-            GroupBox(
-              model.records?.status.dirty == true
-                ? "Reconciled inventory · not saved" : "Saved inventory"
-            ) {
-              VStack(alignment: .leading, spacing: 8) {
-                value("Allocated (raw)", exactBytes(entry.allocatedBytes))
-                value("Accounted (deduplicated)", exactBytes(entry.accountedBytes))
-                value("Subtree", exactBytes(entry.subtreeBytes))
-              }.frame(maxWidth: .infinity, alignment: .leading)
-            }
-            GroupBox("Live metadata · separate from inventory") {
-              VStack(alignment: .leading, spacing: 8) {
-                Text(model.metadataState).font(.caption).accessibilityIdentifier("metadata-state")
-                if let m = model.metadata {
-                  value("Logical size", exactBytes(m.logicalBytes), id: "logical-size")
-                  value("Live allocated", exactBytes(m.allocatedBytes))
-                  value(
-                    "Modified (Unix seconds)",
-                    "\(m.modifiedSeconds).\(String(format: "%09lld", m.modifiedNanoseconds))")
-                  value("Created (Unix seconds)", "\(m.createdSeconds)")
-                  value("Device / inode", "\(m.device) / \(m.inode)")
-                  value(
-                    "Links / mode / flags", "\(m.links) / \(String(m.mode, radix: 8)) / \(m.flags)")
-                }
-              }.frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if entry.kind == .directory {
-              Button("Focus This Directory") { model.focus(entry.key) }.accessibilityIdentifier(
-                "focus-selected")
-            }
-          } else if let text = model.rollupText {
-            Text(text)
-            Button("Show Directory Contents") { if let key = model.rollup { model.focus(key) } }
-          } else {
-            Text("Select a rectangle or a contents row. Selection does not change view focus.")
-              .foregroundStyle(.secondary)
-            if let root = model.records?.status.root {
-              Button("Inspect Inventory Root") { model.select(root) }.accessibilityIdentifier(
-                "inspect-root")
-            }
-          }
-          Text(
-            "Allocation is not guaranteed reclaimable space. Zero attribution is not proof of zero usage; aliases and unknown allocations can have zero attribution."
-          ).font(.caption).foregroundStyle(.secondary)
-        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
-      }
+  var selectionSummary: some View {
+    HStack(alignment: .center, spacing: 16) {
       if let entry = model.selected {
-        Divider()
-        VStack(alignment: .leading, spacing: 8) {
-          if entry.parent == nil {
-            Text("Inventory root is protected.").font(.caption).accessibilityIdentifier(
-              "root-protected")
+        VStack(alignment: .leading, spacing: 3) {
+          HStack {
+            Text(entryName(entry)).fontWeight(.semibold).lineLimit(1).truncationMode(.middle)
+              .help(entryName(entry)).accessibilityIdentifier("selected-name")
+            Text(
+              "Recorded: "
+                + exactBytes(entry.kind == .directory ? entry.subtreeBytes : entry.accountedBytes)
+            )
+            .accessibilityIdentifier("selected-usage")
+            if entry.kind == .file && entry.accountedBytes < entry.allocatedBytes {
+              Text(
+                model.records?.status.stale == true
+                  ? "Shared or unknown size" : "Shared space counted elsewhere"
+              ).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("sharing-note")
+            }
           }
-          Button("Move to Trash…") { model.prepare(.trash) }.disabled(!model.canAct)
-            .accessibilityIdentifier("trash")
-          Button("Permanently Delete…", role: .destructive) { model.prepare(.permanentlyDelete) }
-            .disabled(!model.canAct).accessibilityIdentifier("delete")
-        }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+          if let path = model.selectionPath {
+            Text(path.isEmpty ? "/" : path).font(.caption).foregroundStyle(.secondary)
+              .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+              .help(path).accessibilityIdentifier("selected-path")
+          }
+        }
+        Spacer(minLength: 0)
+        if entry.kind == .directory {
+          Button("Open Directory") { model.focus(entry.key) }.accessibilityIdentifier(
+            "focus-selected")
+        }
+        if entry.parent == nil {
+          Text("Inventory root is protected.").font(.caption).accessibilityIdentifier(
+            "root-protected")
+        }
+        Button("Move to Trash…") { model.prepare(.trash) }.disabled(!model.canAct)
+          .accessibilityIdentifier("trash")
+        Button("Permanently Delete…", role: .destructive) { model.prepare(.permanentlyDelete) }
+          .disabled(!model.canAct).accessibilityIdentifier("delete")
+      } else if let text = model.rollupText {
+        Text(text).foregroundStyle(.secondary)
+        Button("Show Directory Contents") { if let key = model.rollup { model.focus(key) } }
+      } else {
+        Text("Select a file or directory to see its size and free up space.").foregroundStyle(
+          .secondary)
+        Spacer()
+        if let root = model.records?.status.root {
+          Button("Select Inventory Root") { model.select(root) }.accessibilityIdentifier(
+            "inspect-root")
+        }
       }
-    }
+    }.frame(height: 48).padding(.horizontal, 16)
   }
-  func value(_ title: String, _ text: String, id: String = "") -> some View {
-    VStack(alignment: .leading, spacing: 2) {
-      Text(title).font(.caption).foregroundStyle(.secondary)
-      Text(text).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-        .accessibilityIdentifier(id)
-    }
-  }
-  func footer(_ r: ViewRecords) -> some View {
+  var footer: some View {
     VStack(alignment: .leading, spacing: 5) {
-      if let error = model.error {
+      if model.error != nil {
         HStack {
-          Text(error).foregroundStyle(.red).textSelection(.enabled).accessibilityIdentifier("error")
+          Text("Could not complete the request.").foregroundStyle(.red).accessibilityIdentifier(
+            "error")
           Button("Dismiss") { model.error = nil }
         }
       }
       if let outcome = model.outcome {
         Text(outcome).textSelection(.enabled).accessibilityIdentifier("outcome")
       }
-      if !model.issues.isEmpty {
-        DisclosureGroup("Retained operation issues (\(model.issues.count))") {
+      if model.error != nil || !model.issues.isEmpty {
+        DisclosureGroup("Details") {
           ScrollView {
+            if let error = model.error {
+              Text(error).textSelection(.enabled).accessibilityIdentifier("error-details")
+            }
             Text(model.issues.joined(separator: "\n")).textSelection(.enabled).frame(
               maxWidth: .infinity, alignment: .leading)
           }.frame(maxHeight: 100)
         }.accessibilityIdentifier("issues")
       }
-      Text(
-        "Observed scope only • Symlinks excluded • \(r.status.counters.mounts) mounts excluded • \(r.layout.tiles.count) tiles / \(r.page.entries.count) rows loaded"
-      )
-      .foregroundStyle(.secondary)
+      Text("Recorded disk usage · Shared space is counted once · Deleting may free less space")
+        .foregroundStyle(.secondary)
     }.font(.caption).padding(12)
   }
   func confirmation(_ pending: PendingConfirmation) -> some View {
@@ -299,43 +272,16 @@ struct ExplorerView: View {
       if model.records?.status.simulated == true {
         Text("SIMULATED • Memory filesystem only").accessibilityIdentifier("confirmation-simulated")
       }
-      ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          Text(displayPath(pending.details.rawPath)).font(.body.monospaced()).textSelection(
-            .enabled
-          )
-          .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("confirmation-path")
-          Toggle("Show byte-exact target path (hex)", isOn: $showsConfirmationHex)
-            .toggleStyle(.checkbox).accessibilityIdentifier("show-target-hex")
-          if showsConfirmationHex {
-            Text(pending.details.rawPath.map { String(format: "%02x", $0) }.joined())
-              .font(.caption.monospaced()).textSelection(.enabled)
-              .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier(
-                "confirmation-hex")
-          }
-          Text("Fresh prepared metadata · Target identity held until confirmation or cancellation")
-            .font(.caption).foregroundStyle(.secondary)
-          if directory {
-            Text(
-              "Directory entry only, excluding contents. These sizes do not measure everything affected."
-            )
-            .font(.caption).accessibilityIdentifier("directory-size-scope")
-          }
-          value(
-            directory ? "Logical size (directory entry only)" : "Logical size",
-            exactBytes(pending.details.metadata.logicalBytes))
-          value(
-            directory ? "Allocated (directory entry only)" : "Allocated",
-            exactBytes(pending.details.metadata.allocatedBytes))
-          value(
-            "Device / inode",
-            "\(pending.details.metadata.device) / \(pending.details.metadata.inode)")
-        }.frame(maxWidth: .infinity, alignment: .leading)
-      }.frame(height: 260).accessibilityIdentifier("confirmation-details")
+      ViewThatFits(in: .vertical) {
+        confirmationPath(pending)
+        ScrollView { confirmationPath(pending) }
+      }.frame(maxHeight: 260)
       Text(
         permanent
-          ? "This cannot be undone. A directory may be only partly removed if an error occurs."
-          : "No permanent-delete fallback. Trash inside this inventory moves allocation rather than reducing scope usage."
+          ? (directory
+            ? "This cannot be undone. An error may leave some contents undeleted."
+            : "This cannot be undone.")
+          : "Trash may not free space until emptied. If Trash fails, nothing will be permanently deleted."
       ).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("confirmation-warning")
       HStack {
         Spacer()
@@ -349,4 +295,11 @@ struct ExplorerView: View {
       }
     }.padding(24).frame(width: 510)
   }
+  private func confirmationPath(_ pending: PendingConfirmation) -> some View {
+    Text(displayPath(pending.details.rawPath)).font(.body).textSelection(.enabled)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityIdentifier("confirmation-path")
+  }
+
 }

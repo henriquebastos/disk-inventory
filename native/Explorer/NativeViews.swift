@@ -14,7 +14,7 @@ struct ContentsTable: NSViewRepresentable {
     table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("bytes")))
     table.tableColumns[0].title = "Name"
     table.tableColumns[0].width = 170
-    table.tableColumns[1].title = "Subtree bytes"
+    table.tableColumns[1].title = "Disk usage"
     table.tableColumns[1].width = 135
     table.rowHeight = 28
     table.usesAlternatingRowBackgroundColors = true

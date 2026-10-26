@@ -29,8 +29,6 @@ struct PendingConfirmation: Identifiable {
   var records: ViewRecords?
   var selected: EntryRecord?
   var selectionPath: String?
-  var metadata: MetadataRecord?
-  var metadataState = "Select an entry"
   var loading = false
   private(set) var replacingSession = false
   var working = false
@@ -48,14 +46,14 @@ struct PendingConfirmation: Identifiable {
   private var viewVersion = 0
   private var selectionVersion = 0
   private var actionVersion = 0
-  private struct MetadataRequest {
+  private struct PathRequest {
     let session: ExplorerSession
     let key: EntryKey
     let selectionVersion: Int
     let sessionVersion: Int
   }
-  private var metadataRequest: MetadataRequest?
-  private var metadataWorkerRunning = false
+  private var pathRequest: PathRequest?
+  private var pathWorkerRunning = false
   private var preparing = false
   private var cancellationTask: Task<Void, Never>?
   private var requestedFocus: EntryKey?
@@ -82,10 +80,9 @@ struct PendingConfirmation: Identifiable {
 
   func load(_ constructor: @escaping @Sendable () throws -> ExplorerSession) {
     cancelConfirmation()
-    metadataRequest = nil
+    pathRequest = nil
     selected = nil
-    metadata = nil
-    metadataState = "Select an entry"
+    selectionPath = nil
     sessionVersion += 1
     viewVersion += 1
     selectionVersion += 1
@@ -110,12 +107,12 @@ struct PendingConfirmation: Identifiable {
         // Also invalidate old-session work started while its previous view remained visible.
         viewVersion += 1
         selectionVersion += 1
-        metadataRequest = nil
+        pathRequest = nil
         session = result.0
         requestedFocus = result.1.root.key
         records = nil
         selected = nil
-        metadata = nil
+        selectionPath = nil
         history = []
         issues = []
         outcome = nil
@@ -182,48 +179,38 @@ struct PendingConfirmation: Identifiable {
     selected = entry
     rollup = nil
     rollupText = nil
-    metadata = nil
     selectionPath = nil
-    metadataState = "Loading live metadata…"
     selectionVersion += 1
     guard let s = session else { return }
-    metadataRequest = MetadataRequest(
+    pathRequest = PathRequest(
       session: s, key: entry.key,
       selectionVersion: selectionVersion, sessionVersion: sessionVersion)
-    guard !metadataWorkerRunning else { return }
-    metadataWorkerRunning = true
+    guard !pathWorkerRunning else { return }
+    pathWorkerRunning = true
     Task {
       // At most one blocking call plus one replaceable request, even during rapid keyboard selection.
-      while let request = metadataRequest {
-        metadataRequest = nil
-        let result = await Task.detached(priority: .userInitiated) {
-          let path = try? request.session.selection(key: request.key).relativePath
-          let live = Result { try request.session.liveMetadata(key: request.key) }
-          return (path, live)
+      while let request = pathRequest {
+        pathRequest = nil
+        let path = await Task.detached(priority: .userInitiated) {
+          try? request.session.selection(key: request.key).relativePath
         }.value
         guard request.selectionVersion == selectionVersion,
           request.sessionVersion == sessionVersion
         else { continue }
-        selectionPath = result.0.map(displayPath)
-        switch result.1 {
-        case .success(let m):
-          metadata = m
-          metadataState = "Live metadata (on demand)"
-        case .failure(let e): metadataState = "Live metadata unavailable: \(e)"
-        }
+        selectionPath = path.map(displayPath)
       }
-      metadataWorkerRunning = false
+      pathWorkerRunning = false
     }
   }
 
   func selectRollup(_ key: EntryKey, count: UInt64) {
-    metadataRequest = nil
+    pathRequest = nil
     selectionVersion += 1
     selected = nil
-    metadata = nil
+    selectionPath = nil
     rollup = key
     rollupText =
-      "Rollup: \(count) smaller entries plus directory allocation. Not a file or an action target."
+      "\(count) smaller entries. Open the directory to see them."
   }
 
   func focus(_ key: EntryKey, remember: Bool = true) {
@@ -233,10 +220,9 @@ struct PendingConfirmation: Identifiable {
     viewVersion += 1
     offset = 0
     cancelConfirmation()
-    metadataRequest = nil
+    pathRequest = nil
     selectionVersion += 1
-    metadata = nil
-    metadataState = "Select an entry"
+    selectionPath = nil
     selected = nil
     rollup = nil
     rollupText = nil
@@ -316,10 +302,15 @@ struct PendingConfirmation: Identifiable {
         switch result.mutation {
         case .removed: outcome = "Permanently deleted. No Undo is available."
         case .trashed: outcome = "Moved to Trash."
-        case .failed(let message): outcome = "Failed — \(message)"
-        case .partial(let message): outcome = "Partial removal — survivors remain. \(message)"
+        case .failed(let message):
+          outcome = "Failed. The operation could not be completed."
+          issues.append(message)
+        case .partial(let message):
+          outcome = "Partial removal — some contents remain."
+          issues.append(message)
         case .indeterminate(let message):
-          outcome = "Indeterminate — verify before retrying. \(message)"
+          outcome = "Indeterminate — verify before retrying."
+          issues.append(message)
         }
         if let scope = result.scope {
           switch scope {
@@ -345,11 +336,10 @@ struct PendingConfirmation: Identifiable {
   func recoverView(_ s: ExplorerSession) async {
     let generation = sessionVersion
     let navigation = viewVersion
-    metadataRequest = nil
+    pathRequest = nil
     selectionVersion += 1
     selected = nil
-    metadata = nil
-    metadataState = "Select an entry"
+    selectionPath = nil
     let candidates =
       ([records?.focus].compactMap { $0 } + (records?.ancestors.reversed() ?? [].reversed())).map(
         \.key)

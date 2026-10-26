@@ -41,7 +41,7 @@ by automated GUI tests; the generated bridge smoke covers owned create/offline o
 
 Contents is an NSTableView with 100-entry core pages, keyboard selection and visible
 Previous/Next controls. It is not a locally sorted substitute for the whole directory.
-Single click selects; double-click directories or Focus This Directory navigates.
+Single click selects; double-click directories or Open Directory navigates.
 Back retains at most 64 focus keys. Breadcrumbs retain at most 64 ancestors; deeper
 paths truncate older ancestors, not the inventory root label. Root and focus are
 separate. Tiny/zero-attribution entries remain reachable through Contents.
@@ -54,12 +54,12 @@ with selection taking precedence; visible headers share drawing, mouse and
 accessibility hit regions. Rollups select an explanation and a
 Show Directory Contents action, never a deletion target.
 
-The inspector separates saved inventory bytes from requested live logical size,
-allocation, timestamps and identity. Integer formatting never passes byte counts
-through Double. After reconciliation it labels inventory values as not saved,
-rather than claiming they are still original snapshot values. Partial/stale/dirty
-and simulated indicators remain visible. Zero attribution is not proof of zero
-usage; allocation is not guaranteed reclaimable space.
+There is no inspector pane. A compact strip shows the selected name/path, one
+recorded usage measure (directory subtree or file accounted allocation), and
+Open Directory/Trash/Delete actions. Sharing or unknown-size caveats appear when
+needed. Integer formatting never passes byte counts through Double. Partial,
+incomplete, changed and simulated indicators remain visible. Recorded usage is
+not guaranteed reclaimable space; detailed errors stay behind a disclosure.
 
 The design applies Laws of UX: Jakob to native selection/navigation and panels;
 Fitts to the table alternative; Hick to two startup choices and separate action
@@ -69,8 +69,9 @@ immediate local highlight, indeterminate work feedback and retaining the prior v
 ## 1c Asynchronous ownership and operations
 
 [ExplorerModel](../native/Explorer/ExplorerModel.swift) publishes selection before
-running synchronous bridge calls in detached tasks. Metadata has one active and
-one replaceable queued request. Session/selection/view generations reject obsolete
+running synchronous bridge calls in detached tasks. Ordinary selection and navigation
+use saved data only: the GUI never calls liveMetadata. Selected-path lookup has one
+active and one replaceable queued request. Session/selection/view generations reject obsolete
 results; resize requests debounce 180ms. A separate replacement state keeps the
 retained previous view read-only until installation completes, even if an old view
 request finishes first. Recovery checks navigation as well as session generation.
@@ -78,10 +79,11 @@ Swift retains only current bounded views,
 selection, small navigation history and operation diagnostics, not the inventory.
 
 Trash and permanent deletion prepare off-main and retain the actual PreparedAction
-through a separate confirmation with fresh metadata, target path and byte-exact hex.
-Directory confirmations explicitly include contents; fresh sizes are labeled as
-directory-entry-only, not subtree sizes. Path, optional hex and metadata scroll
-within bounded details; warnings and Cancel/Confirm remain outside the scroller.
+through a separate confirmation. Rust still validates fresh metadata, raw paths and
+identity pins internally. Presentation shows only the target, directory-and-contents
+scope, relevant warnings and Cancel/named-action buttons, not hex or low-level
+metadata. Short confirmations fit their content; long paths can scroll within a
+bounded region while warnings and buttons remain outside it.
 Cancel, window close and session replacement release pending pins; replacement
 awaits cancellation before installing a new session. Root operations
 are visibly disabled and remain protected by Rust. Executing operations cannot be
@@ -97,24 +99,24 @@ not reopened, rescanned or rewritten. Invalid focus recovers to a known live anc
 [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift) runs the compiled
 app against real generated Rust sessions and stateful MemoryFileSystem scenarios:
 
-- "testSelectionNavigationPaginationAndInspector": click versus focus, double-click,
-  breadcrumbs/Back, second page, arrow-key selection and saved/live inspector.
+- "testSelectionNavigationPaginationAndUsage": click versus focus, double-click,
+  breadcrumbs/Back, second page, arrow-key selection and recorded usage.
 - "testConfirmationCancelDeleteAndStaleHandleRecovery": cancellation, confirmed
   deletion, disappeared target, dirty inventory and root protection.
 - "testTrashInsideAndOutside": real prepared Trash, changed views and scope totals.
-- "testFailuresPartialUnknownAndMetadataError": failed/indeterminate/partial outcomes,
-  survivors, stale state and unavailable live metadata.
+- "testFailuresPartialUnknownAndSavedOnlySelection": failed/indeterminate/partial outcomes,
+  survivors, incomplete state and selection despite unavailable live metadata.
 - "testChangedTargetAndUnknownAllocation": stale target preparation and unknown
   allocations after explicit refresh.
-- "testImmediateSelectionAndObsoleteMetadataDiscarded": later selection during the
+- "testImmediateSavedOnlySelection": later selection during the
   latency scenario; XCUITest timing includes automation waits, not paint latency.
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.
-- "testDirectoryConfirmationsStateRecursiveScopeAndEntryOnlySizes": both action
-  scopes and entry-only metadata labels, distinct from saved subtree bytes.
+- "testDirectoryConfirmationsKeepOnlyTargetScopeAndWarnings": both action scopes,
+  explicit warnings, cancellation, and absence of misleading entry-only sizes/hex.
 - "testGroupHeaderSelectionIsVisibleWithoutChangingFocus": root-child and nested
-  group feedback, inspector synchronization and double-click navigation.
-- "testLongDirectoryPathAndExpandedHexAtMinimumWindow": long target and hex scrolling,
-  visible size disclaimer and accessible fixed controls at the minimum window size.
+  group feedback, summary synchronization and double-click navigation.
+- "testLongDirectoryPathAndSimpleConfirmationAtMinimumWindow": direct double-click
+  from an unselected row, full long target and fixed controls at minimum window size.
 
 Every destructive UI flow first asserts the simulated indicator. `--fixture-mode`,
 `--scenario`, or `DI_UI_TEST` locks the app into fixture-only mode; incomplete or
@@ -122,10 +124,13 @@ unknown configuration is an error, never a native fallback.
 
 [ExplorerModelTests.swift](../native/ExplorerModelTests/ExplorerModelTests.swift):
 
-- "testImmediateSelectionWhileRustBusyDiscardsObsoleteMetadata" measures synchronous
-  publication while the real bridge is busy, polling to reject obsolete metadata.
-- "testSessionReplacementDiscardsOldMetadataAndViews" and
+- "testImmediateSelectionWhileRustBusyDiscardsObsoletePath" measures synchronous
+  publication while a test explicitly holds the core metadata lock, rejecting obsolete paths.
+- "testSessionReplacementDiscardsOldSelectionAndViews" and
   "testLaterFocusWinsWhileBridgeIsBusy" exercise generation boundaries.
+- "testSelectionAndNavigationUseSavedDataWithoutLiveMetadata" checks indexed path
+  and directory publication below the fixture's one-second live-metadata delay;
+  this is not GUI paint timing.
 - "testCancelPendingPreparationAndRootProtection" covers cancellation during preparation.
 - "testStaleFocusRecoversAndRollupIsNotAnActionTarget" checks invalid keys and rollups.
 - "testFixtureModeRejectsAbsentAndUnknownConfiguration" checks closed constructors.
