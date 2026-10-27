@@ -45,8 +45,9 @@ virtual row addressing; Swift caches one slice of at most 256 rows. Native datas
 callbacks use cached records only, scheduling missing slices asynchronously. There
 are no Previous/Next pages. Right/left arrows expand/collapse or move to child/parent.
 Disclosure never zooms. Map clicks reveal a descendant by expanding its ancestors;
-directory double-click, Return or Command-Down changes both tree and map root;
-Command-Up focuses the parent.
+directory double-click, Return or Open Selected Directory (Command-Down) changes both
+tree and map root; Enclosing Directory (Command-Up) focuses the parent. Menus,
+shortcuts and context menus are specified in [native-commands.md](native-commands.md).
 Each row shows a decorative 9-point type swatch and a 44-point usage bar before the
 right-aligned human-readable size. Directories use a gray rounded square. Other entries use a
 circle in the base color of their map tile, which Rust sends as `OutlineRow.map_rgb`.
@@ -76,7 +77,8 @@ of promising every file is visible.
 
 There is no inspector pane. A compact card below the tree shows the selected
 name/path, recorded allocation (directory subtree or file accounted allocation),
-direct-child count when applicable, and Reveal in Finder, Move to Trash… and Delete… actions.
+direct-child count when applicable, and Reveal in Finder, Move to Trash… and Delete… actions
+with the same enable rules as the menu bar.
 Collapsing ancestors preserves the action target; clicking the card name reveals
 its row without zooming. Finder URLs use saved raw bytes, not the display string.
 Sharing or unknown-size caveats appear when needed. Storage uses decimal KB through EB and the system locale, with at most one decimal place.
@@ -99,18 +101,9 @@ frame must not change the viewport that requested it. Swift retains current boun
 views, selection, sparse navigation history and
 operation diagnostics, not the inventory. Hover/selection never rebuild the diagram.
 
-Trash and permanent deletion prepare off-main and retain the PreparedAction
-through a separate confirmation: an NSAlert sheet
-([ConfirmationAlert.swift](../native/Explorer/ConfirmationAlert.swift)); SwiftUI drew
-destructive buttons gray. The title names the item (`Move “NAME” to the Trash?`,
-`Delete “NAME” immediately?`); long names shorten in the middle. A box shows
-the scope and full path, scrolling when long. Buttons stack: action on top, Cancel
-below. Esc cancels; Cancel is never default. Return confirms only Trash; Delete
-Immediately is red. Rust revalidates fresh metadata, raw paths and identity pins.
-Cancel, window close and session replacement release pending pins; replacement
-awaits cancellation before installing a new session. Root operations
-are visibly disabled and remain protected by Rust. Executing operations cannot be
-cancelled; there is no Trash-to-delete fallback or permanent-delete Undo.
+Trash and permanent deletion prepare off-main and keep the PreparedAction for a
+separate native alert sheet. Its keys, pins and protections are specified in
+[native-commands.md](native-commands.md).
 
 Outcomes distinguish successful, failed, partial and indeterminate results, including
 inside/outside/unknown Trash scope. Issues remain in an expandable session log.
@@ -139,9 +132,6 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.
 - "testDirectoryConfirmationsKeepOnlyTargetScopeAndWarnings": both action scopes,
   named title, scope, warnings, cancellation; no entry-only sizes/hex.
-- "testTrashConfirmationReturnConfirmsWithCancelBelowAction": Return trashes.
-- "testPermanentConfirmationHasNoDefaultAndEscapeCancels": Return does nothing, Esc
-  cancels, then deletion succeeds.
 - "testDenseMapHoverClickRevealAndTinyDirectoryZoom": independent hover, linked
   descendant reveal without zoom, disclosure and 4/8 KiB zoom visibility. Collapse
   assertions await asynchronous row publication, not just input delivery.
@@ -154,8 +144,8 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
 Fixture mode shows "SIMULATED" only in the window title; other content matches production.
 "testFixtureModeNamesSimulationOnlyInWindowTitle" checks the window and its confirmation.
 "testOnlyFixtureWindowTitleNamesSimulation" in
-[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift) checks the production title;
-"testConfirmationPresentationNamesItemAndAssignsAlertRoles" checks confirmation text and roles. `--fixture-mode`,
+[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift) checks the production title.
+Command, shortcut and confirmation tests are listed in [native-commands.md](native-commands.md). `--fixture-mode`,
 `--scenario`, or `DI_UI_TEST` locks the app into fixture-only mode; incomplete or
 unknown configuration is an error, never a native fallback.
 

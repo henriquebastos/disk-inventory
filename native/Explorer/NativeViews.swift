@@ -35,6 +35,7 @@ struct ContentsTree: NSViewRepresentable {
     table.target = context.coordinator
     table.doubleAction = #selector(Coordinator.open)
     table.keyboard = { context.coordinator.key($0) }
+    table.contextMenu = { [unowned table] row in context.coordinator.contextMenu(table, row: row) }
     table.navigation = { code in
       let model = context.coordinator.model
       guard !model.loading, !model.working, !model.replacingSession, model.pending == nil else {
@@ -45,7 +46,7 @@ struct ContentsTree: NSViewRepresentable {
         return true
       }
       if code == 125 || code == 36 || code == 76 {
-        if let entry = model.selected, entry.kind == .directory { model.focus(entry.key) }
+        model.openSelectedDirectory()
         return true
       }
       return false
@@ -76,6 +77,7 @@ struct ContentsTree: NSViewRepresentable {
     guard let table = scroll.documentView as? Table else { return }
     let c = context.coordinator
     c.model = model
+    c.commands.model = model
     c.updating = true
     table.enumerateAvailableRowViews { rowView, _ in
       (rowView.view(atColumn: 0) as? Cell)?.disclosure.isEnabled =
@@ -108,7 +110,11 @@ struct ContentsTree: NSViewRepresentable {
   @MainActor final class Table: NSTableView {
     var keyboard: ((UInt16) -> Bool)?
     var navigation: ((UInt16) -> Bool)?
+    var contextMenu: ((Int) -> NSMenu?)?
     var createdCells = 0
+    override func menu(for event: NSEvent) -> NSMenu? {
+      contextMenu?(row(at: convert(event.locationInWindow, from: nil)))
+    }
     override func keyDown(with event: NSEvent) {
       if event.modifierFlags.contains(.command) || event.keyCode == 36 || event.keyCode == 76 {
         if navigation?(event.keyCode) == true { return }
@@ -196,7 +202,11 @@ struct ContentsTree: NSViewRepresentable {
     var revealSerial = 0
     var scrollSerial = 0
     var scrollObserver: NSObjectProtocol?
-    init(_ model: ExplorerModel) { self.model = model }
+    let commands: ExplorerCommandTarget
+    init(_ model: ExplorerModel) {
+      self.model = model
+      commands = ExplorerCommandTarget(model: model)
+    }
     var interactive: Bool {
       model.tree != nil && !model.loading && !model.working && !model.replacingSession
         && model.pending == nil
@@ -285,6 +295,15 @@ struct ContentsTree: NSViewRepresentable {
         model.focus(row.entry.key)
       }
     }
+    /// A secondary click selects the clicked cached row first, so the menu acts on that row.
+    func contextMenu(_ table: NSTableView, row: Int) -> NSMenu? {
+      guard interactive, let record = record(row) else { return nil }
+      if model.selected?.key.sameEntry(other: record.entry.key) != true {
+        table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+      }
+      guard model.selected?.key.sameEntry(other: record.entry.key) == true else { return nil }
+      return commands.menu()
+    }
     func key(_ code: UInt16) -> Bool {
       guard code == 123 || code == 124 else { return false }
       guard !model.working, !model.loading, !model.replacingSession, model.pending == nil else {
@@ -321,7 +340,8 @@ struct DiagramView: NSViewRepresentable {
     view.updatePicture()
   }
   @MainActor final class MapView: NSView {
-    var model: ExplorerModel?
+    var model: ExplorerModel? { didSet { commands.model = model } }
+    let commands = ExplorerCommandTarget(model: nil)
     var hoverRect: Rectangle?
     var selectionRect: Rectangle?
     var image: NSImage?
@@ -474,6 +494,20 @@ struct DiagramView: NSViewRepresentable {
     override func mouseDown(with event: NSEvent) { pointer(event, click: true) }
     override func mouseExited(with event: NSEvent) {
       model?.clearHover()
+    }
+    /// Uses the published hover, never a main-thread hit test, which would take the session
+    /// lock. A grouped block selects its aggregate, which disables every item command.
+    override func menu(for event: NSEvent) -> NSMenu? {
+      guard let model, let hover = model.hover, model.pending == nil, !model.loading,
+        !model.working, !model.replacingSession, !model.motion.active,
+        rect(hover.rect).contains(convert(event.locationInWindow, from: nil))
+      else { return nil }
+      if !hover.actionable {
+        model.selectAggregate(hover.entry.key, bytes: hover.bytes)
+      } else if model.selected?.key.sameEntry(other: hover.entry.key) != true {
+        model.select(hover.entry)
+      }
+      return commands.menu()
     }
     func updateTargets() {
       guard let model, let picture = model.picture, let window else {

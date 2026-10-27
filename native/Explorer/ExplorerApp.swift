@@ -2,15 +2,16 @@ import SwiftUI
 
 @main struct ExplorerApp: App {
   @NSApplicationDelegateAdaptor(ExplorerDelegate.self) private var delegate
-  var body: some Scene { Settings { EmptyView() } }
+  var body: some Scene {
+    Settings { EmptyView() }.commands { ExplorerMenuCommands(state: delegate.menu) }
+  }
 }
 
 @MainActor
-final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
-  NSMenuItemValidation
-{
+final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var window: NSWindow?
   private var model: ExplorerModel?
+  let menu = ExplorerMenuState()
   func applicationDidFinishLaunching(_ notification: Notification) {
     let testing = ProcessInfo.processInfo.environment["DI_MODEL_TEST"] == "1"
     let model =
@@ -19,7 +20,7 @@ final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         arguments: ["--fixture-mode", "--scenario", "presentation"], environment: [:])
       : ExplorerModel()
     self.model = model
-    installNavigationMenu()
+    menu.model = model
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1380, height: 850),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
@@ -43,36 +44,8 @@ final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }
-  private func installNavigationMenu() {
-    let main = NSApp.mainMenu ?? NSMenu()
-    let navigation = NSMenu(title: "Navigate")
-    for (title, action, key) in [
-      ("Open Selected Directory", #selector(openSelectedDirectory), NSDownArrowFunctionKey),
-      ("Enclosing Directory", #selector(openEnclosingDirectory), NSUpArrowFunctionKey),
-    ] {
-      let item = NSMenuItem(
-        title: title, action: action, keyEquivalent: String(UnicodeScalar(key)!))
-      item.keyEquivalentModifierMask = .command
-      item.target = self
-      navigation.addItem(item)
-    }
-    let item = NSMenuItem(title: "Navigate", action: nil, keyEquivalent: "")
-    item.submenu = navigation
-    main.addItem(item)
-    NSApp.mainMenu = main
-  }
-  @objc private func openSelectedDirectory() {
-    if let entry = model?.selected, entry.kind == .directory { model?.focus(entry.key) }
-  }
-  @objc private func openEnclosingDirectory() { model?.focusParent() }
-  func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-    guard let model, !model.working, !model.loading, !model.replacingSession, model.pending == nil
-    else {
-      return false
-    }
-    return menuItem.action == #selector(openSelectedDirectory)
-      ? model.selected?.kind == .directory : model.records?.focus.parent != nil
-  }
+  func windowDidBecomeKey(_ notification: Notification) { menu.explorerWindowIsKey = true }
+  func windowDidResignKey(_ notification: Notification) { menu.explorerWindowIsKey = false }
   func windowWillClose(_ notification: Notification) { model?.shutdown() }
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
   func applicationWillTerminate(_ notification: Notification) { model?.shutdown() }
@@ -119,11 +92,11 @@ struct ExplorerView: View {
           Text("What should we measure?").font(.title.weight(.semibold))
           Text("Nothing is scanned until you choose.").foregroundStyle(.secondary)
           HStack {
-            Button("Choose Folder…", action: model.createSnapshot)
+            Button("Choose Folder…") { ExplorerCommand.chooseFolder.perform(in: model) }
               .buttonStyle(.borderedProminent).accessibilityIdentifier("create-inventory")
-            Button("Open Snapshot…", action: model.openSnapshot).accessibilityIdentifier(
-              "open-snapshot")
-          }.disabled(model.fixtureMode || model.replacingSession)
+            Button("Open Snapshot…") { ExplorerCommand.openSnapshot.perform(in: model) }
+              .accessibilityIdentifier("open-snapshot")
+          }.disabled(!ExplorerCommand.chooseFolder.isEnabled(in: model))
           if let last = model.lastInventory {
             VStack(alignment: .leading, spacing: 6) {
               Text("Last scan").font(.caption).foregroundStyle(.secondary)
@@ -135,8 +108,9 @@ struct ExplorerView: View {
                   ).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Open", action: model.openLastInventory).accessibilityIdentifier("open-last")
-                  .disabled(model.replacingSession || model.fixtureMode)
+                Button("Open") { ExplorerCommand.openLastScan.perform(in: model) }
+                  .accessibilityIdentifier("open-last")
+                  .disabled(!ExplorerCommand.openLastScan.isEnabled(in: model))
               }
             }.padding(12).frame(width: 420).background(
               .quaternary, in: RoundedRectangle(cornerRadius: 8))
@@ -162,7 +136,8 @@ struct ExplorerView: View {
         Text("\(model.numbers.count(sample.itemsExamined)) items examined").monospacedDigit()
           .foregroundStyle(.secondary).accessibilityIdentifier("scan-items")
         Spacer()
-        Button("Stop", action: model.scan.stop).disabled(!sample.cancellable)
+        Button("Stop") { ExplorerCommand.stopScan.perform(in: model) }
+          .disabled(!ExplorerCommand.stopScan.isEnabled(in: model))
           .accessibilityIdentifier("stop-scan")
       } else {
         Text(
@@ -174,16 +149,16 @@ struct ExplorerView: View {
   func header(_ r: ViewRecords) -> some View {
     HStack(spacing: 12) {
       Menu {
-        Button("Open Snapshot…", action: model.openSnapshot).accessibilityIdentifier(
-          "open-snapshot")
-        Button("Choose Folder…", action: model.createSnapshot).accessibilityIdentifier(
-          "create-inventory")
-        Button("Open Last Scan", action: model.openLastInventory).disabled(
-          model.lastInventory == nil)
+        Button("Open Snapshot…") { ExplorerCommand.openSnapshot.perform(in: model) }
+          .accessibilityIdentifier("open-snapshot")
+        Button("Choose Folder…") { ExplorerCommand.chooseFolder.perform(in: model) }
+          .accessibilityIdentifier("create-inventory")
+        Button("Open Last Scan") { ExplorerCommand.openLastScan.perform(in: model) }
+          .disabled(!ExplorerCommand.openLastScan.isEnabled(in: model))
       } label: {
         Image(systemName: "externaldrive")
       }
-      .disabled(model.fixtureMode || model.working || model.replacingSession)
+      .disabled(!ExplorerCommand.chooseFolder.isEnabled(in: model))
       .help("Inventory")
       ScrollView(.horizontal) {
         HStack(spacing: 4) {
@@ -225,11 +200,13 @@ struct ExplorerView: View {
         )
         .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("scan-date")
       }.fixedSize()
-      Button("Refresh Directory", systemImage: "arrow.clockwise", action: model.refresh)
-        .disabled(model.working || model.loading || model.replacingSession)
-        .accessibilityIdentifier("refresh").help(
-          "Rescan the focused directory and descendants in memory; the saved snapshot is unchanged."
-        )
+      Button("Refresh Directory", systemImage: "arrow.clockwise") {
+        ExplorerCommand.refreshDirectory.perform(in: model)
+      }
+      .disabled(!ExplorerCommand.refreshDirectory.isEnabled(in: model))
+      .accessibilityIdentifier("refresh").help(
+        "Rescan the focused directory and descendants in memory; the saved snapshot is unchanged."
+      )
     }.padding(.horizontal, 12).padding(.vertical, 10).background(.bar)
   }
   func badge(_ title: String, id: String) -> some View {
@@ -269,13 +246,17 @@ struct ExplorerView: View {
           .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
           .help(model.selectedDisplayPath ?? "").accessibilityIdentifier("selected-path")
         HStack(spacing: 6) {
-          Button("Reveal in Finder", action: model.revealInFinder)
-            .disabled(model.selectedURL == nil || model.working || model.replacingSession)
+          Button("Reveal in Finder") { ExplorerCommand.revealInFinder.perform(in: model) }
+            .disabled(!ExplorerCommand.revealInFinder.isEnabled(in: model))
             .accessibilityIdentifier("reveal-finder")
           Spacer(minLength: 0)
-          Button("Delete…", role: .destructive) { model.prepare(.permanentlyDelete) }
-            .disabled(!model.canAct).accessibilityIdentifier("delete")
-          Button("Move to Trash…") { model.prepare(.trash) }.disabled(!model.canAct)
+          Button("Delete…", role: .destructive) {
+            ExplorerCommand.deleteImmediately.perform(in: model)
+          }
+          .disabled(!ExplorerCommand.deleteImmediately.isEnabled(in: model))
+          .accessibilityIdentifier("delete")
+          Button("Move to Trash…") { ExplorerCommand.moveToTrash.perform(in: model) }
+            .disabled(!ExplorerCommand.moveToTrash.isEnabled(in: model))
             .accessibilityIdentifier("trash")
         }.controlSize(.small)
         if entry.parent == nil {

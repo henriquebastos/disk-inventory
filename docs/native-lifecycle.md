@@ -35,7 +35,8 @@ Rust ScanControl and one replaceable polling task. It samples every 250 ms; repl
 or closing the session cancels polling and requests Rust cancellation. Stop calls
 Rust directly and immediately displays its Stopping phase. A cancelled Swift Task
 alone is never treated as filesystem cancellation. `cancellable` controls Stop
-availability, including the atomic publication boundary. An active filesystem call
+availability, including the atomic publication boundary. File > Stop Scan
+(Command-Period) uses the same rule ([native-commands.md](native-commands.md)). An active filesystem call
 may finish before cancellation unwinds all workers.
 
 UI displays a spinner, cumulative items examined and truthful traversal, accounting,

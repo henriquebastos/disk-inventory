@@ -402,6 +402,148 @@ import XCTest
     }
   }
 
+  func menuBarItem(_ title: String) -> XCUIElement { app.menuBars.menuBarItems[title] }
+  /// Opens a menu-bar menu and returns its item; the caller closes the menu with Esc.
+  func menuItem(_ menu: String, _ title: String) -> XCUIElement {
+    menuBarItem(menu).click()
+    let item = menuBarItem(menu).menuItems[title]
+    XCTAssertTrue(item.waitForExistence(timeout: 5), "\(menu) > \(title)")
+    return item
+  }
+  func contextItem(_ title: String) -> XCUIElement {
+    app.menuItems.matching(NSPredicate(format: "identifier == %@", "context-\(title)")).firstMatch
+  }
+  func testFileMenuCommandsMatchCardAndShortcuts() {
+    launch()
+    // Fixture mode keeps the native panels closed in the menu as on the start screen.
+    XCTAssertFalse(menuItem("File", "Choose Folder…").isEnabled)
+    XCTAssertFalse(menuBarItem("File").menuItems["Open Snapshot…"].isEnabled)
+    XCTAssertFalse(menuBarItem("File").menuItems["Open Last Scan"].isEnabled)
+    XCTAssertTrue(menuBarItem("File").menuItems["Refresh Directory"].isEnabled)
+    XCTAssertFalse(menuBarItem("File").menuItems["Stop Scan"].isEnabled)
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    // The protected root disables both removals in the card, the menu and the shortcuts.
+    let title = app.staticTexts["confirmation-title"]
+    app.buttons["inspect-root"].click()
+    XCTAssertTrue(app.staticTexts["root-protected"].waitForExistence(timeout: 8))
+    XCTAssertFalse(app.buttons["trash"].isEnabled)
+    XCTAssertFalse(app.buttons["delete"].isEnabled)
+    XCTAssertFalse(menuItem("File", "Move to Trash…").isEnabled)
+    XCTAssertFalse(menuBarItem("File").menuItems["Delete Immediately…"].isEnabled)
+    screenshot("file-menu-root-disabled")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
+    app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
+    XCTAssertFalse(title.waitForExistence(timeout: 2))
+    // A new selection refreshes the menu: no stale root state.
+    row("large-file").click()
+    text("selected-name", contains: "large-file")
+    XCTAssertTrue(app.buttons["trash"].isEnabled)
+    XCTAssertFalse(app.buttons["reveal-finder"].isEnabled)
+    XCTAssertFalse(menuItem("File", "Reveal in Finder").isEnabled)
+    XCTAssertTrue(menuBarItem("File").menuItems["Move to Trash…"].isEnabled)
+    XCTAssertTrue(menuBarItem("File").menuItems["Delete Immediately…"].isEnabled)
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
+    XCTAssertTrue(title.waitForExistence(timeout: 8))
+    text("confirmation-title", contains: "Move “large-file” to the Trash?")
+    // Under the alert, both shortcuts and the menu items do nothing.
+    app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
+    app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
+    XCTAssertFalse(title.waitForNonExistence(timeout: 2))
+    text("confirmation-title", contains: "Move “large-file” to the Trash?")
+    XCTAssertEqual(app.sheets.count, 1)
+    XCTAssertFalse(menuItem("File", "Move to Trash…").isEnabled)
+    XCTAssertFalse(menuBarItem("File").menuItems["Delete Immediately…"].isEnabled)
+    XCTAssertFalse(menuBarItem("File").menuItems["Refresh Directory"].isEnabled)
+    screenshot("file-menu-under-trash-alert")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    XCTAssertTrue(title.exists)
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    XCTAssertTrue(title.waitForNonExistence(timeout: 8))
+    XCTAssertTrue(row("large-file").exists)
+    app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
+    XCTAssertTrue(title.waitForExistence(timeout: 8))
+    text("confirmation-title", contains: "Delete “large-file” immediately?")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    XCTAssertTrue(title.waitForNonExistence(timeout: 8))
+    XCTAssertTrue(row("large-file").exists)
+    // Another key window (the standard About panel) disables the explorer commands.
+    // Index 0 is the Apple menu; index 1 is this app's menu.
+    let appMenu = app.menuBars.menuBarItems.element(boundBy: 1)
+    appMenu.click()
+    appMenu.menuItems["orderFrontStandardAboutPanel:"].click()
+    let deadline = Date().addingTimeInterval(5)
+    while app.windows.count + app.dialogs.count < 2, Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.1)
+    }
+    XCTAssertGreaterThanOrEqual(app.windows.count + app.dialogs.count, 2)
+    XCTAssertFalse(menuItem("File", "Move to Trash…").isEnabled)
+    XCTAssertFalse(menuBarItem("File").menuItems["Delete Immediately…"].isEnabled)
+    screenshot("file-menu-about-panel-key")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
+    app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
+    XCTAssertFalse(title.waitForExistence(timeout: 2))
+    XCTAssertTrue(row("large-file").exists)
+  }
+  func testNavigateMenuPrecedesWindowMenu() {
+    launch()
+    let titles = app.menuBars.menuBarItems.allElementsBoundByIndex.map(\.title)
+    let navigate = titles.firstIndex(of: "Navigate")
+    XCTAssertNotNil(navigate, "\(titles)")
+    XCTAssertTrue(titles.contains("File"), "\(titles)")
+    XCTAssertEqual(navigate.map { titles.index(after: $0) }, titles.firstIndex(of: "Window"))
+    XCTAssertLessThan(navigate ?? .max, titles.firstIndex(of: "Help") ?? -1, "\(titles)")
+    XCTAssertLessThan(titles.firstIndex(of: "File") ?? .max, navigate ?? -1, "\(titles)")
+  }
+  func testContextMenusOnTreeRowAndMapBlock() {
+    launch()
+    row("small-files").click()
+    text("selected-name", contains: "small-files")
+    row("large-file").rightClick()
+    XCTAssertTrue(contextItem("moveToTrash").waitForExistence(timeout: 5))
+    // The clicked row is the target, not the earlier selection.
+    text("selected-name", contains: "large-file")
+    XCTAssertFalse(contextItem("revealInFinder").isEnabled)
+    XCTAssertTrue(contextItem("deleteImmediately").isEnabled)
+    screenshot("context-menu-tree-row")
+    contextItem("moveToTrash").click()
+    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    text("confirmation-title", contains: "Move “large-file” to the Trash?")
+    app.buttons["cancel-action"].click()
+    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
+    row("small-files").click()
+    text("selected-name", contains: "small-files")
+    let tile = app.buttons["map-file-large-file"]
+    XCTAssertTrue(tile.waitForExistence(timeout: 8))
+    tile.hover()
+    text("hover-name", contains: "large-file")
+    tile.rightClick()
+    XCTAssertTrue(contextItem("deleteImmediately").waitForExistence(timeout: 5))
+    text("selected-name", contains: "large-file")
+    screenshot("context-menu-map-block")
+    contextItem("deleteImmediately").click()
+    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    text("confirmation-title", contains: "Delete “large-file” immediately?")
+    app.buttons["cancel-action"].click()
+    XCTAssertTrue(row("large-file").exists)
+  }
+  func testEditUndoIsUnavailableAfterTrash() {
+    launch("trash-outside")
+    prepare("trash", target: "large-file")
+    app.buttons["confirm-action"].click()
+    text("outcome", contains: "Moved to Trash")
+    XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
+    let undo = menuItem("Edit", "Undo")
+    XCTAssertFalse(undo.isEnabled)
+    screenshot("edit-menu-after-trash")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    app.typeKey("z", modifierFlags: [.command])
+    XCTAssertFalse(row("large-file").waitForExistence(timeout: 2))
+    text("outcome", contains: "Moved to Trash")
+  }
+
   func testResultMotionStylesTravelPoofAndReduceMotionFade() throws {
     for (scenario, action, reduceMotion, style) in [
       ("presentation-trash-inside", "trash", false, "travel"),

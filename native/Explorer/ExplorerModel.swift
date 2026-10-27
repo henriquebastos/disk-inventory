@@ -711,6 +711,9 @@ struct PendingConfirmation: Identifiable {
     Task { if navigation == viewVersion { await updateView(focus: key) } }
   }
   func focusParent() { if let parent = records?.focus.parent { focus(parent) } }
+  func openSelectedDirectory() {
+    if let entry = selected, entry.kind == .directory { focus(entry.key) }
+  }
   // Kept as the keyboard/test parent-navigation seam; there is no Back stack UI.
   func back() { focusParent() }
   func revealSelection() { if let selected { reveal(selected) } }
@@ -740,6 +743,9 @@ struct PendingConfirmation: Identifiable {
     }
     // Finder must never receive a lossy display-path reconstruction.
     return Self.pathBytes(url) == path ? url : nil
+  }
+  var canRevealInFinder: Bool {
+    selectedURL != nil && !working && !replacingSession && pending == nil
   }
   func revealInFinder() {
     guard let url = selectedURL, !working, !replacingSession else { return }
@@ -777,6 +783,18 @@ struct PendingConfirmation: Identifiable {
     selected?.parent != nil && recoveryToken == nil && !working && !loading && !replacingSession
       && pending == nil
   }
+  // Command enable rules. Each reads saved state only and is false while a confirmation is
+  // pending; ExplorerCommand gives them to the menu bar, the card and the context menus.
+  var canOpenInventory: Bool { !fixtureMode && !working && !replacingSession && pending == nil }
+  var canOpenLastInventory: Bool { canOpenInventory && storage != nil && lastInventory != nil }
+  var canRefresh: Bool {
+    !working && !loading && !replacingSession && pending == nil && session != nil
+      && records != nil
+  }
+  var canStopScan: Bool { scan.progress?.cancellable == true && pending == nil }
+  private var canNavigate: Bool { !working && !loading && !replacingSession && pending == nil }
+  var canOpenSelectedDirectory: Bool { canNavigate && selected?.kind == .directory }
+  var canOpenEnclosingDirectory: Bool { canNavigate && records?.focus.parent != nil }
   @discardableResult
   func prepare(_ kind: ActionKind) -> Task<Void, Never>? {
     guard canAct, let entry = selected, let s = session else { return nil }
