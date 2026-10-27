@@ -2,6 +2,7 @@
 mod fixture;
 mod records;
 mod views;
+pub use crate::scan_control::{ScanControl, ScanPhase, ScanProgress};
 use crate::{
     explorer::{EntryHandle, Explorer},
     inventory::{Inventory, ScanOptions},
@@ -162,6 +163,39 @@ impl ExplorerSession {
         Ok(Self::new(Backend::Native(NativeFileSystem::open_snapshot(
             &snapshot,
         )?)))
+    }
+    /// The independently owned control remains pollable while this constructor runs.
+    #[uniffi::constructor]
+    pub fn create_controlled(
+        source_root: Vec<u8>,
+        snapshot_path: Vec<u8>,
+        workers: u32,
+        control: Arc<ScanControl>,
+    ) -> Result<Arc<Self>, BridgeError> {
+        // Path validation belongs to the controlled operation so errors terminate progress.
+        let paths = path(source_root).and_then(|root| Ok((root, path(snapshot_path)?)));
+        let (root, snapshot) = match paths {
+            Ok(paths) => paths,
+            Err(error) => {
+                control.begin()?;
+                control.set(ScanPhase::Failed);
+                return Err(error);
+            }
+        };
+        drop(Inventory::create_controlled(
+            &root,
+            &snapshot,
+            ScanOptions {
+                workers: workers as usize,
+            },
+            &control,
+        )?);
+        control.set(ScanPhase::PreparingView);
+        let result = NativeFileSystem::open_snapshot(&snapshot);
+        control.finish(&result);
+        let session = Self::new(Backend::Native(result?));
+        control.set(ScanPhase::Complete);
+        Ok(session)
     }
     /// Explicit simulated constructor. Unknown scenarios fail closed; never opens native paths.
     #[uniffi::constructor]

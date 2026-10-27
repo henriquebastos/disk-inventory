@@ -499,6 +499,25 @@ fn diagram_and_virtual_tree_are_native_free_bounded_and_revision_guarded() {
         image.child_visits
     );
     assert_eq!(image.rgba.len(), 640 * 400 * 4);
+    // Large sibling prefixes inside nonzero nested origins used to accumulate
+    // endpoint drift and reject the whole squarified subdivision (only five tiles).
+    for (width, height) in [(640, 400), (400, 640), (713, 421), (1426, 842)] {
+        let image = s
+            .clone()
+            .diagram(s.status().unwrap().root.key, width, height)
+            .unwrap()
+            .bitmap();
+        assert!(image.tiles > 160, "{width}x{height}: {} tiles", image.tiles);
+        let budget = (width as u64 * height as u64).min(crate::diagram::MAX_REGIONS as u64);
+        assert!(image.tiles + image.groups <= budget);
+        assert!(image.child_visits <= 2 * budget);
+        assert_eq!(image.surface_payload_bytes, 0);
+        assert!(
+            image.rgba.chunks_exact(4).all(|pixel| pixel[3] == 255),
+            "pixel-center gap"
+        );
+        // Raster construction also asserts disjoint pixel ownership.
+    }
     for x in [0, 100, 300, 639] {
         let _ = frame.hit(x, 100).unwrap();
     }

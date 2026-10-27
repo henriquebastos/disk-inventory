@@ -8,6 +8,7 @@ import XCTest
     app.launchArguments = ["--fixture-mode", "--scenario", scenario, "-AppleLocale", "en_US"]
     if minimumWindow { app.launchArguments.append("--minimum-window") }
     app.launchEnvironment["DI_UI_TEST"] = "1"
+    app.launchEnvironment["DI_MODEL_TEST"] = "0"
     app.launch()
     XCTAssertTrue(app.staticTexts["simulated"].waitForExistence(timeout: 15))
   }
@@ -15,7 +16,7 @@ import XCTest
     app.staticTexts.matching(NSPredicate(format: "identifier == %@", "entry-\(name)")).firstMatch
   }
   func text(_ id: String, contains value: String, timeout: TimeInterval = 8) {
-    let element = app.staticTexts[id]
+    let element = id == "selected-name" ? app.buttons[id] : app.staticTexts[id]
     XCTAssertTrue(element.waitForExistence(timeout: timeout))
     let predicate = NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", value, value)
     let result = XCTWaiter.wait(
@@ -43,11 +44,11 @@ import XCTest
     app.descendants(matching: .disclosureTriangle).matching(identifier: "disclosure-\(name)")
       .firstMatch
   }
-  func testDisclosureKeyboardZoomBackAndUsage() throws {
+  func testDisclosureKeyboardZoomBreadcrumbAndUsage() throws {
     launch()
     row("small-files").click()
     disclosure("small-files").click()
-    text("focus-name", contains: "Inventory root")
+    text("focus-name", contains: "simulated-inventory")
     XCTAssertTrue(row("small-00").waitForExistence(timeout: 8))
     row("small-00").click()
     app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
@@ -58,8 +59,8 @@ import XCTest
     screenshot("expanded-tree-linked-selection")
     row("small-files").doubleClick()
     text("focus-name", contains: "small-files")
-    app.buttons["back"].click()
-    text("focus-name", contains: "Inventory root")
+    app.buttons["breadcrumb-0"].click()
+    text("focus-name", contains: "simulated-inventory")
     XCTAssertTrue(row("small-00").waitForExistence(timeout: 8))
     text("selected-name", contains: "small-files")
     screenshot("restored-tree-context")
@@ -69,10 +70,10 @@ import XCTest
     XCTAssertGreaterThan(before, 0.1)
     XCTAssertFalse(row("small-files").isHittable)
     screenshot("scrolled-tree-before-zoom")
-    app.buttons["focus-selected"].click()
+    app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [.command])
     text("focus-name", contains: "small-files")
-    app.buttons["back"].click()
-    text("focus-name", contains: "Inventory root")
+    app.buttons["breadcrumb-0"].click()
+    text("focus-name", contains: "simulated-inventory")
     text("selected-name", contains: "small-files")
     let after = try XCTUnwrap(Double(String(describing: try XCTUnwrap(scrollbar.value))))
     // Scroll history stores a row, so restoration can round by less than one row.
@@ -189,6 +190,7 @@ import XCTest
       app = XCUIApplication()
       app.launchArguments = arguments
       app.launchEnvironment["DI_UI_TEST"] = "1"
+      app.launchEnvironment["DI_MODEL_TEST"] = "0"
       app.launch()
       XCTAssertTrue(app.staticTexts["fixture-locked"].waitForExistence(timeout: 8))
       XCTAssertFalse(app.buttons["open-snapshot"].isEnabled)
@@ -235,7 +237,7 @@ import XCTest
     screenshot("dix-independent-hover")
     target.click()
     text("selected-name", contains: name)
-    text("focus-name", contains: "Inventory root")
+    text("focus-name", contains: "simulated-inventory")
     XCTAssertTrue(row(name).waitForExistence(timeout: 8))
     screenshot("dix-linked-reveal")
     XCTAssertTrue(disclosure("Projects").isEnabled)
@@ -258,7 +260,7 @@ import XCTest
     text("selected-usage", contains: "4,096 bytes")
     XCTAssertTrue(row("empty.txt").exists)
     screenshot("dix-tiny-zoom")
-    app.buttons["back"].click()
+    app.buttons["breadcrumb-1"].click()
     text("focus-name", contains: "Tiny files")
     screenshot("dix-back-context")
   }

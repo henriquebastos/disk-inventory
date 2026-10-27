@@ -77,6 +77,41 @@ impl Inventory {
         Ok(Self { map })
     }
 
+    /// Single-use cancellation/progress; same no-clobber and partial-scan policy as create.
+    /// Success leaves the control Committed; a native client may still prepare its view.
+    pub fn create_controlled(
+        root: &Path,
+        output: &Path,
+        options: ScanOptions,
+        control: &crate::scan_control::ScanControl,
+    ) -> io::Result<Self> {
+        use crate::scan_control::ScanPhase;
+        control.begin()?;
+        let result = (|| {
+            control.enter(ScanPhase::Scanning)?;
+            options.validate()?;
+            let output = destination(output)?;
+            match fs::symlink_metadata(&output) {
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "snapshot output already exists",
+                    ));
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+            let map =
+                crate::scan_controlled(root, Method::Bulk, options.workers, None, Some(control))?
+                    .map;
+            control.enter(ScanPhase::Saving)?;
+            snapshot::save_new_controlled(&map, &output, control)?;
+            Ok(Self { map })
+        })();
+        control.finish(&result);
+        result
+    }
+
     /// Eagerly load and validate saved data, without checking the recorded root.
     pub fn open(path: &Path) -> io::Result<Self> {
         Ok(Self {

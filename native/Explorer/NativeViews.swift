@@ -10,7 +10,8 @@ struct ContentsTree: NSViewRepresentable {
     table.setAccessibilityIdentifier("entry-tree")
     table.setAccessibilityRole(.outline)
     table.rowHeight = 26
-    table.usesAlternatingRowBackgroundColors = true
+    table.usesAlternatingRowBackgroundColors = false
+    table.style = .sourceList
     let name = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
     name.title = "Name"
     name.width = 240
@@ -25,6 +26,21 @@ struct ContentsTree: NSViewRepresentable {
     table.target = context.coordinator
     table.doubleAction = #selector(Coordinator.open)
     table.keyboard = { context.coordinator.key($0) }
+    table.navigation = { code in
+      let model = context.coordinator.model
+      guard !model.loading, !model.working, !model.replacingSession, model.pending == nil else {
+        return true
+      }
+      if code == 126 {
+        model.focusParent()
+        return true
+      }
+      if code == 125 || code == 36 || code == 76 {
+        if let entry = model.selected, entry.kind == .directory { model.focus(entry.key) }
+        return true
+      }
+      return false
+    }
     scroll.contentView.postsBoundsChangedNotifications = true
     context.coordinator.scrollObserver = NotificationCenter.default.addObserver(
       forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
@@ -78,8 +94,12 @@ struct ContentsTree: NSViewRepresentable {
   }
   @MainActor final class Table: NSTableView {
     var keyboard: ((UInt16) -> Bool)?
+    var navigation: ((UInt16) -> Bool)?
     var createdCells = 0
     override func keyDown(with event: NSEvent) {
+      if event.modifierFlags.contains(.command) || event.keyCode == 36 || event.keyCode == 76 {
+        if navigation?(event.keyCode) == true { return }
+      }
       if keyboard?(event.keyCode) != true { super.keyDown(with: event) }
     }
   }
@@ -219,6 +239,7 @@ struct DiagramView: NSViewRepresentable {
     view.model = model
     view.hoverRect = model.hover?.rect
     view.selectionRect = model.selectedRegion
+    _ = model.motion.fraction
     view.updatePicture()
   }
   @MainActor final class MapView: NSView {
@@ -288,14 +309,29 @@ struct DiagramView: NSViewRepresentable {
       let start = ContinuousClock.now
       NSColor.windowBackgroundColor.setFill()
       bounds.fill()
-      image?.draw(
-        in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true,
-        hints: [.interpolation: NSImageInterpolation.none.rawValue])
-      if let r = hoverRect {
+      if let motion = model?.motion, let previous = motion.previous, let plan = motion.plan {
+        drawMotion(previous, plan: plan, fraction: motion.fraction)
+      } else if let previous = model?.motion.previous {
+        NSImage(cgImage: previous.image, size: bounds.size).draw(
+          in: bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
+          hints: [.interpolation: NSImageInterpolation.none.rawValue])
+      } else {
+        image?.draw(
+          in: bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
+          hints: [.interpolation: NSImageInterpolation.none.rawValue])
+      }
+      if let r = selectionRect, model?.motion.active != true {
+        let shade = NSBezierPath(rect: bounds)
+        shade.appendRect(rect(r))
+        shade.windingRule = .evenOdd
+        NSColor.black.withAlphaComponent(0.28).setFill()
+        shade.fill()
+      }
+      if let r = hoverRect, model?.motion.active != true {
         NSColor.white.withAlphaComponent(0.7).setStroke()
         NSBezierPath(rect: rect(r).insetBy(dx: 0.5, dy: 0.5)).stroke()
       }
-      if let r = selectionRect {
+      if let r = selectionRect, model?.motion.active != true {
         let path = NSBezierPath(rect: rect(r).insetBy(dx: 1.5, dy: 1.5))
         NSColor.black.setStroke()
         path.lineWidth = 4
@@ -306,6 +342,42 @@ struct DiagramView: NSViewRepresentable {
       }
       drawCount += 1
       lastDrawDuration = start.duration(to: .now)
+    }
+    func drawMotion(_ previous: DiagramPicture, plan: RemovalMotionPlan, fraction: Double) {
+      let old = NSImage(
+        cgImage: previous.image,
+        size: NSSize(width: Int(previous.bitmap.width), height: Int(previous.bitmap.height)))
+      let fade = plan.style == .fade ? fraction : max(0, fraction * 2 - 1)
+      old.draw(
+        in: bounds, from: .zero, operation: .sourceOver, fraction: 1 - fade, respectFlipped: true,
+        hints: [.interpolation: NSImageInterpolation.none.rawValue])
+      if plan.style != .fade {
+        let source = NSRect(
+          x: plan.source.x / Double(previous.bitmap.width) * bounds.width,
+          y: plan.source.y / Double(previous.bitmap.height) * bounds.height,
+          width: plan.source.width / Double(previous.bitmap.width) * bounds.width,
+          height: plan.source.height / Double(previous.bitmap.height) * bounds.height)
+        NSColor.windowBackgroundColor.setFill()
+        source.fill()
+        let t = min(1, fraction * 2)
+        var ghost = source.insetBy(dx: source.width * t * 0.3, dy: source.height * t * 0.3)
+        if plan.style == .travel, let destination = plan.destination {
+          let to = rect(destination)
+          ghost.origin.x += (to.midX - source.midX) * t
+          ghost.origin.y += (to.midY - source.midY) * t
+        }
+        // NSImage source coordinates are bottom-up, unlike the flipped native map.
+        let crop = NSRect(
+          x: plan.source.x, y: Double(previous.bitmap.height) - plan.source.y - plan.source.height,
+          width: plan.source.width, height: plan.source.height)
+        old.draw(
+          in: ghost, from: crop, operation: .sourceOver, fraction: (1 - t) * (1 - fade),
+          respectFlipped: true,
+          hints: [.interpolation: NSImageInterpolation.none.rawValue])
+      }
+      image?.draw(
+        in: bounds, from: .zero, operation: .sourceOver, fraction: fade, respectFlipped: true,
+        hints: [.interpolation: NSImageInterpolation.none.rawValue])
     }
     func pointer(_ event: NSEvent, click: Bool) {
       guard let p = model?.picture, bounds.width > 0, bounds.height > 0 else { return }
@@ -338,7 +410,7 @@ struct DiagramView: NSViewRepresentable {
         // Accessibility clients may retain old targets; do not retain their frame or bitmap.
         let e = Target { [weak model, weak frame] in
           guard let model, let frame, model.picture?.frame === frame, !model.loading,
-            !model.replacingSession
+            !model.replacingSession, !model.working, !model.motion.active
           else { return false }
           model.point(x, y, click: true)
           return true

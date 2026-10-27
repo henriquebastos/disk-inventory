@@ -31,11 +31,11 @@ open -n "$G/DerivedData/Build/Products/Debug/DiskInventory.app" \
 ```
 
 Normal launch scans nothing. Open Snapshot reads saved data without checking its
-source. Create Inventory uses native directory/save panels for an explicit root
-and new snapshot destination. Existing destinations are never deleted or replaced;
-core create scans once and reopens the new snapshot. Picker URLs use filesystem
-byte representations, not display paths. Native chooser workflows are not covered
-by automated GUI tests; the generated bridge smoke covers owned create/offline open.
+source. Choose Folder uses a native directory panel for an explicit root, then saves to
+app-managed Application Support storage. Last scan opens offline; Open Snapshot
+imports remain separate. Picker URLs use filesystem byte representations, not
+display paths. Scan progress, Stop, retention and executable tests are specified in
+[native-lifecycle.md](native-lifecycle.md). No save panel or automatic scan is used.
 
 ## 1b Navigation and presentation
 
@@ -45,34 +45,37 @@ virtual row addressing; Swift caches one slice of at most 256 rows. Native datas
 callbacks use cached records only, scheduling missing slices asynchronously. There
 are no Previous/Next pages. Right/left arrows expand/collapse or move to child/parent.
 Disclosure never zooms. Map clicks reveal a descendant by expanding its ancestors;
-explicit Open Directory or directory double-click changes both tree and map root.
+directory double-click, Return or Command-Down changes both tree and map root;
+Command-Up focuses the parent.
 
-Back/ancestor navigation retains at most 64 sparse Rust tree handles, focus/selection
-keys and scroll positions, never row pages or bitmap history. It restores context,
+Breadcrumb navigation retains at most 64 per-directory sparse Rust tree handles,
+focus/selection keys and scroll positions, never row pages or bitmap history.
+Contexts survive navigation in both directions; there is no Back-stack UI. Root
+breadcrumbs use the saved root basename (or `/`) with full-path help, including
+ancestor and truncated-path fallback breadcrumbs. It restores context,
 rebuilds obsolete trees off-main, and clamps scroll positions. Replacement and
 mutation recovery discard history. Breadcrumbs retain at most 64 ancestors; deeper
 paths truncate older ancestors, not the inventory root label. Tiny, zero-attribution
 and shared entries remain reachable in the tree.
 
-The map displays an immutable Rust cushion-shaded bitmap with stable saved-name
+The map displays an immutable Rust squarified, flat-gradient bitmap with stable saved-name
 extension colors. Placement, refinement, pixel ownership, bounds and tests are
 specified in [native-diagram.md](native-diagram.md). Hover identifies the pixel
 owner in a fixed-height footer independently of destructive selection. Click links
 selection between tree/map; no directory header covers file pixels. Unresolved
 aggregates explain grouped detail and offer directory navigation, never file removal.
-The map reports reduced/grouped detail instead of promising every file is visible.
+Unselected map regions are dimmed, with separate hover and selection outlines.
+Status and diagnostics sit below the map. It reports reduced/grouped detail instead
+of promising every file is visible.
 
-There is no inspector pane. A compact strip shows the selected name/path, one
-recorded usage measure (directory subtree or file accounted allocation), and
-Open Directory/Trash/Delete actions. Sharing or unknown-size caveats appear when
-needed. Integer formatting never passes byte counts through Double. Partial,
+There is no inspector pane. A compact card below the tree shows the selected
+name/path, recorded allocation (directory subtree or file accounted allocation),
+direct-child count when applicable, and Reveal in Finder/Trash/Delete actions.
+Collapsing ancestors preserves the action target; clicking the card name reveals
+its row without zooming. Finder URLs use saved raw bytes, not the display string.
+Sharing or unknown-size caveats appear when needed. Integer formatting never passes byte counts through Double. Partial,
 incomplete, changed and simulated indicators remain visible. Recorded usage is
 not guaranteed reclaimable space; detailed errors stay behind a disclosure.
-
-The design applies Laws of UX: Jakob to native selection/navigation and panels;
-Fitts to the table alternative; Hick to two startup choices and separate action
-confirmation; Common Region/Similarity to directory strips and file-type colors; Doherty to
-immediate local highlight, indeterminate work feedback and retaining the prior view.
 
 ## 1c Asynchronous ownership and operations
 
@@ -83,11 +86,13 @@ Tree requests serialize mutations and coalesce reads/reveals. Session/selection/
 results; resize requests debounce 180ms. A separate replacement state keeps the
 retained previous view read-only until installation completes, even if an old view
 request finishes first. Recovery checks navigation as well as session generation.
-Swift retains current bounded views, selection, sparse navigation history and
+Busy feedback overlays the split view instead of inserting a row: preparing a new
+frame must not change the viewport that requested it. Swift retains current bounded
+views, selection, sparse navigation history and
 operation diagnostics, not the inventory. Hover/selection never rebuild the diagram.
 
 Trash and permanent deletion prepare off-main and retain the actual PreparedAction
-through a separate confirmation. Rust still validates fresh metadata, raw paths and
+through a separate confirmation. Cancel is the default keyboard action, including permanent deletion. Rust still validates fresh metadata, raw paths and
 identity pins internally. Presentation shows only the target, directory-and-contents
 scope, relevant warnings and Cancel/named-action buttons, not hex or low-level
 metadata. Short confirmations fit their content; long paths can scroll within a
@@ -100,15 +105,17 @@ cancelled; there is no Trash-to-delete fallback or permanent-delete Undo.
 Outcomes distinguish successful, failed, partial and indeterminate results, including
 inside/outside/unknown Trash scope. Issues remain in an expandable session log.
 Only current views/status are requested after core reconciliation; the snapshot is
-not reopened, rescanned or rewritten. Invalid focus recovers to a known live ancestor.
+not reopened, rescanned or rewritten. Invalid focus recovers to a known live ancestor. Successful removal uses bounded
+result motion; failed/partial/uncertain outcomes never animate whole-target success.
+Refresh Directory always refreshes the focused subtree in memory, not the selection.
 
 ## 1d Executable evidence
 
 [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift) runs the compiled
 app against real generated Rust sessions and stateful MemoryFileSystem scenarios:
 
-- "testDisclosureKeyboardZoomBackAndUsage": disclosure versus zoom,
-  double-click/Back, arrow-key selection, recorded usage and restored native scroll
+- "testDisclosureKeyboardZoomBreadcrumbAndUsage": disclosure versus zoom,
+  double-click/breadcrumbs, arrow-key selection, recorded usage and restored native scroll
   position while the selected directory remains above the visible viewport.
 - "testConfirmationCancelDeleteAndStaleHandleRecovery": cancellation, confirmed
   deletion, disappeared target, dirty inventory and root protection.
@@ -162,7 +169,7 @@ The original >2^53 fixture is unchanged.
 Untested limits: real Trash, native GUI picker lifecycle, hostile namespace races,
 full VoiceOver traversal (the tree is the exhaustive accessible alternative),
 light-mode screenshot review, large-inventory GUI paint latency,
-and cancellation of executing work. The additional native model/geometry tests
+and cancellation of destructive executing work (unsupported). The additional native model/geometry tests
 are linked from [native-diagram.md](native-diagram.md); offscreen callback tests
 do not substitute for foreground input/screenshot acceptance. XCUITest requires an unlocked interactive
 console; do not change security settings to force automation.

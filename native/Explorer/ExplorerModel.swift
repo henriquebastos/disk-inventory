@@ -14,6 +14,14 @@ struct ViewRecords: Sendable {
   let focus: EntryRecord
   let ancestors: [EntryRecord]
 
+  func breadcrumbName(_ entry: EntryRecord) -> String {
+    guard entry.key.sameEntry(other: status.root.key) else { return entryName(entry) }
+    return status.rootPath.split(separator: 47).last.map { String(decoding: $0, as: UTF8.self) }
+      ?? "/"
+  }
+  func breadcrumbHelp(_ entry: EntryRecord) -> String {
+    entry.key.sameEntry(other: status.root.key) ? displayPath(status.rootPath) : entryName(entry)
+  }
 }
 struct PendingConfirmation: Identifiable {
   let id = UUID()
@@ -82,6 +90,13 @@ struct PendingConfirmation: Identifiable {
 
   var selected: EntryRecord?
   var selectionPath: String?
+  var selectionRawPath: Data?
+  let scan = ScanCoordinator()
+  let motion = ResultMotion()
+  private let storage: ManagedInventoryStorage?
+  var lastInventory: ManagedInventory?
+  var scanDate: Date?
+  var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
   var loading = false
   private(set) var replacingSession = false
   var working = false
@@ -134,11 +149,23 @@ struct PendingConfirmation: Identifiable {
 
   init(
     arguments: [String] = ProcessInfo.processInfo.arguments,
-    environment: [String: String] = ProcessInfo.processInfo.environment
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    storage: ManagedInventoryStorage? = nil
   ) {
     fixtureMode =
       arguments.contains("--fixture-mode") || arguments.contains("--scenario")
       || environment["DI_UI_TEST"] != nil
+    self.storage =
+      storage ?? (fixtureMode ? nil : try? ManagedInventoryStorage.applicationSupport())
+    if !fixtureMode, let storage = self.storage {
+      Task {
+        let version = sessionVersion
+        do {
+          let last = try await Task.detached { try storage.lastInventory() }.value
+          if version == sessionVersion { lastInventory = last }
+        } catch { self.error = "Could not read last inventory metadata: \(error)" }
+      }
+    }
     if fixtureMode {
       guard arguments.contains("--fixture-mode"), let i = arguments.firstIndex(of: "--scenario"),
         arguments.indices.contains(i + 1)
@@ -151,13 +178,20 @@ struct PendingConfirmation: Identifiable {
     }
   }
 
-  func load(_ constructor: @escaping @Sendable () throws -> ExplorerSession) {
+  func load(
+    scanControl: ScanControl? = nil, generation: URL? = nil, scanDate: Date? = nil,
+    _ constructor: @escaping @Sendable () throws -> ExplorerSession
+  ) {
+    scan.stopPolling(cancelScan: true)
+    motion.cancel()
+    if let scanControl { scan.begin(scanControl) }
     cancelConfirmation()
     invalidatePresentation()
     history.removeAll()
     restoring = nil
     pathRequest = nil
     selected = nil
+    selectionRawPath = nil
     selectionPath = nil
     sessionVersion += 1
     viewVersion += 1
@@ -174,7 +208,22 @@ struct PendingConfirmation: Identifiable {
           let s = try constructor()
           return (s, try s.status())
         }.value
-        guard version == sessionVersion else { return }
+        guard version == sessionVersion else {
+          if let generation, let storage {
+            try? await Task.detached { try storage.discard(generation) }.value
+          }
+          return
+        }
+        var installedDate = scanDate
+        if let generation, let storage {
+          let date = Date()
+          let rootName = displayPath(result.1.rootPath)
+          let record = try await Task.detached {
+            try storage.publish(generation, scannedAt: date, rootName: rootName)
+          }.value
+          lastInventory = record
+          installedDate = date
+        }
         if fixtureMode && !result.1.simulated { throw CocoaError(.fileReadNoPermission) }
         // No confirmation or late preparation from the retained picture may cross this install.
         cancelConfirmation()
@@ -184,10 +233,13 @@ struct PendingConfirmation: Identifiable {
         viewVersion += 1
         selectionVersion += 1
         pathRequest = nil
+        self.scanDate = installedDate
         session = result.0
+        working = false
         requestedFocus = result.1.root.key
         records = nil
         selected = nil
+        selectionRawPath = nil
         selectionPath = nil
         history = []
         restoring = nil
@@ -195,8 +247,19 @@ struct PendingConfirmation: Identifiable {
         outcome = nil
         await updateView(focus: result.1.root.key)
       } catch {
+        if let generation, let storage {
+          try? await Task.detached { try storage.discard(generation) }.value
+        }
         if version == sessionVersion {
-          let failure = String(describing: error)
+          let failure: String
+          if case BridgeError.Cancelled = error {
+            failure = "Scan cancelled. The previous saved inventory is unchanged."
+          } else if scanControl?.progress().phase == .publishedFailure {
+            failure =
+              "The scan published a generation but could not finish preparing it. Last managed inventory unchanged. \(error)"
+          } else {
+            failure = String(describing: error)
+          }
           self.error = failure
           if let retained = session { await recoverView(retained) }
           if version == sessionVersion { self.error = failure }
@@ -205,6 +268,7 @@ struct PendingConfirmation: Identifiable {
       if version == sessionVersion {
         loading = false
         replacingSession = false
+        scan.stopPolling(cancelScan: false)
       }
     }
   }
@@ -296,6 +360,7 @@ struct PendingConfirmation: Identifiable {
               }
               if let selection = result.4 {
                 selected = selection.entry
+                selectionRawPath = selection.relativePath
                 selectionPath = displayPath(selection.relativePath)
                 selectedRow = result.6
               }
@@ -457,7 +522,9 @@ struct PendingConfirmation: Identifiable {
     }
   }
   func point(_ x: UInt32, _ y: UInt32, click: Bool = false, doubleClick: Bool = false) {
-    guard !loading, !replacingSession, let frame = picture?.frame else { return }
+    guard !loading, !working, !motion.active, !replacingSession, let frame = picture?.frame else {
+      return
+    }
     if click { clickVersion += 1 } else { hoverVersion += 1 }
     let request = HitRequest(
       frame: frame, x: x, y: y, generation: sessionVersion, navigation: viewVersion,
@@ -477,13 +544,16 @@ struct PendingConfirmation: Identifiable {
         }
         let hit = try? await Task.detached { try request.frame.hit(x: request.x, y: request.y) }
           .value
-        guard request.generation == sessionVersion, request.navigation == viewVersion else {
+        guard request.generation == sessionVersion, request.navigation == viewVersion,
+          !working, !loading, !replacingSession, !motion.active
+        else {
           continue
         }
         if request.click {
           guard request.version == clickVersion, let hit else { continue }
           if hit.actionable {
             select(hit.entry)
+            if request.doubleClick, hit.entry.kind == .directory { focus(hit.entry.key) }
           } else {
             selectAggregate(hit.entry.key, bytes: hit.bytes)
             if request.doubleClick { focus(hit.entry.key) }
@@ -508,6 +578,7 @@ struct PendingConfirmation: Identifiable {
     selectedRow = nil
     aggregate = nil
     aggregateText = nil
+    selectionRawPath = nil
     selectionPath = nil
     selectionVersion += 1
     reveal(entry)
@@ -528,6 +599,7 @@ struct PendingConfirmation: Identifiable {
         guard request.selectionVersion == selectionVersion,
           request.sessionVersion == sessionVersion
         else { continue }
+        selectionRawPath = path
         selectionPath = path.map(displayPath)
       }
       pathWorkerRunning = false
@@ -541,6 +613,7 @@ struct PendingConfirmation: Identifiable {
     selected = nil
     selectedRow = nil
     selectedRegion = nil
+    selectionRawPath = nil
     selectionPath = nil
     aggregate = key
     aggregateText =
@@ -549,20 +622,16 @@ struct PendingConfirmation: Identifiable {
 
   func focus(_ key: EntryKey) {
     guard !working, !replacingSession else { return }
-    let restore: NavigationContext?
-    if let index = history.lastIndex(where: { $0.focus.sameEntry(other: key) }) {
-      restore = history[index]
-      history.removeSubrange(index...)
-    } else {
-      restore = nil
-      if let old = records?.focus.key, let tree, !old.sameEntry(other: key),
-        history.last?.focus.sameEntry(other: old) != true
-      {
-        history.append(
-          NavigationContext(focus: old, tree: tree, selection: selected?.key, scrollRow: scrollRow))
-        if history.count > 64 { history.removeFirst() }
-      }
+    guard requestedFocus?.sameEntry(other: key) != true else { return }
+    let restore = history.first { $0.focus.sameEntry(other: key) }
+    history.removeAll { $0.focus.sameEntry(other: key) }
+    if let old = records?.focus.key, let tree {
+      history.removeAll { $0.focus.sameEntry(other: old) }
+      history.append(
+        NavigationContext(focus: old, tree: tree, selection: selected?.key, scrollRow: scrollRow))
+      if history.count > 64 { history.removeFirst() }
     }
+    motion.cancel()
     requestedFocus = key
     loading = true
     viewVersion += 1
@@ -571,6 +640,7 @@ struct PendingConfirmation: Identifiable {
     cancelConfirmation()
     pathRequest = nil
     selectionVersion += 1
+    selectionRawPath = nil
     selectionPath = nil
     selected = nil
     aggregate = nil
@@ -578,7 +648,40 @@ struct PendingConfirmation: Identifiable {
     let navigation = viewVersion
     Task { if navigation == viewVersion { await updateView(focus: key) } }
   }
-  func back() { if let context = history.last { focus(context.focus) } }
+  func focusParent() { if let parent = records?.focus.parent { focus(parent) } }
+  // Kept as the keyboard/test parent-navigation seam; there is no Back stack UI.
+  func back() { focusParent() }
+  func revealSelection() { if let selected { reveal(selected) } }
+  var selectedDisplayPath: String? {
+    guard let relative = selectionRawPath, var root = records?.status.rootPath else { return nil }
+    if !relative.isEmpty {
+      if root.last != 47 { root.append(47) }
+      root.append(relative)
+    }
+    return displayPath(root)
+  }
+  var selectedURL: URL? {
+    guard !fixtureMode, let relative = selectionRawPath, var path = records?.status.rootPath else {
+      return nil
+    }
+    if !relative.isEmpty {
+      if path.last != 47 { path.append(47) }
+      path.append(relative)
+    }
+    guard !path.contains(0) else { return nil }
+    let url = (path + Data([0])).withUnsafeBytes { bytes in
+      URL(
+        fileURLWithFileSystemRepresentation: bytes.baseAddress!.assumingMemoryBound(to: CChar.self),
+        isDirectory: selected?.kind == .directory, relativeTo: nil)
+    }
+    // Finder must never receive a lossy display-path reconstruction.
+    return Self.pathBytes(url) == path ? url : nil
+  }
+  func revealInFinder() {
+    guard let url = selectedURL, !working, !replacingSession else { return }
+    NSWorkspace.shared.activateFileViewerSelecting([url])
+  }
+
   func historyExpansionPayloadBytes() async throws -> UInt64 {
     let trees = history.map(\.tree)
     return try await Task.detached {
@@ -650,6 +753,10 @@ struct PendingConfirmation: Identifiable {
     pending = nil
     working = true
     let generation = sessionVersion
+    let navigation = viewVersion
+    let previous = picture
+    let source = selectedRegion
+    let selectedKey = selected?.key
     Task {
       do {
         let result = try await Task.detached(priority: .userInitiated) {
@@ -679,7 +786,27 @@ struct PendingConfirmation: Identifiable {
           }
         }
         retainIssues(result.update)
-        await recoverView(s)
+        // Failed/partial/uncertain removals retain the actual survivor selection, never a success ghost.
+        let survivor = selectedKey
+        let mayAnimate =
+          navigation == viewVersion
+          && RemovalMotionPlan.make(
+            mutation: result.mutation, scope: result.scope, source: source,
+            rootPath: records?.status.rootPath ?? Data(), visibleTargets: [],
+            reduceMotion: reduceMotion) != nil
+        if mayAnimate, let previous { motion.hold(previous) }
+        await recoverView(s, preserving: survivor, retainingMotion: mayAnimate)
+        if generation == sessionVersion, mayAnimate, let previous,
+          picture?.frame !== previous.frame,
+          let plan = RemovalMotionPlan.make(
+            mutation: result.mutation, scope: result.scope, source: source,
+            rootPath: records?.status.rootPath ?? Data(), visibleTargets: picture?.targets ?? [],
+            reduceMotion: reduceMotion)
+        {
+          await motion.play(previous: previous, plan: plan)
+        } else if generation == sessionVersion {
+          motion.cancel()
+        }
       } catch {
         if generation == sessionVersion {
           let failure = "Operation failed: \(error)"
@@ -698,7 +825,10 @@ struct PendingConfirmation: Identifiable {
       issues.append("\(update.issuesOmitted) additional issues omitted by core")
     }
   }
-  func recoverView(_ s: ExplorerSession) async {
+  func recoverView(
+    _ s: ExplorerSession, preserving selection: EntryKey? = nil, retainingMotion: Bool = false
+  ) async {
+    if !retainingMotion { motion.cancel() }
     let generation = sessionVersion
     let navigation = viewVersion
     history.removeAll()
@@ -707,6 +837,7 @@ struct PendingConfirmation: Identifiable {
     pathRequest = nil
     selectionVersion += 1
     selected = nil
+    selectionRawPath = nil
     selectionPath = nil
     let candidates =
       ([records?.focus].compactMap { $0 } + (records?.ancestors.reversed() ?? [].reversed())).map(
@@ -719,10 +850,18 @@ struct PendingConfirmation: Identifiable {
     if let key {
       requestedFocus = key
       await updateView(focus: key)
+      if let selection, generation == sessionVersion,
+        let current = try? await Task.detached(operation: { try s.selection(key: selection).entry })
+          .value,
+        generation == sessionVersion, requestedFocus?.sameEntry(other: key) == true
+      {
+        select(current)
+      }
     }
   }
   func refresh() {
-    guard !working, !replacingSession, let s = session, let key = records?.focus.key else { return }
+    guard !working, !loading, !replacingSession, let s = session, let key = records?.focus.key
+    else { return }
     working = true
     let generation = sessionVersion
     Task {
@@ -755,16 +894,31 @@ struct PendingConfirmation: Identifiable {
     panel.canChooseDirectories = true
     panel.message = "Choose the explicit inventory root. This scope will be scanned once."
     guard panel.runModal() == .OK, let root = panel.url else { return }
-    let save = NSSavePanel()
-    save.nameFieldStringValue = "Inventory.dmap"
-    save.message =
-      "Choose a NEW snapshot file. Existing files cannot be replaced. Creation scans, then reopens the saved inventory."
-    guard save.runModal() == .OK, let destination = save.url else { return }
-    let source = Self.pathBytes(root)
-    let output = Self.pathBytes(destination)
-    load { try ExplorerSession.create(sourceRoot: source, snapshotPath: output, workers: 4) }
+    createManaged(root: root)
   }
-  static func pathBytes(_ url: URL) -> Data {
+  func openLastInventory() {
+    guard !fixtureMode, !working, !replacingSession, let storage, let lastInventory else { return }
+    let path = Self.pathBytes(storage.url(for: lastInventory))
+    load(scanDate: lastInventory.scannedAt) { try ExplorerSession.openSnapshot(snapshotPath: path) }
+  }
+  func createManaged(root: URL, control: ScanControl = ScanControl()) {
+    guard !fixtureMode, !working, !replacingSession, let storage else { return }
+    do {
+      let destination = try storage.newGeneration()
+      let source = Self.pathBytes(root)
+      let output = Self.pathBytes(destination)
+      load(scanControl: control, generation: destination) {
+        try ExplorerSession.createControlled(
+          sourceRoot: source, snapshotPath: output, workers: 4, control: control)
+      }
+    } catch { self.error = "Could not prepare managed storage: \(error)" }
+  }
+  func shutdown() {
+    scan.stopPolling(cancelScan: true)
+    motion.cancel()
+    cancelConfirmation()
+  }
+  nonisolated static func pathBytes(_ url: URL) -> Data {
     url.withUnsafeFileSystemRepresentation { pointer in
       guard let pointer else { return Data() }
       return Data(bytes: pointer, count: strlen(pointer))

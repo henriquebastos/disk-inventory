@@ -54,4 +54,7 @@ schemes:
         ExplorerUITests: [test]
         ExplorerModelTests: [test]
     test:
+      environmentVariables:
+        DI_MODEL_TEST: "1"
+        DI_TEST_ROOT: "$(PROJECT_DIR)/../test-fixtures"
       targets: [ExplorerModelTests, ExplorerUITests]

@@ -9,6 +9,7 @@ pub enum BridgeError {
     InvalidEntry { message: String },
     WrongSession,
     ConsumedAction,
+    Cancelled,
     PermissionDenied { message: String },
     NotFound { message: String },
     Io { message: String },
@@ -22,6 +23,11 @@ impl std::fmt::Display for BridgeError {
 impl std::error::Error for BridgeError {}
 impl From<std::io::Error> for BridgeError {
     fn from(e: std::io::Error) -> Self {
+        if e.get_ref()
+            .is_some_and(|e| e.is::<crate::scan_control::ScanCancelled>())
+        {
+            return Self::Cancelled;
+        }
         let message = e.to_string();
         match e.kind() {
             std::io::ErrorKind::InvalidInput | std::io::ErrorKind::InvalidData => {

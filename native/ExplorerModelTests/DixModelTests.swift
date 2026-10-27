@@ -60,7 +60,7 @@ import XCTest
       })
     XCTAssertEqual(model.diagramBuilds, builds)
   }
-  func testDisclosureZoomBackAndAncestorRestoreContext() async throws {
+  func testDisclosureZoomBreadcrumbAndAncestorRestoreContext() async throws {
     let model = try await load()
     let root = model.records!.focus.key
     let projects = try entry("Projects", model)
@@ -87,7 +87,7 @@ import XCTest
     XCTAssertEqual(model.outline!.total, 2003)
     XCTAssertEqual(model.restoredScrollRow, 1200)
     XCTAssertLessThanOrEqual(model.outline!.rows.count, 256)
-    XCTAssertTrue(model.history.isEmpty)
+    XCTAssertEqual(model.history.count, 2)  // Both visited descendant contexts remain restorable.
   }
   func testHistoryCapPayloadAndSessionAndMutationInvalidation() async throws {
     let model = try await load("dix-deep")
@@ -148,7 +148,7 @@ import XCTest
     XCTAssertTrue(model.history.isEmpty)
     XCTAssertNotNil(try entry("large-file", model))
   }
-  func testNativeHundredThousandRowsAreVirtualAndDatasourceNeverWaitsForBridge() async throws {
+  func testNativeHundredThousandRowsAreVirtual() async throws {
     var before = rusage()
     getrusage(RUSAGE_SELF, &before)
     let start = ContinuousClock.now
@@ -178,25 +178,36 @@ import XCTest
     XCTAssertLessThan(table.createdCells, 128)
     XCTAssertLessThan(model.outline!.visits, 1024)
     let expansionTime = expanded.duration(to: .now)
-    let session = model.session!
-    let blocked = Task.detached {
-      try session.diagram(focus: projects.key, width: 2000, height: 2000)
-    }
-    try await wait { session.isBusy() }
-    let datasource = try XCTUnwrap(table.dataSource as? ContentsTree.Coordinator)
-    let callback = ContinuousClock.now
-    XCTAssertEqual(datasource.numberOfRows(in: table), 100003)
-    _ = datasource.tableView(table, viewFor: table.tableColumns[0], row: 0)
-    let callbackTime = callback.duration(to: .now)
-    XCTAssertTrue(session.isBusy(), "callback must not wait for the locked bridge")
-    XCTAssertLessThan(callbackTime, .milliseconds(100))
-    _ = try await blocked.value
     var after = rusage()
     getrusage(RUSAGE_SELF, &after)
     let bitmap = model.picture!.bitmap
     print(
-      "DIX100k load+publication=\(loadTime) expand+AppKit rows+tail=\(expansionTime) datasource=\(callbackTime) cells=\(table.createdCells) rows=\(model.outline!.rows.count) peakRSS=\(after.ru_maxrss) baselinePeak=\(before.ru_maxrss) coreRetainedPayload=\(bitmap.retainedPayloadBytes) surfacePayload=\(bitmap.surfacePayloadBytes) transferRGBA=\(bitmap.rgba.count) tiles=\(bitmap.tiles) visits=\(bitmap.childVisits); not compositor latency"
+      "DIX100k load+publication=\(loadTime) expand+AppKit rows+tail=\(expansionTime) cells=\(table.createdCells) rows=\(model.outline!.rows.count) peakRSS=\(after.ru_maxrss) baselinePeak=\(before.ru_maxrss) coreRetainedPayload=\(bitmap.retainedPayloadBytes) surfacePayload=\(bitmap.surfacePayloadBytes) transferRGBA=\(bitmap.rgba.count) tiles=\(bitmap.tiles) visits=\(bitmap.childVisits); not compositor latency"
     )
+  }
+  func testNativeDatasourceCallbacksUseCachedRowsWhileBridgeIsBusy() async throws {
+    let model = try await load("metadata-delay")
+    let session = model.session!
+    let key = try entry("large-file", model).key
+    let table = ContentsTree.Table(frame: .zero)
+    let datasource = ContentsTree.Coordinator(model)
+    table.dataSource = datasource
+    table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+    // A valid empty tail slice forces the callback to schedule, not synchronously fetch, row zero.
+    model.outline = try model.tree!.rows(offset: model.outline!.total, limit: 256)
+    let total = Int(model.outline!.total)
+    try await withThrowingTaskGroup(of: MetadataRecord.self) { group in
+      group.addTask { try session.liveMetadata(key: key) }
+      try await wait { session.isBusy() }
+      let callback = ContinuousClock.now
+      XCTAssertEqual(datasource.numberOfRows(in: table), total)
+      _ = datasource.tableView(table, viewFor: table.tableColumns[0], row: 0)
+      let elapsed = callback.duration(to: .now)
+      XCTAssertTrue(session.isBusy(), "cached callback must not wait for the locked bridge")
+      XCTAssertLessThan(elapsed, .milliseconds(100))
+      print("CACHED_DATASOURCE callback=\(elapsed) while same-session metadata fixture is busy")
+      _ = try await group.next()
+    }  // Structured task scope also joins the blocking call on a thrown assertion/setup error.
   }
   func testDownsampledPointerMatchesRustOwnerAndAppKitDrawUsesCachedImage() async throws {
     var baseline = rusage()

@@ -13,7 +13,7 @@ import XCTest
   func model(_ scenario: String) async throws -> ExplorerModel {
     let model = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await waitUntil { model.records != nil && !model.loading }
+    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
     return model
   }
   func entry(_ name: String, _ model: ExplorerModel) throws -> EntryRecord {

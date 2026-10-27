@@ -142,7 +142,7 @@ impl Explorer {
         options: LayoutOptions,
         rectangle_limit: usize,
         depth_limit: u32,
-        fixed_strips: bool,
+        cumulative_endpoints: bool,
     ) -> io::Result<Layout> {
         let id = self.resolve(focus)?;
         if self.map.nodes[id as usize].kind != Kind::Dir {
@@ -252,12 +252,7 @@ impl Explorer {
             }
             // Rounded endpoints can collapse or escape a subdivision. Keep the
             // parent intact when its children cannot form valid regions.
-            let placed = if fixed_strips {
-                crate::diagram::place_strips(&mut parts, tile.rect, tile.bytes)
-            } else {
-                squarify(&mut parts, tile.rect, tile.bytes)
-            };
-            if !placed {
+            if !squarify(&mut parts, tile.rect, tile.bytes, cumulative_endpoints) {
                 result.tiles.push(tile);
                 continue;
             }
@@ -288,8 +283,14 @@ impl Explorer {
 
 // Squarified rows, O(k log k) for a bounded prefix, not the inventory. Ratios of
 // remaining integer weights avoid catastrophic cancellation on skewed trees.
-fn squarify(parts: &mut [Tile], mut rect: Rect, mut remaining: u64) -> bool {
+fn squarify(
+    parts: &mut [Tile],
+    mut rect: Rect,
+    mut remaining: u64,
+    cumulative_endpoints: bool,
+) -> bool {
     let bounds = rect;
+    let total = remaining;
     parts.sort_by_key(|part| std::cmp::Reverse(part.bytes));
     let mut start = 0;
     while start < parts.len() {
@@ -312,7 +313,25 @@ fn squarify(parts: &mut [Tile], mut rect: Rect, mut remaining: u64) -> bool {
         }
         let vertical = rect.width >= rect.height;
         let fraction = weight as f64 / remaining as f64;
-        let thickness = if vertical { rect.width } else { rect.height } * fraction;
+        let mut thickness = if vertical { rect.width } else { rect.height } * fraction;
+        // Native diagrams can refine very large sibling prefixes at nonzero origins.
+        // Close shared edges instead of accumulating per-child lengths, which can
+        // drift outside the row and reject the entire subdivision. Keep the legacy
+        // API's arithmetic unchanged; both modes share scoring and orientation.
+        let origin = if vertical { rect.x } else { rect.y };
+        let far = if vertical {
+            bounds.x + bounds.width
+        } else {
+            bounds.y + bounds.height
+        };
+        let edge = if remaining == weight {
+            far
+        } else {
+            origin + thickness
+        };
+        if cumulative_endpoints {
+            thickness = edge - origin;
+        }
         let row = if vertical {
             Rect {
                 width: thickness,
@@ -327,10 +346,22 @@ fn squarify(parts: &mut [Tile], mut rect: Rect, mut remaining: u64) -> bool {
         if !rect.contains(row) {
             return false;
         }
-        let mut offset = if vertical { rect.y } else { rect.x };
+        let cross_origin = if vertical { rect.y } else { rect.x };
+        let cross_length = if vertical { rect.height } else { rect.width };
+        let mut offset = cross_origin;
+        let mut used = 0u64;
         for part in &mut parts[start..end] {
-            let length = if vertical { rect.height } else { rect.width }
+            let mut length = if vertical { rect.height } else { rect.width }
                 * (part.bytes as f64 / weight as f64);
+            used += part.bytes;
+            let end = if used == weight {
+                cross_origin + cross_length
+            } else {
+                cross_origin + cross_length * (used as f64 / weight as f64)
+            };
+            if cumulative_endpoints {
+                length = end - offset;
+            }
             part.rect = if vertical {
                 Rect {
                     x: rect.x,
@@ -349,10 +380,30 @@ fn squarify(parts: &mut [Tile], mut rect: Rect, mut remaining: u64) -> bool {
             if !row.contains(part.rect) {
                 return false;
             }
-            offset += length;
+            if cumulative_endpoints {
+                // Endpoint closure must not trade coverage for distorted byte area
+                // when the coordinate origin is too large to represent the split.
+                let expected = bounds.area() * (part.bytes as f64 / total as f64);
+                if (part.rect.area() - expected).abs() > expected * 1e-9 {
+                    return false;
+                }
+            }
+            if cumulative_endpoints {
+                offset = end;
+            } else {
+                offset += length;
+            }
         }
         let rest = (remaining - weight) as f64 / remaining as f64;
-        if vertical {
+        if cumulative_endpoints {
+            if vertical {
+                rect.x = edge;
+                rect.width = far - edge;
+            } else {
+                rect.y = edge;
+                rect.height = far - edge;
+            }
+        } else if vertical {
             rect.x += thickness;
             rect.width *= rest;
         } else {

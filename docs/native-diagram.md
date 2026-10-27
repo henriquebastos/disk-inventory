@@ -8,19 +8,20 @@ contract in [bridge.md](bridge.md) is unchanged.
 
 ## Placement and pixel authority
 
-[src/diagram/strips.rs](../src/diagram/strips.rs) fixes orientation once per directory.
-Rows span its long side and advance along its short side. For parent weight `P`, next
-child `w`, candidate row sum `S`, and long/short aspect `R`, accept the candidate while
-`(w/P * R)/(S/P)^2 >= 0.4`. Strip thickness is `short * S/P`; child span is
-`long * w/S`. Integer cumulative sums determine shared endpoints, with final-edge
-closure. This is DIX-inspired strip placement, not global grid alignment across
-unequal rows/directories or a claim of bit-for-bit upstream equality.
+[src/layout.rs](../src/layout.rs) supplies the residual-orientation squarify used by
+both the diagram and legacy `Explorer.layout`. Bounded siblings (including any
+rollup) sort by descending integer weight; a row grows while adding its next item
+improves or preserves the worst aspect ratio. Rows span the residual rectangle's
+short side, then orientation is recomputed for the remainder. Integer sums and
+remaining-weight ratios preserve exact byte accounting even above floating-point
+integer precision; only geometry uses floating point. Unrepresentable subdivisions
+retain their parent. Native raster geometry uses cumulative integer-weight endpoints
+and final-edge closure to prevent drift across large sibling prefixes at nonzero
+origins. Legacy per-child floating-length arithmetic and limits remain unchanged;
+row scoring/orientation is shared, not a second placement algorithm.
 
-The legacy `Explorer.layout` API still uses its accepted residual-orientation
-squarify implementation and limits. Only the new diagram selects fixed strips.
-Both use the same priority-driven bounded refinement machinery in
-[src/layout.rs](../src/layout.rs), preserving exact integer byte sums and zero-area
-semantics. Directory accounting and unresolved descendants remain aggregates.
+Both views use the same priority-driven bounded refinement machinery, preserving
+zero-area semantics. Directory accounting and unresolved descendants remain aggregates.
 
 [src/diagram.rs](../src/diagram.rs) accepts 1–4,000,000 backing pixels, at most
 `min(pixels, 1,000,000)` combined tile/group regions and twice that many child-ID
@@ -32,9 +33,16 @@ remain in the tree, with no artificial map area.
 Each actually covered pixel has one owner. A high owner bit marks aggregate pixels
 non-actionable. Hit lookup is O(1), followed by saved-record/path construction;
 selection-region lookup scans bounded frame regions. Geometry, not a header overlay,
-owns file pixels. Type colors inspect at most six saved basename bytes, allocating
-nothing and reading neither content nor filesystem metadata. Cushion gradients
-accumulate directory/file ridges before one cached raster pass.
+owns file pixels. Type colors inspect at most twelve saved basename bytes (including `.swiftmodule`),
+allocating nothing and reading neither content nor filesystem metadata. The palette
+uses precomputed clipped sRGB equivalents of the design's OKLCH colors: blue video,
+green images, pink audio, gold archives, purple apps, cyan code, orange caches,
+olive data and muted documents/unknowns. Classification is ASCII case-insensitive
+by extension, not content or package inspection. A 155-degree linear gradient runs
+from 14% white through the base at 55% to 16% black, independent of ancestor depth.
+A subtle top/left backing-pixel inset separates files; gray diagonal hatching marks
+non-actionable aggregates. Selection dimming and hover outlines remain native overlays,
+not baked into the bitmap or owner buffer.
 
 `DiagramFrame.bitmap` transfers one flat RGBA buffer plus counts/timing/payload
 statistics. `hit` transfers one owner; `region` one rectangle. `targets` supplies at
@@ -42,9 +50,10 @@ most 24 sufficiently large file targets for drawing accessibility, not the compl
 inventory; the virtual tree is exhaustive. Swift scales the raster with nearest-neighbor
 sampling when the pixel envelope binds and maps input back into that raster.
 
-Counts are bounds, not memory or display-time guarantees. Retained vector and cushion
-surface payload fields exclude allocator overhead, layout scratch, FFI copies and
-native image-provider memory. Core process RSS and Swift/process peak measurements
+Counts are bounds, not memory or display-time guarantees. Retained vector payload
+excludes allocator overhead, layout scratch, FFI copies and native image-provider
+memory. The generated `surface_payload_bytes` statistic remains compatible but is
+always zero: the raster no longer allocates a lighting-surface map. Core process RSS and Swift/process peak measurements
 must be reported separately. Two frame builds cannot run concurrently in the model;
 a displayed old frame may coexist with the next build and transfer copies. Bounded
 in-flight hit/region queries can briefly retain an obsolete frame; accessibility
@@ -73,7 +82,7 @@ at 120 points without capping semantic depth or inventory access.
 
 [ExplorerModel.swift](../native/Explorer/ExplorerModel.swift) keeps one 256-row slice;
 one incoming slice can coexist during publication. Resize builds reuse that slice,
-not a second row cache. The 64-context navigation history stores opaque sparse tree
+not a second row cache. The 64-context per-directory cache stores opaque sparse tree
 handles and keys/scroll positions only. This count is not itself a byte limit;
 aggregate expansion payload can be queried independently of the shared inventory.
 History resolves selected `visibleRow` independently of the restored page, without
@@ -87,7 +96,7 @@ state checks before dispatch and publication.
 Session/view/selection generations reject obsolete work. Core frames and trees also
 capture an inventory revision; execution and refresh invalidate their queries before
 potential mutation. An immutable old bitmap remains drawable, but obsolete hit/region/
-row calls fail. Navigation history clears on replacement/recovery; obsolete saved trees
+row calls fail. Navigation contexts clear on replacement/recovery; obsolete saved trees
 rebuild rather than republishing stale row counts. Preparing actions still performs
 fresh metadata/pin checks inside Rust, separate from ordinary presentation.
 Rejected execution also rebuilds current presentation without suppressing the error.
@@ -97,18 +106,22 @@ A failed constructor rebuilds the retained session before ending read-only repla
 
 [src/explorer_tests.rs](../src/explorer_tests.rs):
 
-- "diagram_fixed_strips_align_equal_siblings_in_wide_tall_and_retina_frames": three
-  aligned strips of 24 equal files, proportional areas and complete pixel ownership
-  in wide/tall 1×/2× frames; legacy placement fails the strip-count assertion.
+- "diagram_squarify_places_compact_siblings_in_wide_tall_and_retina_frames": short-side
+  rows of compact equal files rather than long-side strips; legacy geometry
+  agreement within roundoff, proportional areas and complete ownership in wide/tall 1×/2× frames.
 - "diagram_skewed_nested_geometry_keeps_area_coverage_zero_and_budget_semantics":
   skewed nested/deep weights, pixel coverage, zero area and bounded visits.
 - "rejected_subdivisions_consume_the_global_work_budget": rejected work remains
-  bounded under both legacy and fixed-strip placement.
+  bounded in both endpoint modes of the shared refinement implementation.
 - "diagram_pixel_detail_and_zoom_preserve_weights_and_hit_authority": detail above
   160 tiles, tiny-file zoom, aggregate non-authority and deterministic raster bytes.
+- "diagram_integer_precision_hardlinks_and_zero_entries_survive_squarify": exact
+  u64::MAX accounting, hardlink deduplication, zero-area tree access and pixel/work bounds.
+- "diagram_flat_gradient_has_no_ancestor_ridges_and_aggregates_are_hatched": identical
+  shallow/deep raster bytes, monotonic interior shading, exact colors and aggregate authority.
 
 [src/diagram.rs](../src/diagram.rs):
-"type_palette_is_extension_stable_and_cushion_ridges_are_not_flat".
+"type_palette_matches_prototype_and_flat_gradient_is_monotonic".
 [src/diagram/scale_tests.rs](../src/diagram/scale_tests.rs):
 "million_file_diagram_respects_pixel_region_work_and_memory_envelopes" records
 one-million-file/max-pixel core payload, RSS and timing, excluding FFI/Swift/display.
@@ -124,13 +137,15 @@ and unchanged expansion state. Million-child/deep tests also query visible rows.
 "row_payload_accounting_does_not_traverse_expansion_state" measures payload-term
 reads before/after deep collapse and checks incremental counts against full sums.
 [src/bridge/tests.rs](../src/bridge/tests.rs):
-"diagram_and_virtual_tree_are_native_free_bounded_and_revision_guarded".
+"diagram_and_virtual_tree_are_native_free_bounded_and_revision_guarded" checks
+large nested-origin sibling prefixes in wide/tall/odd/2× frames, complete raster
+coverage, bounded visits, no source access and revision guards.
 
 [native/ExplorerModelTests/DixModelTests.swift](../native/ExplorerModelTests/DixModelTests.swift):
 
 - "testHoverLeavesPreparedSelectionUntouchedAndClickRevealsWithoutZoom".
 - "testAggregatePixelExplainsRecordedBytesWithoutCreatingAnActionTarget".
-- "testDisclosureZoomBackAndAncestorRestoreContext".
+- "testDisclosureZoomBreadcrumbAndAncestorRestoreContext".
 - "testDisclosurePreservesUnaffectedMovieSelection".
 - "testDisclosureRecomputesMovieRowAfterPrecedingSiblingChanges".
 - "testDisclosureHidesSelectedDescendantWithoutReopeningOrRetargeting".
@@ -140,13 +155,15 @@ reads before/after deep collapse and checks incremental counts against full sums
 - "testHistoryCapPayloadAndSessionAndMutationInvalidation".
 - "testHistoryRebuildsAfterExternalRevisionChange".
 - "testHistoryRestoresNativeTopRowRatherThanOnlyMakingItVisible": real offscreen
-  AppKit clip-view origin and model scroll observation agree after Back.
+  AppKit clip-view origin and model scroll observation agree after parent navigation.
 - "testShortTreeRestoreKeepsFirstRowBelowNativeHeader": a one-row scope's label
   remains below, rather than underneath, the table header after restoring its origin.
 - "testAccessibilityTargetsDoNotRetainObsoleteFrames".
 - "testStaleHoverRevealAndFrameCannotPublishAcrossSessionReplacement".
-- "testNativeHundredThousandRowsAreVirtualAndDatasourceNeverWaitsForBridge": real
-  NSTableView cells and tail scrolling, including callbacks while Rust is busy.
+- "testNativeHundredThousandRowsAreVirtual": real
+  NSTableView cells and tail scrolling.
+- "testNativeDatasourceCallbacksUseCachedRowsWhileBridgeIsBusy": cached datasource
+  callbacks during an explicit same-session metadata-delay fixture call.
 - "testDownsampledPointerMatchesRustOwnerAndAppKitDrawUsesCachedImage": backing
   mapping and cached offscreen AppKit drawing, not display completion.
 - "testOffscreenAppKitTrackingKeyboardAndDisclosureCallbacks": actual native

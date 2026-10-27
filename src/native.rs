@@ -198,6 +198,16 @@ pub fn parse_batch(
     count: usize,
     mut visit: impl FnMut(BulkRecord),
 ) -> io::Result<()> {
+    parse_batch_fallible(bytes, count, |record| {
+        visit(record);
+        Ok(())
+    })
+}
+fn parse_batch_fallible(
+    bytes: &[u8],
+    count: usize,
+    mut visit: impl FnMut(BulkRecord) -> io::Result<()>,
+) -> io::Result<()> {
     let mut pos = 0usize;
     for _ in 0..count {
         let head = bytes
@@ -218,13 +228,27 @@ pub fn parse_batch(
             bytes
                 .get(pos..end)
                 .ok_or_else(|| invalid("truncated bulk record"))?,
-        )?);
+        )?)?;
         pos = end;
     }
     Ok(())
 }
 
 pub fn enumerate(dir: &File, mut visit: impl FnMut(BulkRecord)) -> io::Result<()> {
+    enumerate_controlled(
+        dir,
+        |record| {
+            visit(record);
+            Ok(())
+        },
+        None,
+    )
+}
+pub(crate) fn enumerate_controlled(
+    dir: &File,
+    mut visit: impl FnMut(BulkRecord) -> io::Result<()>,
+    control: Option<&crate::scan_control::ScanControl>,
+) -> io::Result<()> {
     let mut attrs = attrlist {
         bitmapcount: ATTR_BIT_MAP_COUNT,
         reserved: 0,
@@ -237,6 +261,7 @@ pub fn enumerate(dir: &File, mut visit: impl FnMut(BulkRecord)) -> io::Result<()
     // u64 storage guarantees the eight-byte record alignment required by bulk.
     let mut storage = vec![0u64; 32 * 1024];
     loop {
+        crate::scan_control::check(control)?;
         // SAFETY: valid directory fd, initialized attrlist, writable aligned buffer.
         let count = unsafe {
             getattrlistbulk(
@@ -247,6 +272,7 @@ pub fn enumerate(dir: &File, mut visit: impl FnMut(BulkRecord)) -> io::Result<()
                 0,
             )
         };
+        crate::scan_control::check(control)?;
         if count < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -256,7 +282,7 @@ pub fn enumerate(dir: &File, mut visit: impl FnMut(BulkRecord)) -> io::Result<()
         // SAFETY: byte view of initialized u64 storage; retained only during this call.
         let bytes =
             unsafe { std::slice::from_raw_parts(storage.as_ptr().cast::<u8>(), storage.len() * 8) };
-        parse_batch(bytes, count as usize, &mut visit)?;
+        parse_batch_fallible(bytes, count as usize, &mut visit)?;
     }
 }
 

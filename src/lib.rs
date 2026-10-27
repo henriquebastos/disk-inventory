@@ -10,7 +10,9 @@ pub mod inventory;
 pub mod layout;
 pub mod native;
 pub mod operations;
+pub mod scan_control;
 pub mod snapshot;
+use scan_control::{ScanControl, ScanPhase};
 pub mod tree_view;
 use std::os::darwin::fs::MetadataExt as DarwinMetadataExt;
 
@@ -185,11 +187,20 @@ impl Map {
     /// Only multiply-linked regular files need identity storage or path comparisons.
     /// Parent IDs precede children, so one reverse pass computes subtree totals.
     pub fn aggregate(&mut self) -> io::Result<()> {
-        for n in &mut self.nodes {
+        self.aggregate_controlled(None)
+    }
+    fn aggregate_controlled(&mut self, control: Option<&ScanControl>) -> io::Result<()> {
+        for (id, n) in self.nodes.iter_mut().enumerate() {
+            if id % 256 == 0 {
+                scan_control::check(control)?;
+            }
             n.accounted = n.raw;
         }
         let mut owners: HashMap<(u64, u64), usize> = HashMap::new();
         for id in 0..self.nodes.len() {
+            if id % 256 == 0 {
+                scan_control::check(control)?;
+            }
             let n = &self.nodes[id];
             if n.kind != Kind::File || n.links < 2 {
                 continue;
@@ -209,10 +220,16 @@ impl Map {
                 owners.insert(key, id);
             }
         }
-        for n in &mut self.nodes {
+        for (id, n) in self.nodes.iter_mut().enumerate() {
+            if id % 256 == 0 {
+                scan_control::check(control)?;
+            }
             n.subtree = n.accounted;
         }
         for id in (1..self.nodes.len()).rev() {
+            if id % 256 == 0 {
+                scan_control::check(control)?;
+            }
             let parent = self.nodes[id].parent as usize;
             self.nodes[parent].subtree = self.nodes[parent]
                 .subtree
@@ -306,6 +323,17 @@ fn scan_excluding_snapshot(
     workers: usize,
     excluded_snapshot: Option<(u64, u64)>,
 ) -> io::Result<Scan> {
+    scan_controlled(root, method, workers, excluded_snapshot, None)
+}
+
+fn scan_controlled(
+    root: &Path,
+    method: Method,
+    workers: usize,
+    excluded_snapshot: Option<(u64, u64)>,
+    control: Option<&ScanControl>,
+) -> io::Result<Scan> {
+    scan_control::check(control)?;
     if ![1, 2, 4, 8].contains(&workers) {
         return Err(invalid("workers must be 1, 2, 4, or 8"));
     }
@@ -320,13 +348,19 @@ fn scan_excluding_snapshot(
     }
     let start = Instant::now();
     let root_file = open_directory(root)?;
+    scan_control::check(control)?;
     let root_entry = Entry::metadata(&root_file.metadata()?)?;
     if root_entry.flags & native::SF_FIRMLINK != 0 {
         return Err(invalid("root is a firmlink"));
     }
     let device = root_entry.dev;
     let seen_dirs = HashSet::from([(device, root_entry.ino)]);
+    scan_control::check(control)?;
     let mounts = native::mount_paths()?;
+    scan_control::check(control)?;
+    if let Some(control) = control {
+        control.examined(1);
+    }
     let mut map = Map {
         root: root.to_path_buf(),
         nodes: Vec::new(),
@@ -355,6 +389,10 @@ fn scan_excluding_snapshot(
                     let (id, path, expected) = {
                         let mut state = shared.0.lock().unwrap();
                         loop {
+                            if control.is_some_and(|c| c.progress().phase == ScanPhase::Stopping) {
+                                shared.1.notify_all();
+                                return;
+                            }
                             if let Some(id) = state.pending.pop_front() {
                                 state.active += 1;
                                 let n = &state.map.nodes[id as usize];
@@ -367,8 +405,11 @@ fn scan_excluding_snapshot(
                         }
                     };
                     let result = (|| {
+                        scan_control::check(control)?;
                         let dir = open_directory(&path)?;
+                        scan_control::check(control)?;
                         let meta = dir.metadata()?;
+                        scan_control::check(control)?;
                         {
                             shared.0.lock().unwrap().map.counters.directory_fstats += 1;
                         }
@@ -379,19 +420,21 @@ fn scan_excluding_snapshot(
                         let mut visit = |record: native::BulkRecord| {
                             batch.push(record);
                             if batch.len() == 256 {
-                                merge(shared, mounts, device, id, &path, &mut batch);
+                                merge(shared, mounts, device, id, &path, &mut batch, control)?;
                             }
+                            Ok(())
                         };
                         let result = match method {
-                            Method::Bulk => native::enumerate(&dir, &mut visit),
+                            Method::Bulk => native::enumerate_controlled(&dir, &mut visit, control),
                             Method::Stat => (|| {
                                 for child in fs::read_dir(&path)? {
+                                    scan_control::check(control)?;
                                     match child {
                                         Ok(child) => visit(native::BulkRecord {
                                             name: child.file_name().as_bytes().to_vec(),
                                             result: fs::symlink_metadata(child.path())
                                                 .and_then(|m| Entry::metadata(&m)),
-                                        }),
+                                        })?,
                                         Err(error) => {
                                             shared.0.lock().unwrap().map.error(&path, error)
                                         }
@@ -400,7 +443,9 @@ fn scan_excluding_snapshot(
                                 Ok(())
                             })(),
                         };
-                        merge(shared, mounts, device, id, &path, &mut batch);
+                        // A failed merge retains its batch; do not count it again on Stop.
+                        scan_control::check(control)?;
+                        merge(shared, mounts, device, id, &path, &mut batch, control)?;
                         result
                     })();
                     let mut state = shared.0.lock().unwrap();
@@ -413,10 +458,14 @@ fn scan_excluding_snapshot(
             });
         }
     });
+    scan_control::check(control)?;
     let mut map = shared.0.into_inner().unwrap().map;
     let scan_time = start.elapsed();
     let aggregation = Instant::now();
-    map.aggregate()?;
+    if let Some(control) = control {
+        control.enter(ScanPhase::Accounting)?;
+    }
+    map.aggregate_controlled(control)?;
     Ok(Scan {
         map,
         scan_time,
@@ -431,7 +480,12 @@ fn merge(
     parent: u32,
     directory: &Path,
     batch: &mut Vec<native::BulkRecord>,
-) {
+    control: Option<&ScanControl>,
+) -> io::Result<()> {
+    if let Some(control) = control {
+        control.examined(batch.len());
+    }
+    scan_control::check(control)?;
     // Filesystem fallback calls occur outside the arena lock. At most 256 entries
     // per worker are staged; pending work is compact directory IDs, never paths.
     let mut fallbacks = 0;
@@ -444,6 +498,7 @@ fn merge(
             && e.flags & native::SF_FIRMLINK == 0
             && !mounts.contains(&directory.join(OsStr::from_bytes(&record.name)))
         {
+            scan_control::check(control)?;
             fallbacks += 1;
             record.result = fs::symlink_metadata(directory.join(OsStr::from_bytes(&record.name)))
                 .and_then(|m| {
@@ -463,6 +518,7 @@ fn merge(
                 });
         }
     }
+    scan_control::check(control)?;
     let mut state = shared.0.lock().unwrap();
     state.map.counters.metadata_fallbacks += fallbacks;
     for record in batch.drain(..) {
@@ -504,6 +560,7 @@ fn merge(
         }
     }
     shared.1.notify_all();
+    Ok(())
 }
 
 #[cfg(test)]

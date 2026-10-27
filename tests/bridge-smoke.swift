@@ -149,8 +149,20 @@ struct BridgeSmoke {
         let snapshot = base.appendingPathComponent("saved.dmap")
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
         try Data("owned synthetic fixture".utf8).write(to: source.appendingPathComponent("example"))
-        let native = try ExplorerSession.create(sourceRoot: Data(source.path.utf8), snapshotPath: Data(snapshot.path.utf8), workers: 1)
+        let stopped = ScanControl()
+        require(stopped.progress().phase == .ready && stopped.progress().cancellable, "independent control ready")
+        require(stopped.cancel(), "pre-create stop accepted")
+        try expectError({ if case .Cancelled = $0 { true } else { false } }) {
+            try ExplorerSession.createControlled(sourceRoot: Data(source.path.utf8), snapshotPath: Data(snapshot.path.utf8), workers: 1, control: stopped)
+        }
+        require(stopped.progress().phase == .cancelled && !FileManager.default.fileExists(atPath: snapshot.path), "cancelled never publishes")
+        let control = ScanControl()
+        let native = try ExplorerSession.createControlled(sourceRoot: Data(source.path.utf8), snapshotPath: Data(snapshot.path.utf8), workers: 1, control: control)
+        require(control.progress().phase == .complete && !control.progress().cancellable, "reopened and indexed")
+        require(control.progress().itemsExamined == 2 && !control.cancel(), "root plus file; too late to stop")
         require(try !native.status().simulated, "explicit native constructor")
+        _ = try ExplorerSession.create(sourceRoot: Data(source.path.utf8),
+            snapshotPath: Data(base.appendingPathComponent("uncontrolled.dmap").path.utf8), workers: 1)
         try FileManager.default.moveItem(at: source, to: base.appendingPathComponent("source-unavailable"))
         let offline = try ExplorerSession.openSnapshot(snapshotPath: Data(snapshot.path.utf8))
         let savedKey = try find(offline, "example")

@@ -38,15 +38,29 @@ impl<W: Write> Writer<W> {
     }
 }
 pub fn save(map: &Map, path: &Path) -> io::Result<()> {
-    publish(map, path, false)
+    publish(map, path, false, None)
 }
 
 /// Publish without replacing even a concurrently created destination.
 pub fn save_new(map: &Map, path: &Path) -> io::Result<()> {
-    publish(map, path, true)
+    publish(map, path, true, None)
 }
 
-fn publish(map: &Map, path: &Path, create_new: bool) -> io::Result<()> {
+pub(crate) fn save_new_controlled(
+    map: &Map,
+    path: &Path,
+    control: &crate::scan_control::ScanControl,
+) -> io::Result<()> {
+    publish(map, path, true, Some(control))
+}
+
+fn publish(
+    map: &Map,
+    path: &Path,
+    create_new: bool,
+    control: Option<&crate::scan_control::ScanControl>,
+) -> io::Result<()> {
+    crate::scan_control::check(control)?;
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -101,7 +115,10 @@ fn publish(map: &Map, path: &Path, create_new: bool) -> io::Result<()> {
             w.u64(v)?;
         }
         w.bytes(root)?;
-        for n in &map.nodes {
+        for (id, n) in map.nodes.iter().enumerate() {
+            if id % 256 == 0 {
+                crate::scan_control::check(control)?;
+            }
             w.u32(n.parent)?;
             w.u32(n.name_len)?;
             w.u64(n.name_offset)?;
@@ -113,16 +130,30 @@ fn publish(map: &Map, path: &Path, create_new: bool) -> io::Result<()> {
             // Reserved for format evolution, must remain zero.
             w.u64(0)?;
         }
-        w.bytes(&map.names)?;
+        for chunk in map.names.chunks(64 * 1024) {
+            crate::scan_control::check(control)?;
+            w.bytes(chunk)?;
+        }
         w.out.write_all(&w.checksum.to_le_bytes())?;
+        crate::scan_control::check(control)?;
         w.out.flush()?;
+        crate::scan_control::check(control)?;
         w.out.get_ref().sync_all()?;
+        if let Some(control) = control {
+            control.commit()?;
+        }
         if create_new {
             // Same-directory hard link is atomic and fails if any destination exists.
             fs::hard_link(&temporary, path)?;
+            if let Some(control) = control {
+                control.published();
+            }
             fs::remove_file(&temporary)?;
         } else {
             fs::rename(&temporary, path)?;
+            if let Some(control) = control {
+                control.published();
+            }
         }
         File::open(parent)?.sync_all()?;
         Ok(())

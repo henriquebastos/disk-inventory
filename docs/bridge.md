@@ -37,6 +37,8 @@ Generated entry points:
 ExplorerSession.openSnapshot(snapshotPath: Data) throws -> ExplorerSession
 ExplorerSession.create(sourceRoot: Data, snapshotPath: Data,
                        workers: UInt32) throws -> ExplorerSession
+ExplorerSession.createControlled(sourceRoot: Data, snapshotPath: Data,
+    workers: UInt32, control: ScanControl) throws -> ExplorerSession
 ExplorerSession.fixture(scenario: String) throws -> ExplorerSession
 ```
 
@@ -55,7 +57,7 @@ and nonthrowing `isBusy()`, `activeCallCount()`, `selectionQueryCount()`. Record
 [records.rs](../src/bridge/records.rs). Byte arrays generate **Data**, u64 generates
 **UInt64**, and raw paths remain authoritative; display names alone are lossy.
 Errors generate `BridgeError` cases including `InvalidEntry`, `WrongSession`,
-`ConsumedAction`, `PermissionDenied`, `NotFound`, `InvalidInput`, `Io`, `Internal`.
+`ConsumedAction`, `Cancelled`, `PermissionDenied`, `NotFound`, `InvalidInput`, `Io`, `Internal`.
 
 `EntryKey` is an opaque saved handle; compare with `sameEntry(other:)`. It is not
 an action capability. Parent keys are returned with rows; selection does not
@@ -77,8 +79,10 @@ preserves inside/outside/unknown. Scope subtraction is not disk space reclaimed.
 The session mutex serializes all saved reads and live operations. Dispatch calls,
 including constructors, off the main thread. `isBusy()` reads an independent
 atomic count of queued/running calls without acquiring that mutex; retain the
-last visible records while busy. Constructors have no handle to poll until they
-return, so callers own their loading indicator. `activeCallCount()` exposes that
+last visible records while busy. For controlled creation, construct `ScanControl()`
+before dispatch; `progress()` and `cancel()` never acquire session locks. See the
+[phase/publication contract](scan-control.md) for exact semantics and tests. Other
+constructors have no progress handle. `activeCallCount()` exposes that
 queued/running count. `selectionQueryCount()` counts saved-selection calls actually
 entered under the backend lock, including invalid keys, not merely dispatched work.
 These atomic diagnostics are not lock barriers. "presentation_and_delay_fixtures_are_isolated"

@@ -5,7 +5,7 @@ use crate::{
     invalid,
     layout::{Layout, LayoutOptions, Rect, TileKind},
 };
-use std::{collections::HashMap, io, time::Instant};
+use std::{io, time::Instant};
 pub const MAX_PIXELS: usize = 4_000_000;
 pub const MAX_REGIONS: usize = 1_000_000;
 #[derive(Clone, Copy, Debug)]
@@ -16,7 +16,7 @@ pub struct DiagramStats {
     pub child_visits: usize,
     /// Counted vector payload, excluding allocator/FFI/image-provider copies.
     pub retained_payload_bytes: usize,
-    /// Counted cushion surface map payload; not a peak-memory estimate.
+    /// Compatibility statistic: zero now that rasterization has no surface map.
     pub surface_payload_bytes: usize,
     pub layout_micros: u64,
     pub raster_micros: u64,
@@ -67,16 +67,6 @@ impl Explorer {
         let start = Instant::now();
         let mut rgba = vec![0u8; pixels * 4];
         let mut owners = vec![0; pixels];
-        let mut surfaces: HashMap<EntryHandle, [f64; 4]> = HashMap::new();
-        for group in &layout.groups {
-            let parent = group
-                .parent
-                .and_then(|p| surfaces.get(&p).copied())
-                .unwrap_or([0.0; 4]);
-            surfaces.insert(group.directory, ridge(parent, group.rect, group.depth));
-        }
-        let surface_payload_bytes =
-            surfaces.capacity() * std::mem::size_of::<(EntryHandle, [f64; 4])>();
         let mut aggregate_pixels = 0;
         for (i, tile) in layout.tiles.iter().enumerate() {
             let file = match tile.kind {
@@ -85,15 +75,10 @@ impl Explorer {
                 }
                 _ => None,
             };
-            let color = file
-                .map(|key| type_color(self.map.basename(key.index() as usize)))
-                .unwrap_or([100, 105, 115]);
-            let parent = tile
-                .parent
-                .and_then(|p| surfaces.get(&p).copied())
-                .unwrap_or([0.0; 4]);
-            let c = ridge(parent, tile.rect, tile.depth);
+            let color = file.map(|key| type_color(self.map.basename(key.index() as usize)));
             let r = tile.rect;
+            // CSS 155deg direction, normalized by the rectangle's projected span.
+            let gradient_span = r.width * GRADIENT_X + r.height * GRADIENT_Y;
             let x0 = (r.x - 0.5).ceil().max(0.0) as usize;
             let y0 = (r.y - 0.5).ceil().max(0.0) as usize;
             let x1 = ((r.x + r.width - 0.5).ceil().max(0.0) as usize).min(width as usize);
@@ -103,24 +88,24 @@ impl Explorer {
             }
             for y in y0..y1 {
                 for x in x0..x1 {
-                    let dx = 2.0 * c[0] * (x as f64 + 0.5) + c[1];
-                    let dy = 2.0 * c[2] * (y as f64 + 0.5) + c[3];
-                    let light = (0.50
-                        + 0.50
-                            * ((1.0 - 0.25 * dx - 0.35 * dy) / (1.0 + dx * dx + dy * dy).sqrt())
-                                .max(0.0))
-                    .clamp(0.35, 1.0);
-                    let border = if x1 - x0 > 3 && y1 - y0 > 3 && (x == x0 || y == y0) {
-                        0.60
+                    let rgb = if let Some(color) = color {
+                        let position = ((x as f64 + 0.5 - r.x) * GRADIENT_X
+                            + (y as f64 + 0.5 - r.y) * GRADIENT_Y)
+                            / gradient_span;
+                        let border = x1 - x0 > 3 && y1 - y0 > 3 && (x == x0 || y == y0);
+                        gradient_color(color, position, border)
                     } else {
-                        1.0
+                        // Aggregates are visibly distinct and never become file action targets.
+                        if (x + y) % 4 < 2 {
+                            [59, 59, 62]
+                        } else {
+                            [38, 38, 40]
+                        }
                     };
                     let at = y * width as usize + x;
                     debug_assert_eq!(owners[at], 0, "overlapping diagram pixels");
                     owners[at] = (i + 1) as u32 | if file.is_none() { 1 << 31 } else { 0 };
-                    for channel in 0..3 {
-                        rgba[at * 4 + channel] = (color[channel] as f64 * light * border) as u8;
-                    }
+                    rgba[at * 4..at * 4 + 3].copy_from_slice(&rgb);
                     rgba[at * 4 + 3] = 255;
                 }
             }
@@ -135,7 +120,7 @@ impl Explorer {
             groups: layout.groups.len(),
             child_visits: layout.work.child_ids_examined,
             retained_payload_bytes,
-            surface_payload_bytes,
+            surface_payload_bytes: 0,
             layout_micros,
             raster_micros: start.elapsed().as_micros() as u64,
             aggregate_pixels,
@@ -150,41 +135,57 @@ impl Explorer {
         })
     }
 }
-fn ridge(mut parent: [f64; 4], r: Rect, depth: u32) -> [f64; 4] {
-    // The region envelope bounds depth below i32::MAX; underflow just removes negligible ridges.
-    let h = 0.28 * r.width.min(r.height) * 0.80f64.powi(depth as i32);
-    let ax = -4.0 * h / (r.width * r.width);
-    let ay = -4.0 * h / (r.height * r.height);
-    parent[0] += ax;
-    parent[1] -= ax * (2.0 * r.x + r.width);
-    parent[2] += ay;
-    parent[3] -= ay * (2.0 * r.y + r.height);
-    parent
+// Restrained top-left highlight to bottom-right shade, without inherited depth ridges.
+const GRADIENT_X: f64 = 0.42261826174069944; // sin(155deg)
+const GRADIENT_Y: f64 = 0.9063077870366499; // -cos(155deg)
+fn gradient_color(color: [u8; 3], position: f64, border: bool) -> [u8; 3] {
+    let position = position.clamp(0.0, 1.0);
+    let highlight = 0.14 * (1.0 - position / 0.55).max(0.0);
+    let shade = 0.16 * ((position - 0.55) / 0.45).max(0.0);
+    color.map(|channel| {
+        let value = (channel as f64 + (255.0 - channel as f64) * highlight) * (1.0 - shade);
+        // Approximate the prototype's half-pixel black inset on the backing grid.
+        (value * if border { 0.775 } else { 1.0 }).round() as u8
+    })
 }
 fn type_color(name: &[u8]) -> [u8; 3] {
-    // Only known ASCII extensions matter; inspect at most six saved name bytes, without allocation.
-    let tail = &name[name.len().saturating_sub(6)..];
+    // Only known ASCII extensions matter; inspect at most twelve saved name bytes, without allocation.
+    let tail = &name[name.len().saturating_sub(12)..];
     let ext = tail
         .iter()
         .rposition(|&b| b == b'.')
         .map(|at| &tail[at + 1..])
         .unwrap_or_default();
+    // Prototype OKLCH L=.62 C=.11 hues, converted once to clipped 8-bit sRGB;
+    // documents/unknown use C=.02 H=260. No runtime color-space conversion.
     let types: &[(&[&[u8]], [u8; 3])] = &[
-        (&[b"png", b"jpg", b"jpeg", b"gif", b"heic"], [221, 157, 72]),
-        (&[b"mp4", b"mov", b"mkv", b"avi"], [92, 154, 215]),
-        (&[b"mp3", b"wav", b"flac", b"m4a"], [173, 120, 208]),
+        (&[b"png", b"jpg", b"jpeg", b"gif", b"heic"], [81, 153, 98]),
+        (&[b"mp4", b"mov", b"mkv", b"avi"], [79, 138, 198]),
+        (&[b"mp3", b"wav", b"flac", b"m4a"], [171, 109, 166]),
+        (&[b"zip", b"gz", b"dmg"], [173, 124, 47]),
+        (&[b"app"], [133, 122, 196]),
         (
-            &[b"rs", b"swift", b"c", b"h", b"m", b"js", b"py"],
-            [88, 177, 141],
+            &[
+                b"rs",
+                b"swift",
+                b"c",
+                b"h",
+                b"m",
+                b"js",
+                b"py",
+                b"o",
+                b"swiftmodule",
+            ],
+            [0, 153, 160],
         ),
-        (&[b"txt", b"md", b"pdf", b"doc"], [200, 134, 112]),
-        (&[b"zip", b"gz", b"dmg"], [181, 169, 90]),
+        (&[b"db", b"cache"], [190, 110, 82]),
+        (&[b"bin", b"sqlite"], [138, 140, 52]),
     ];
     types
         .iter()
         .find(|(extensions, _)| extensions.iter().any(|e| ext.eq_ignore_ascii_case(e)))
         .map(|(_, color)| *color)
-        .unwrap_or([132, 150, 170])
+        .unwrap_or([127, 135, 147])
 }
 
 impl Diagram {
@@ -227,32 +228,43 @@ impl Diagram {
     }
 }
 
-mod strips;
-pub(crate) use strips::place_strips;
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn type_palette_is_extension_stable_and_cushion_ridges_are_not_flat() {
+    fn type_palette_matches_prototype_and_flat_gradient_is_monotonic() {
+        for (name, color) in [
+            (b"a.png".as_slice(), [81, 153, 98]),
+            (b"a.mov", [79, 138, 198]),
+            (b"a.wav", [171, 109, 166]),
+            (b"a.zip", [173, 124, 47]),
+            (b"a.app", [133, 122, 196]),
+            (b"a.swift", [0, 153, 160]),
+            (b"a.cache", [190, 110, 82]),
+            (b"a.bin", [138, 140, 52]),
+            (b"a.pdf", [127, 135, 147]),
+        ] {
+            assert_eq!(type_color(name), color);
+            assert_eq!(gradient_color(color, 0.55, false), color);
+            let mut previous = gradient_color(color, 0.0, false);
+            for step in 1..=100 {
+                let next = gradient_color(color, step as f64 / 100.0, false);
+                assert!((0..3).all(|c| next[c] <= previous[c]));
+                previous = next;
+            }
+            assert_eq!(
+                gradient_color(color, 1.0, false),
+                color.map(|c| (c as f64 * 0.84).round() as u8)
+            );
+        }
         assert_eq!(type_color(b"a.png"), type_color(b"other.PNG"));
         assert_eq!(type_color(b"a.mov"), type_color(b"other.mp4"));
-        assert_ne!(type_color(b"a.png"), type_color(b"a.swift"));
         assert_eq!(type_color(b"no-extension"), type_color(b"unknown.zzz"));
-        let c = ridge(
-            [0.0; 4],
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 100.0,
-                height: 50.0,
-            },
-            0,
-        );
-        assert!(c[0] < 0.0 && c[2] < 0.0);
-        assert!((2.0 * c[0] * 50.0 + c[1]).abs() < 1e-12);
-        assert!((2.0 * c[2] * 25.0 + c[3]).abs() < 1e-12);
-        assert_ne!(2.0 * c[0] * 1.0 + c[1], 2.0 * c[0] * 99.0 + c[1]);
+        assert_eq!(type_color(b"\xff.PNG"), type_color(b"a.png"));
+        assert_eq!(type_color(b"notpng"), type_color(b"unknown.zzz"));
+        assert_eq!(type_color(b"a.swiftmodule"), type_color(b"a.swift"));
+        assert_eq!(type_color(b"a.SQLITE"), type_color(b"a.bin"));
+        assert_eq!(type_color(b"notsqlite"), type_color(b"unknown.zzz"));
     }
 }
 

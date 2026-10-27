@@ -170,14 +170,14 @@ fn rejected_subdivisions_consume_the_global_work_budget() {
             min_area: 0.0,
             max_depth: 4,
         };
-        for fixed in [false, true] {
+        for cumulative_endpoints in [false, true] {
             let layout = explorer
                 .layout_with_limits(
                     explorer.root_handle(),
                     options,
                     MAX_RECTANGLES,
                     MAX_DEPTH,
-                    fixed,
+                    cumulative_endpoints,
                 )
                 .unwrap();
             validate(&layout, options);
@@ -689,7 +689,7 @@ fn diagram_pixel_detail_and_zoom_preserve_weights_and_hit_authority() {
 }
 
 #[test]
-fn diagram_fixed_strips_align_equal_siblings_in_wide_tall_and_retina_frames() {
+fn diagram_squarify_places_compact_siblings_in_wide_tall_and_retina_frames() {
     let mut map = tree();
     map.nodes[0].raw = 0;
     map.nodes[0].accounted = 0;
@@ -701,19 +701,50 @@ fn diagram_fixed_strips_align_equal_siblings_in_wide_tall_and_retina_frames() {
     for (width, height) in [(1000, 300), (300, 1000), (2000, 600), (600, 2000)] {
         let frame = e.diagram(e.root_handle(), width, height).unwrap();
         assert_eq!(frame.layout.tiles.len(), 72);
-        let mut starts = std::collections::BTreeMap::new();
         for tile in &frame.layout.tiles {
-            let start = if width > height {
-                tile.rect.y
-            } else {
-                tile.rect.x
-            };
-            *starts.entry(start.to_bits()).or_insert(0) += 1;
             let expected = width as f64 * height as f64 / 72.0;
             assert!((tile.rect.area() - expected).abs() < expected * 1e-9);
         }
-        assert_eq!(starts.len(), 3);
-        assert!(starts.values().all(|&count| count == 24));
+        // Squarify starts with five compact cells on the SHORT side, unlike the
+        // former three long-side strips of 24 siblings. Scaling/transposing is stable.
+        let first = frame.layout.tiles[0].rect;
+        let scale = width.max(height) as f64 / 1000.0;
+        let (long, short) = if width > height {
+            (first.width, first.height)
+        } else {
+            (first.height, first.width)
+        };
+        assert!((long - 1000.0 / 72.0 * 5.0 * scale).abs() < 1e-9);
+        assert!((short - 60.0 * scale).abs() < 1e-9);
+        // The existing legacy API's algorithm and limits are unchanged.
+        let legacy = e
+            .layout(
+                e.root_handle(),
+                LayoutOptions {
+                    viewport: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: width as f64,
+                        height: height as f64,
+                    },
+                    max_rectangles: 256,
+                    min_area: 1.0,
+                    max_depth: 64,
+                },
+            )
+            .unwrap();
+        for (new, old) in frame.layout.tiles.iter().zip(&legacy.tiles) {
+            for (a, b) in [
+                (new.rect.x, old.rect.x),
+                (new.rect.y, old.rect.y),
+                (new.rect.width, old.rect.width),
+                (new.rect.height, old.rect.height),
+            ] {
+                assert!((a - b).abs() < 1e-9);
+            }
+            assert_eq!(new.bytes, old.bytes);
+            assert_eq!(new.kind, old.kind);
+        }
         for y in 0..height {
             for x in 0..width {
                 let hit = frame.hit(x, y).expect("no pixel-center gaps");
@@ -790,4 +821,127 @@ fn diagram_skewed_nested_geometry_keeps_area_coverage_zero_and_budget_semantics(
     let frame = e.diagram(e.root_handle(), 32, 32).unwrap();
     assert!(frame.layout.tiles.is_empty());
     assert!(frame.hit(0, 0).is_none());
+}
+
+#[test]
+fn diagram_integer_precision_hardlinks_and_zero_entries_survive_squarify() {
+    let mut map = tree();
+    map.nodes[0].raw = 0;
+    // Exact total u64::MAX, with low bits that cannot be represented by f64.
+    let weights = [
+        (1u64 << 63) + 1,
+        (1u64 << 62) + 3,
+        (1u64 << 61) + 5,
+        (1u64 << 61) - 10,
+    ];
+    let mut ids = Vec::new();
+    for (i, weight) in weights.into_iter().enumerate() {
+        ids.push(add(
+            &mut map,
+            0,
+            format!("a-{i}.mov").as_bytes(),
+            Kind::File,
+            weight,
+        ));
+    }
+    let alias = add(&mut map, 0, b"z-alias.mov", Kind::File, weights[0]);
+    map.nodes[ids[0] as usize].links = 2;
+    map.nodes[alias as usize].links = 2;
+    map.nodes[alias as usize].ino = map.nodes[ids[0] as usize].ino;
+    let zero = add(&mut map, 0, b"zero", Kind::File, 0);
+    let e = explorer(map);
+    for (width, height) in [(160, 100), (100, 160), (1, 1)] {
+        let f = e.diagram(e.root_handle(), width, height).unwrap();
+        assert_eq!(f.layout.total_bytes, u64::MAX);
+        assert_eq!(
+            f.layout.tiles.iter().map(|t| t.bytes as u128).sum::<u128>(),
+            u64::MAX as u128
+        );
+        assert!(f.region(e.handle(alias)).is_none());
+        assert!(f.region(e.handle(zero)).is_none());
+        if width > 1 {
+            for (&id, weight) in ids.iter().zip(weights) {
+                let tile = f
+                    .layout
+                    .tiles
+                    .iter()
+                    .find(|t| t.kind == TileKind::Entry(e.handle(id)))
+                    .unwrap();
+                assert_eq!(tile.bytes, weight);
+            }
+        }
+        for y in 0..height {
+            for x in 0..width {
+                let hit = f.hit(x, y).unwrap();
+                assert_eq!(hit.actionable, width > 1);
+            }
+        }
+        let budget = (width as usize * height as usize).min(crate::diagram::MAX_REGIONS);
+        assert!(f.stats.tiles + f.stats.groups <= budget);
+        assert!(f.stats.child_visits <= 2 * budget);
+    }
+    let tree = crate::tree_view::TreeView::new(&e, e.root_handle()).unwrap();
+    let rows = tree.rows(&e, 0, 10).unwrap();
+    assert_eq!(rows.rows.len(), 6);
+    for id in [alias, zero] {
+        let entry = &rows
+            .rows
+            .iter()
+            .find(|r| r.entry.handle == e.handle(id))
+            .unwrap()
+            .entry;
+        assert_eq!(entry.accounted_bytes, 0);
+    }
+    assert_eq!(
+        e.entry(e.handle(alias)).unwrap().allocated_bytes,
+        weights[0]
+    );
+}
+
+#[test]
+fn diagram_flat_gradient_has_no_ancestor_ridges_and_aggregates_are_hatched() {
+    let make = |depth| {
+        let mut map = tree();
+        map.nodes[0].raw = 0;
+        let mut parent = 0;
+        for _ in 0..depth {
+            parent = add(&mut map, parent, b"nested", Kind::Dir, 0);
+        }
+        add(&mut map, parent, b"image.png", Kind::File, 100);
+        explorer(map)
+    };
+    let shallow = make(0);
+    let nested = make(12);
+    let a = shallow.diagram(shallow.root_handle(), 101, 81).unwrap();
+    let b = nested.diagram(nested.root_handle(), 101, 81).unwrap();
+    assert_eq!(a.rgba(), b.rgba(), "ancestors must not add lighting ridges");
+    assert_eq!(a.stats.surface_payload_bytes, 0);
+    assert_eq!(b.stats.surface_payload_bytes, 0);
+    let pixel = |x: usize, y: usize| &a.rgba()[(y * 101 + x) * 4..(y * 101 + x) * 4 + 3];
+    // Real raster, not just the color helper: only the first edge is darkened;
+    // the interior is a restrained monotonic 155-degree gradient, not a cushion.
+    for y in 2..79 {
+        for x in 2..99 {
+            assert!((0..3).all(|c| pixel(x, y)[c] <= pixel(x - 1, y)[c]));
+            assert!((0..3).all(|c| pixel(x, y)[c] <= pixel(x, y - 1)[c]));
+        }
+    }
+    assert_eq!(pixel(1, 1), [105, 167, 119]);
+    assert_eq!(pixel(99, 79), [69, 129, 83]);
+    let aggregate = explorer(tree());
+    let f = aggregate.diagram(aggregate.root_handle(), 8, 8).unwrap();
+    assert_eq!(f.stats.aggregate_pixels, 64);
+    for y in 0..8 {
+        for x in 0..8 {
+            let at = (y * 8 + x) * 4;
+            let color = if (x + y) % 4 < 2 {
+                [59, 59, 62]
+            } else {
+                [38, 38, 40]
+            };
+            assert_eq!(&f.rgba()[at..at + 3], color);
+            assert_eq!(f.rgba()[at + 3], 255);
+            assert!(!f.hit(x as u32, y as u32).unwrap().actionable);
+        }
+    }
 }

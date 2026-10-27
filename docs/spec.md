@@ -42,6 +42,11 @@ The core's `Inventory::create(root, output, options)`, `open(file)` and
 `Kind`, `allocated_bytes`, `accounted_bytes`, and `subtree_bytes`. The empty path is
 the root; `root()` is absolute. Access is snapshot order, not canonical ordering.
 
+The opt-in `Inventory::create_controlled` adds sampled metadata progress and
+cooperative Stop without changing snapshot bytes or defaults. Its atomic publication
+boundary, generated API and source-named regression tests are specified in
+[scan-control.md](scan-control.md). It still requires a new destination.
+
 `create` saves even partial results; `is_partial()` and `counters()` expose that
 state. `sync` reopens the saved map and rescans only its full original root. Fatal
 or partial scans do not publish. Partial sync returns an `io::Error` containing
@@ -158,6 +163,6 @@ publication fault injection and crash recovery are untested. APFS may reject non
 fixture names; synthetic parser/snapshot/export tests guarantee byte coverage.
 
 The native bitmap diagram and sparse virtual tree are additional presentation APIs;
-see [native-diagram.md](native-diagram.md) for their pixel/work bounds, fixed-strip
+see [native-diagram.md](native-diagram.md) for their pixel/work bounds, squarified
 placement, revision invalidation and source-named tests. The legacy bounded layout
 API retains its existing placement and behavior.
