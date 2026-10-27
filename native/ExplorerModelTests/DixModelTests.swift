@@ -452,7 +452,7 @@ import XCTest
     try await wait { model.aggregate != nil }
     XCTAssertNil(model.selected)
     XCTAssertFalse(model.canAct)
-    XCTAssertTrue(model.aggregateText!.contains(exactBytes(total)))
+    XCTAssertTrue(model.aggregateText!.contains(model.numbers.storage(total)))
     XCTAssertNil(model.prepare(.permanentlyDelete))
     XCTAssertNil(model.pending)
   }
@@ -591,4 +591,111 @@ import XCTest
     }
   }
 
+  func testUsageBarPercentRoundsHalfUpKeepsSliverAndEmptiesZeroOrUnknown() {
+    XCTAssertEqual(usageBarPercent(0, of: 1000), 0)
+    XCTAssertEqual(usageBarPercent(5, of: 0), 0)
+    XCTAssertEqual(usageBarPercent(1, of: 1000), 2)
+    XCTAssertEqual(usageBarPercent(24, of: 1000), 2)
+    XCTAssertEqual(usageBarPercent(25, of: 1000), 3)
+    XCTAssertEqual(usageBarPercent(334, of: 1000), 33)
+    XCTAssertEqual(usageBarPercent(335, of: 1000), 34)
+    XCTAssertEqual(usageBarPercent(1000, of: 1000), 100)
+    XCTAssertEqual(usageBarPercent(3000, of: 1000), 100)
+    XCTAssertEqual(usageBarPercent(.max, of: .max), 100)
+    XCTAssertEqual(usageBarPercent(.max / 2, of: .max), 50)
+    // 2^60 + 1 bytes of 2^61 + 2: exactly 50%, beyond Double's integer precision.
+    XCTAssertEqual(usageBarPercent(1 << 60 + 1, of: 1 << 61 + 2), 50)
+    // 33.5% exactly, then one byte less; Double would round both counts to 67 * 2^53.
+    XCTAssertEqual(usageBarPercent(67 << 53, of: 200 << 53), 34)
+    XCTAssertEqual(usageBarPercent(67 << 53 - 1, of: 200 << 53), 33)
+  }
+
+  func testTreeRowsDrawMapSwatchesAndFocusRelativeUsageBars() async throws {
+    let model = try await load()
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
+      backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    let host = NSHostingView(rootView: ContentsTree(model: model))
+    window.contentView = host
+    host.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    func table(in view: NSView) -> ContentsTree.Table? {
+      if let table = view as? ContentsTree.Table { return table }
+      return view.subviews.compactMap { table(in: $0) }.first
+    }
+    let table = try XCTUnwrap(table(in: host))
+    model.expand(try entry("Tiny files", model), expanded: true)
+    try await wait { !model.treeEditing && table.numberOfRows == 4 }
+    // Expansion reloads rows after the initial host layout. Lay out the current row views.
+    host.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    func cell(_ name: String) throws -> ContentsTree.Cell {
+      let row = try XCTUnwrap(model.outline?.rows.firstIndex { $0.entry.displayName == name })
+      return try XCTUnwrap(
+        table.view(atColumn: 0, row: row, makeIfNecessary: true) as? ContentsTree.Cell)
+    }
+    func rgb(_ color: NSColor) -> UInt32 {
+      let c = color.usingColorSpace(.sRGB)!
+      return UInt32((c.redComponent * 255).rounded()) << 16
+        | UInt32((c.greenComponent * 255).rounded()) << 8
+        | UInt32((c.blueComponent * 255).rounded())
+    }
+    // Same base colors as Rust's map file tiles (blue video); directories stay neutral squares.
+    let movie = try cell("Movie.mov")
+    XCTAssertFalse(movie.swatch.directory)
+    XCTAssertEqual(rgb(movie.swatch.color), 0x4f8ac6)
+    for name in ["Projects", "Tiny files", "Notes"] {
+      XCTAssertTrue(try cell(name).swatch.directory, name)
+      XCTAssertEqual(rgb(try cell(name).swatch.color), 0x7a7a7f, name)
+    }
+    // 67,108,864 and 69,636,096 of 136,769,536 focus bytes; 20,480 bytes keep the sliver.
+    XCTAssertEqual(movie.bar.percent, 49)
+    XCTAssertEqual(try cell("Projects").bar.percent, 51)
+    XCTAssertEqual(try cell("Tiny files").bar.percent, 2)
+    XCTAssertEqual(try cell("Notes").bar.percent, 2)
+    XCTAssertFalse(movie.swatch.isAccessibilityElement())
+    XCTAssertFalse(movie.bar.isAccessibilityElement())
+    XCTAssertFalse(movie.bar.emphasized)
+    movie.backgroundStyle = .emphasized
+    XCTAssertTrue(movie.bar.emphasized)
+    // Row publication can create this cell after the host's initial layout pass.
+    table.layoutSubtreeIfNeeded()
+    movie.layoutSubtreeIfNeeded()
+    XCTAssertGreaterThan(movie.bounds.width, 0)
+    XCTAssertGreaterThan(movie.bar.frame.width, 0)
+    XCTAssertLessThanOrEqual(movie.name.frame.maxX, movie.bar.frame.minX)
+    XCTAssertLessThanOrEqual(movie.bar.frame.maxX, movie.bounds.width)
+    let focus = model.records!.focus
+    XCTAssertEqual(focus.subtreeBytes, 136_769_536)
+  }
+
+  func testUnknownAllocationRowKeepsAnEmptyUsageBar() async throws {
+    let model = try await load("unknown-allocation")
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
+      backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    let host = NSHostingView(rootView: ContentsTree(model: model))
+    window.contentView = host
+    host.layoutSubtreeIfNeeded()
+    model.refresh()
+    try await wait { model.records?.status.stale == true && !model.working }
+    func table(in view: NSView) -> ContentsTree.Table? {
+      if let table = view as? ContentsTree.Table { return table }
+      return view.subviews.compactMap { table(in: $0) }.first
+    }
+    let table = try XCTUnwrap(table(in: host))
+    host.layoutSubtreeIfNeeded()
+    let row = try XCTUnwrap(model.outline?.rows.firstIndex { $0.entry.displayName == "unknown-a" })
+    let unknown = model.outline!.rows[row].entry
+    XCTAssertEqual(unknown.subtreeBytes, 0)
+    XCTAssertGreaterThan(unknown.allocatedBytes, 0)
+    let cell = try XCTUnwrap(
+      table.view(atColumn: 0, row: row, makeIfNecessary: true) as? ContentsTree.Cell)
+    XCTAssertEqual(cell.bar.percent, 0)
+    XCTAssertFalse(cell.swatch.directory)
+  }
 }

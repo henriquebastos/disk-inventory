@@ -102,7 +102,7 @@ fn confirmation_pins_cancel_drop_replay_and_cross_session_are_real() {
     let a = s
         .prepare(key.clone(), ActionKind::PermanentlyDelete)
         .unwrap();
-    assert_eq!(a.details().raw_path, b"/simulated-inventory/large-file");
+    assert_eq!(a.details().raw_path, b"/Workspace/large-file");
     assert_eq!(memory(&s, |f| f.pinned_count()), 1);
     assert!(matches!(
         other.execute(a.clone()),
@@ -138,7 +138,7 @@ fn changed_after_prepare_consumes_action_without_mutating_replacement() {
     let old_frame = s.clone().diagram(root.clone(), 64, 32).unwrap();
     memory(&s, |f| {
         f.insert(
-            "/simulated-inventory/large-file",
+            "/Workspace/large-file",
             fixture::metadata(1000, crate::Kind::File, 7),
         )
     });
@@ -239,7 +239,7 @@ fn fixture_errors_fail_closed_and_unknown_allocation_stays_explicit() {
     assert!(s.refresh_directory(root).unwrap().stale);
     memory(&s, |f| {
         assert_eq!(
-            f.get(std::path::Path::new("/simulated-inventory/unknown-a"))
+            f.get(std::path::Path::new("/Workspace/unknown-a"))
                 .unwrap()
                 .identity,
             Identity {
@@ -372,7 +372,7 @@ fn presentation_and_delay_fixtures_are_isolated() {
     assert_eq!(memory(&delayed, |f| f.metadata_delays.len()), 1);
     assert_eq!(
         memory(&delayed, |f| f.metadata_delays
-            [std::path::Path::new("/simulated-inventory/large-file")]),
+            [std::path::Path::new("/Workspace/large-file")]),
         std::time::Duration::from_secs(1)
     );
     for s in [&presentation, &delayed] {
@@ -532,4 +532,141 @@ fn diagram_and_virtual_tree_are_native_free_bounded_and_revision_guarded() {
     assert!(tree.rows(0, 16).is_err());
     assert!(tree.visible_row(projects.clone()).is_err());
     assert!(tree.reveal(projects).is_err());
+}
+
+#[test]
+fn outline_swatch_colors_match_map_file_tiles_and_directories_have_none() {
+    let s = session("dix");
+    let root = s.status().unwrap().root.key;
+    let tree = s.clone().tree(root.clone()).unwrap();
+    let tiny = find(&s, b"Tiny files");
+    tree.expand(tiny.clone(), true).unwrap();
+    let notes = s
+        .children(tiny, 0, 16)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.basename == b"Notes")
+        .unwrap()
+        .key;
+    tree.expand(notes.clone(), true).unwrap();
+    let rows = tree.rows(0, 32).unwrap().rows;
+    let swatch = |name: &str| {
+        rows.iter()
+            .find(|r| r.entry.display_name == name)
+            .unwrap()
+            .map_rgb
+    };
+    for name in ["Projects", "Tiny files", "Notes"] {
+        assert_eq!(swatch(name), None, "{name}");
+    }
+    for (name, rgb) in [
+        ("Movie.mov", 0x4f8ac6),
+        ("eight-KiB.png", 0x519962),
+        ("four-KiB.txt", 0x7f8793),
+        ("empty.txt", 0x7f8793),
+    ] {
+        assert_eq!(swatch(name), Some(rgb), "{name}");
+    }
+    // The base color lies inside the rendered gradient of the same file tile.
+    let frame = s.clone().diagram(notes, 200, 100).unwrap();
+    let image = frame.bitmap();
+    for name in ["eight-KiB.png", "four-KiB.txt"] {
+        let base = swatch(name).unwrap().to_be_bytes();
+        let (mut low, mut high) = ([255u8; 3], [0u8; 3]);
+        let mut owned = 0;
+        for y in 1..image.height {
+            for x in 1..image.width {
+                let Some(hit) = frame.hit(x, y).unwrap() else {
+                    continue;
+                };
+                // Skip the backing-pixel inset border at each tile's top and left edge.
+                if hit.entry.display_name != name
+                    || x as f64 <= hit.rect.x + 1.0
+                    || y as f64 <= hit.rect.y + 1.0
+                {
+                    continue;
+                }
+                owned += 1;
+                let at = (y * image.width + x) as usize * 4;
+                for c in 0..3 {
+                    low[c] = low[c].min(image.rgba[at + c]);
+                    high[c] = high[c].max(image.rgba[at + c]);
+                }
+            }
+        }
+        assert!(owned > 100, "{name} owns {owned} pixels");
+        assert!(
+            (0..3).all(|c| low[c] <= base[c + 1] && base[c + 1] <= high[c]),
+            "{name}: {low:?} <= {base:?} <= {high:?}"
+        );
+    }
+}
+
+#[test]
+fn presentation_trash_inside_moves_a_visible_tile_to_a_visible_destination() {
+    let s = session("presentation-trash-inside");
+    let target = find(&s, b"large-file");
+    let frame = |s: &Arc<ExplorerSession>| {
+        s.clone()
+            .diagram(s.status().unwrap().root.key, 640, 400)
+            .unwrap()
+    };
+    let before = frame(&s).region(target.clone()).unwrap().unwrap();
+    assert!(before.width >= 8. && before.height >= 8.);
+    let action = s.prepare(target.clone(), ActionKind::Trash).unwrap();
+    let report = s.execute(action).unwrap();
+    assert!(matches!(
+        report.mutation,
+        MutationOutcome::Trashed { destination } if destination == b"/Workspace/trash/moved"
+    ));
+    assert!(matches!(
+        report.scope,
+        Some(TrashScope::Inside { relative_path }) if relative_path == b"trash/moved"
+    ));
+    // The moved entry keeps its saved key, so the new frame can locate the destination tile.
+    assert_eq!(
+        s.selection(target.clone()).unwrap().relative_path,
+        b"trash/moved"
+    );
+    let after = frame(&s);
+    let rect = after.region(target).unwrap().unwrap();
+    assert!(rect.width >= 8. && rect.height >= 8.);
+    let dx = rect.x + rect.width / 2. - before.x - before.width / 2.;
+    let dy = rect.y + rect.height / 2. - before.y - before.height / 2.;
+    assert!(dx.hypot(dy) > 80., "travel endpoints must visibly differ");
+    let hit = after
+        .hit(
+            (rect.x + rect.width / 2.) as u32,
+            (rect.y + rect.height / 2.) as u32,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(hit.actionable && hit.relative_path == b"trash/moved");
+    // The original over-2^53 Trash scenario keeps its single aggregate map.
+    let original = session("trash-inside");
+    let large = find(&original, b"large-file");
+    assert!(frame(&original).region(large).unwrap().is_none());
+}
+
+#[test]
+fn presentation_trash_late_target_has_a_region_outside_accessibility_targets() {
+    let s = session("presentation-trash-late-target");
+    let key = find(&s, b"large-file");
+    let action = s.prepare(key.clone(), ActionKind::Trash).unwrap();
+    s.execute(action).unwrap();
+    let frame = s
+        .clone()
+        .diagram(s.status().unwrap().root.key, 650, 520)
+        .unwrap();
+    assert!(frame.region(key.clone()).unwrap().is_some());
+    assert_eq!(s.selection(key).unwrap().relative_path, b"trash/moved");
+    assert_eq!(frame.targets().unwrap().len(), 24);
+    assert!(
+        frame
+            .targets()
+            .unwrap()
+            .iter()
+            .all(|t| t.relative_path != b"trash/moved")
+    );
 }

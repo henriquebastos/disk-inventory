@@ -122,6 +122,9 @@ A failed constructor rebuilds the retained session before ending read-only repla
 
 [src/diagram.rs](../src/diagram.rs):
 "type_palette_matches_prototype_and_flat_gradient_is_monotonic".
+[src/bridge/tests.rs](../src/bridge/tests.rs)
+"outline_swatch_colors_match_map_file_tiles_and_directories_have_none" checks that
+tree rows carry the base color of their map file tile and that directories carry none.
 [src/diagram/scale_tests.rs](../src/diagram/scale_tests.rs):
 "million_file_diagram_respects_pixel_region_work_and_memory_envelopes" records
 one-million-file/max-pixel core payload, RSS and timing, excluding FFI/Swift/display.
@@ -169,6 +172,11 @@ coverage, bounded visits, no source access and revision guards.
 - "testOffscreenAppKitTrackingKeyboardAndDisclosureCallbacks": actual native
   disclosure/key/tracking callbacks. Move/enter events must not read `clickCount`;
   AppKit raises an exception for that message.
+- "testUsageBarPercentRoundsHalfUpKeepsSliverAndEmptiesZeroOrUnknown": integer
+  rounding beyond Double precision, the sliver, clamping and empty bars.
+- "testTreeRowsDrawMapSwatchesAndFocusRelativeUsageBars" and
+  "testUnknownAllocationRowKeepsAnEmptyUsageBar": native cells use map colors,
+  focus-relative bars and decorative accessibility state.
 
 [IntegrationFixTests.swift](../native/ExplorerModelTests/IntegrationFixTests.swift):
 
@@ -182,3 +190,7 @@ coverage, bounded visits, no source access and revision guards.
 Foreground input, modal operations and screenshots are tested separately in
 [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift), as listed in
 [native-explorer.md](native-explorer.md). They require an unlocked interactive console.
+
+[NativeNumberFormatTests.swift](../native/ExplorerModelTests/NativeNumberFormatTests.swift):
+"testDecimalStorageUsesLocaleAndPreservesUnsignedRange" checks decimal units, grouped counts, zero and UInt64.max with en_US and pt_BR.
+"testVisibleTreeSizeUsesInjectedLocaleWithoutChangingAccounting" checks native size cells against unchanged exact counts.

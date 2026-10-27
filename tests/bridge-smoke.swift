@@ -55,7 +55,7 @@ struct BridgeSmoke {
         let live = try session.liveMetadata(key: large)
         require(live.logicalBytes == (UInt64(1) << 53) + 140, "explicit live metadata")
         let cancelled = try session.prepare(key: large, action: .trash)
-        require(cancelled.details().rawPath == Data("/simulated-inventory/large-file".utf8), "confirmation raw path")
+        require(cancelled.details().rawPath == Data("/Workspace/large-file".utf8), "confirmation raw path")
         try cancelled.cancel()
         try expectError({ if case .ConsumedAction = $0 { true } else { false } }) { try session.execute(action: cancelled) }
         let other = try ExplorerSession.fixture(scenario: "ordinary")

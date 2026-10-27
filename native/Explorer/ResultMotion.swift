@@ -2,7 +2,7 @@ import AppKit
 import Observation
 
 struct RemovalMotionPlan {
-  enum Style: Equatable { case poof, travel, fade }
+  enum Style: String { case poof, travel, fade }
   let style: Style
   let source: Rectangle
   let destination: Rectangle?
@@ -39,6 +39,9 @@ struct RemovalMotionPlan {
   private(set) var previous: DiagramPicture?
   private(set) var plan: RemovalMotionPlan?
   private(set) var fraction = 0.0
+  /// Style and clock ticks of the most recent motion that started; fixture UI tests read them.
+  private(set) var lastStyle: RemovalMotionPlan.Style?
+  private(set) var lastTicks = 0
   private var version = 0
   var active: Bool { previous != nil }
   func cancel() {
@@ -56,8 +59,11 @@ struct RemovalMotionPlan {
     let generation = version
     self.previous = previous
     self.plan = plan
+    lastStyle = plan.style
+    lastTicks = 0
     let start = ContinuousClock.now
     while generation == version {
+      lastTicks += 1
       let elapsed = start.duration(to: .now)
       fraction = min(
         1, Double(elapsed.components.seconds) * 5 + Double(elapsed.components.attoseconds) / 2e17)

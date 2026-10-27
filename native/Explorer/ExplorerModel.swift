@@ -2,9 +2,6 @@ import AppKit
 import Observation
 
 func displayPath(_ data: Data) -> String { String(decoding: data, as: UTF8.self) }
-func exactBytes(_ value: UInt64) -> String {
-  "\(value.formatted(.number.grouping(.automatic))) bytes"
-}
 func entryName(_ entry: EntryRecord) -> String {
   entry.displayName.isEmpty ? "Inventory root" : entry.displayName
 }
@@ -45,6 +42,7 @@ struct PendingConfirmation: Identifiable {
   private var hoverVersion = 0
   private var viewWorkerRunning = false
   private var viewRequest: ViewRequest?
+  private var recoveryToken: UUID?
   private struct ViewRequest {
     let session: ExplorerSession
     let focus: EntryKey
@@ -53,6 +51,8 @@ struct PendingConfirmation: Identifiable {
     let sessionVersion: Int
     let viewVersion: Int
     let restore: NavigationContext?
+    let recovery: Bool
+    let selection: EntryKey?
     let done: CheckedContinuation<Void, Never>
   }
   var treeEditing = false
@@ -91,12 +91,17 @@ struct PendingConfirmation: Identifiable {
   var selected: EntryRecord?
   var selectionPath: String?
   var selectionRawPath: Data?
+  let numbers: NativeNumberFormat
   let scan = ScanCoordinator()
   let motion = ResultMotion()
   private let storage: ManagedInventoryStorage?
   var lastInventory: ManagedInventory?
   var scanDate: Date?
-  var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+  /// UI acceptance override from DI_REDUCE_MOTION=1, honored only in fixture mode.
+  let fixtureReduceMotion: Bool
+  var reduceMotion: Bool {
+    fixtureReduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+  }
   var loading = false
   private(set) var replacingSession = false
   var working = false
@@ -120,6 +125,8 @@ struct PendingConfirmation: Identifiable {
   var viewport = CGSize(width: 650, height: 520)
   var rasterReduced = false
   let fixtureMode: Bool
+  /// Fixture mode marks only the window title; the content matches production.
+  var windowTitle: String { fixtureMode ? "Disk Inventory — SIMULATED" : "Disk Inventory" }
   private var sessionVersion = 0
   private var viewVersion = 0
   private var selectionVersion = 0
@@ -150,11 +157,14 @@ struct PendingConfirmation: Identifiable {
   init(
     arguments: [String] = ProcessInfo.processInfo.arguments,
     environment: [String: String] = ProcessInfo.processInfo.environment,
-    storage: ManagedInventoryStorage? = nil
+    storage: ManagedInventoryStorage? = nil,
+    numbers: NativeNumberFormat = .system
   ) {
+    self.numbers = numbers
     fixtureMode =
       arguments.contains("--fixture-mode") || arguments.contains("--scenario")
       || environment["DI_UI_TEST"] != nil
+    fixtureReduceMotion = fixtureMode && environment["DI_REDUCE_MOTION"] == "1"
     self.storage =
       storage ?? (fixtureMode ? nil : try? ManagedInventoryStorage.applicationSupport())
     if !fixtureMode, let storage = self.storage {
@@ -184,6 +194,7 @@ struct PendingConfirmation: Identifiable {
   ) {
     scan.stopPolling(cancelScan: true)
     motion.cancel()
+    recoveryToken = nil
     if let scanControl { scan.begin(scanControl) }
     cancelConfirmation()
     invalidatePresentation()
@@ -273,10 +284,13 @@ struct PendingConfirmation: Identifiable {
     }
   }
 
-  func invalidatePresentation() {
+  func invalidatePresentation(retainingRows: Bool = false) {
     tree = nil
-    outline = nil
-    selectedRow = nil
+    // Retain only the bounded display slice, never the obsolete tree query handle.
+    if !retainingRows {
+      outline = nil
+      selectedRow = nil
+    }
     selectedRegion = nil
     hover = nil
     outlineVersion += 1
@@ -291,7 +305,9 @@ struct PendingConfirmation: Identifiable {
     regionRequest = nil
     parentRequest = nil
   }
-  func updateView(focus: EntryKey) async {
+  func updateView(focus: EntryKey, recovery: Bool = false, preserving selection: EntryKey? = nil)
+    async
+  {
     guard let s = session else { return }
     viewVersion += 1
     let version = viewVersion
@@ -304,7 +320,8 @@ struct PendingConfirmation: Identifiable {
       viewRequest?.done.resume()
       viewRequest = ViewRequest(
         session: s, focus: focus, tree: reuse, size: viewport,
-        sessionVersion: sessionVersion, viewVersion: version, restore: restore, done: done)
+        sessionVersion: sessionVersion, viewVersion: version, restore: restore,
+        recovery: recovery, selection: selection, done: done)
       guard !viewWorkerRunning else { return }
       viewWorkerRunning = true
       Task {
@@ -329,8 +346,11 @@ struct PendingConfirmation: Identifiable {
                 }
               }
               let rows: OutlineSlice?
-              let offset: UInt64
-              if request.tree == nil || request.restore != nil {
+              var offset: UInt64
+              if request.recovery {
+                rows = nil
+                offset = 0
+              } else if request.tree == nil || request.restore != nil {
                 let position = request.restore?.scrollRow ?? 0
                 let total = try tree.rows(offset: UInt64.max, limit: 1).total
                 offset = min(position, total > 0 ? total - 1 : 0)
@@ -339,30 +359,46 @@ struct PendingConfirmation: Identifiable {
                 rows = nil
                 offset = 0
               }
-              let selection = request.restore?.selection.flatMap { try? s.selection(key: $0) }
+              let selection = (request.recovery ? request.selection : request.restore?.selection)
+                .flatMap { try? s.selection(key: $0) }
+              if request.recovery, let selection {
+                // A surviving inside-Trash target can be outside the recovered focus.
+                _ = try? tree.reveal(key: selection.entry.key)
+              }
               let selectedRow = try selection.flatMap { try tree.visibleRow(key: $0.entry.key) }.map
               { Int($0) }
+              if request.recovery, let selectedRow { offset = UInt64(selectedRow) }
               let picture = try DiagramPicture(session: s, focus: request.focus, size: request.size)
+              let publishedRows =
+                request.recovery
+                ? try tree.rows(offset: offset > 32 ? offset - 32 : 0, limit: 256) : rows
               return (
-                ViewRecords(status: status, focus: entry, ancestors: ancestors), tree, rows,
+                ViewRecords(status: status, focus: entry, ancestors: ancestors), tree,
+                publishedRows,
                 picture, selection, offset, selectedRow
               )
             }.value
             if request.sessionVersion == sessionVersion && request.viewVersion == viewVersion {
               records = result.0
               tree = result.1
-              if request.tree == nil || request.restore != nil {
+              if request.recovery || request.tree == nil || request.restore != nil {
                 outline = result.2
                 selectedRow = nil
                 restoredScrollRow = Int(result.5)
                 scrollRow = result.5
                 scrollSerial += 1
               }
+              if request.recovery {
+                selected = nil
+                selectionRawPath = nil
+                selectionPath = nil
+              }
               if let selection = result.4 {
                 selected = selection.entry
                 selectionRawPath = selection.relativePath
                 selectionPath = displayPath(selection.relativePath)
                 selectedRow = result.6
+                if request.recovery, result.6 != nil { revealSerial += 1 }
               }
               restoring = nil
               picture = result.3
@@ -374,6 +410,12 @@ struct PendingConfirmation: Identifiable {
             if request.sessionVersion == sessionVersion && request.viewVersion == viewVersion {
               self.error = String(describing: error)
               loading = false
+              if request.recovery {
+                selected = nil
+                selectedRow = nil
+                selectionRawPath = nil
+                selectionPath = nil
+              }
               if case BridgeError.InvalidEntry = error {
                 outcome =
                   "Previous view is no longer available; returning to a known live ancestor."
@@ -617,7 +659,7 @@ struct PendingConfirmation: Identifiable {
     selectionPath = nil
     aggregate = key
     aggregateText =
-      "\(exactBytes(bytes)) in grouped directory allocation. Open the directory for more detail."
+      "\(numbers.storage(bytes)) in grouped directory allocation. Open the directory for more detail."
   }
 
   func focus(_ key: EntryKey) {
@@ -632,6 +674,7 @@ struct PendingConfirmation: Identifiable {
       if history.count > 64 { history.removeFirst() }
     }
     motion.cancel()
+    recoveryToken = nil
     requestedFocus = key
     loading = true
     viewVersion += 1
@@ -661,7 +704,9 @@ struct PendingConfirmation: Identifiable {
     return displayPath(root)
   }
   var selectedURL: URL? {
-    guard !fixtureMode, let relative = selectionRawPath, var path = records?.status.rootPath else {
+    guard !fixtureMode, recoveryToken == nil, !loading, !working, !replacingSession,
+      let relative = selectionRawPath, var path = records?.status.rootPath
+    else {
       return nil
     }
     if !relative.isEmpty {
@@ -703,12 +748,15 @@ struct PendingConfirmation: Identifiable {
     resizeTask?.cancel()
     resizeTask = Task {
       try? await Task.sleep(for: .milliseconds(180))
-      guard !Task.isCancelled, let key = requestedFocus else { return }
+      // Recovery rebuilds at the latest viewport before releasing its retained selection.
+      // An ordinary resize request must not supersede that validation.
+      guard !Task.isCancelled, recoveryToken == nil, let key = requestedFocus else { return }
       await updateView(focus: key)
     }
   }
   var canAct: Bool {
-    selected?.parent != nil && !working && !loading && !replacingSession && pending == nil
+    selected?.parent != nil && recoveryToken == nil && !working && !loading && !replacingSession
+      && pending == nil
   }
   @discardableResult
   func prepare(_ kind: ActionKind) -> Task<Void, Never>? {
@@ -796,12 +844,13 @@ struct PendingConfirmation: Identifiable {
             reduceMotion: reduceMotion) != nil
         if mayAnimate, let previous { motion.hold(previous) }
         await recoverView(s, preserving: survivor, retainingMotion: mayAnimate)
+        let moved = mayAnimate ? await movedRegion(s, key: selectedKey, scope: result.scope) : []
         if generation == sessionVersion, mayAnimate, let previous,
           picture?.frame !== previous.frame,
           let plan = RemovalMotionPlan.make(
             mutation: result.mutation, scope: result.scope, source: source,
-            rootPath: records?.status.rootPath ?? Data(), visibleTargets: picture?.targets ?? [],
-            reduceMotion: reduceMotion)
+            rootPath: records?.status.rootPath ?? Data(),
+            visibleTargets: (picture?.targets ?? []) + moved, reduceMotion: reduceMotion)
         {
           await motion.play(previous: previous, plan: plan)
         } else if generation == sessionVersion {
@@ -819,10 +868,28 @@ struct PendingConfirmation: Identifiable {
       if generation == sessionVersion { working = false }
     }
   }
+  /// An inside-Trash move keeps the saved key, so the new frame can locate its destination
+  /// directly; the bounded accessibility targets omit most small or late-laid-out tiles.
+  private func movedRegion(
+    _ s: ExplorerSession, key: EntryKey?, scope: TrashScope?
+  ) async -> [DiagramSelection] {
+    guard case .inside = scope, let key, let frame = picture?.frame else { return [] }
+    return await Task.detached { () -> [DiagramSelection] in
+      guard let moved = try? s.selection(key: key), let rect = try? frame.region(key: key) else {
+        return []
+      }
+      return [
+        DiagramSelection(
+          entry: moved.entry, relativePath: moved.relativePath, actionable: true, rect: rect,
+          bytes: moved.entry.subtreeBytes)
+      ]
+    }.value
+  }
   func retainIssues(_ update: UpdateRecord) {
     issues.append(contentsOf: update.issues)
     if update.issuesOmitted > 0 {
-      issues.append("\(update.issuesOmitted) additional issues omitted by core")
+      issues.append(
+        "\(numbers.count(UInt64(update.issuesOmitted))) additional issues omitted by core")
     }
   }
   func recoverView(
@@ -831,14 +898,15 @@ struct PendingConfirmation: Identifiable {
     if !retainingMotion { motion.cancel() }
     let generation = sessionVersion
     let navigation = viewVersion
+    let token = UUID()
+    recoveryToken = token
+    defer { if recoveryToken == token { recoveryToken = nil } }
     history.removeAll()
     restoring = nil
-    invalidatePresentation()
+    loading = true
+    invalidatePresentation(retainingRows: true)
     pathRequest = nil
     selectionVersion += 1
-    selected = nil
-    selectionRawPath = nil
-    selectionPath = nil
     let candidates =
       ([records?.focus].compactMap { $0 } + (records?.ancestors.reversed() ?? [].reversed())).map(
         \.key)
@@ -846,17 +914,23 @@ struct PendingConfirmation: Identifiable {
       for key in candidates { if (try? s.selection(key: key)) != nil { return key } }
       return try? s.status().root.key
     }.value
-    guard generation == sessionVersion, navigation == viewVersion else { return }
+    guard generation == sessionVersion, navigation == viewVersion, recoveryToken == token else {
+      return
+    }
     if let key {
       requestedFocus = key
-      await updateView(focus: key)
-      if let selection, generation == sessionVersion,
-        let current = try? await Task.detached(operation: { try s.selection(key: selection).entry })
-          .value,
-        generation == sessionVersion, requestedFocus?.sameEntry(other: key) == true
-      {
-        select(current)
+      while recoveryToken == token {
+        let size = viewport
+        await updateView(focus: key, recovery: true, preserving: selection)
+        guard generation == sessionVersion, recoveryToken == token else { return }
+        if size == viewport { break }
       }
+    } else {
+      selected = nil
+      selectedRow = nil
+      selectionRawPath = nil
+      selectionPath = nil
+      loading = false
     }
   }
   func refresh() {

@@ -211,18 +211,60 @@ import XCTest
     XCTAssertGreaterThan(model.records!.status.root.subtreeBytes, 1 << 53)
   }
 
+  func testResizeDebounceDuringDeletedSelectionRecoveryCannotRestoreStaleActions() async throws {
+    let model = try await model("metadata-delay")
+    let session = try XCTUnwrap(model.session)
+    let removed = try entry("hardlink-a", model)
+    model.select(removed)
+    try await waitUntil { model.selectionRawPath != nil && model.selectedRow != nil }
+    // Mutate only the memory fixture, leaving the model's old presentation to reconcile.
+    _ = try await Task.detached {
+      let action = try session.prepare(key: removed.key, action: .permanentlyDelete)
+      return try session.execute(action: action)
+    }.value
+    let token = model.outlineToken
+    let blocker = try await holdBridge(model)
+    let recovery = Task { await model.recoverView(session, preserving: removed.key) }
+    try await waitUntil { model.tree == nil && session.activeCallCount() >= 2 }
+    let size = CGSize(width: model.viewport.width + 80, height: model.viewport.height + 60)
+    model.resize(size)
+    // Cross the actual 180 ms debounce while the fixture still holds its one-second lock.
+    try await Task.sleep(for: .milliseconds(240))
+    XCTAssertTrue(session.isBusy())
+    XCTAssertNil(model.tree)
+    XCTAssertTrue(model.outlineToken === token)
+    XCTAssertFalse(model.canAct)
+    XCTAssertNil(model.prepare(.trash))
+    _ = try await blocker.value
+    await recovery.value
+    try await waitUntil {
+      if model.selected?.key.sameEntry(other: removed.key) == true { XCTAssertFalse(model.canAct) }
+      return !model.loading && model.picture?.bitmap.width == UInt32(size.width)
+        && model.picture?.bitmap.height == UInt32(size.height)
+    }
+    XCTAssertNil(model.selected)
+    XCTAssertNil(model.selectionRawPath)
+    XCTAssertNil(model.selectionPath)
+    XCTAssertNil(model.selectedURL)
+    XCTAssertFalse(model.canAct)
+    XCTAssertNotNil(model.tree)
+    XCTAssertFalse(model.outlineToken === token)
+  }
+
   func testSuspendedRecoveryDoesNotOverwriteLaterNavigation() async throws {
     let model = try await model("metadata-delay")
     let session = try XCTUnwrap(model.session)
     let directory = try entry("small-files", model).key
     model.select(try entry("large-file", model))
     let blocker = try await holdBridge(model)
-    // Recovery clears selection synchronously, then blocks behind the real delayed metadata call.
+    // Observe invalidation while the metadata lock still blocks recovery, not its later publication.
     let recovery = Task { await model.recoverView(session) }
-    try await waitUntil { model.selected == nil }
+    try await waitUntil { model.tree == nil && model.loading && session.activeCallCount() >= 2 }
+    XCTAssertTrue(session.isBusy())
+    XCTAssertNotNil(model.selected)
     model.focus(directory)
-    await recovery.value
     _ = try await blocker.value
+    await recovery.value
     try await waitUntil { !model.loading }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: directory))
   }

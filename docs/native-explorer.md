@@ -47,6 +47,12 @@ are no Previous/Next pages. Right/left arrows expand/collapse or move to child/p
 Disclosure never zooms. Map clicks reveal a descendant by expanding its ancestors;
 directory double-click, Return or Command-Down changes both tree and map root;
 Command-Up focuses the parent.
+Each row shows a decorative 9-point type swatch and a 44-point usage bar before the
+right-aligned human-readable size. Directories use a gray rounded square. Other entries use a
+circle in the base color of their map tile, which Rust sends as `OutlineRow.map_rgb`.
+The bar shows saved subtree bytes as an integer percent of the focus total, rounded
+half up. Nonzero entries keep a 2% sliver. Zero and unknown usage show an empty track.
+VoiceOver ignores the swatch and the bar. The size column keeps the accessible value.
 
 Breadcrumb navigation retains at most 64 per-directory sparse Rust tree handles,
 focus/selection keys and scroll positions, never row pages or bitmap history.
@@ -73,8 +79,10 @@ name/path, recorded allocation (directory subtree or file accounted allocation),
 direct-child count when applicable, and Reveal in Finder/Trash/Delete actions.
 Collapsing ancestors preserves the action target; clicking the card name reveals
 its row without zooming. Finder URLs use saved raw bytes, not the display string.
-Sharing or unknown-size caveats appear when needed. Integer formatting never passes byte counts through Double. Partial,
-incomplete, changed and simulated indicators remain visible. Recorded usage is
+Sharing or unknown-size caveats appear when needed. Storage uses decimal KB through EB and the system locale, with at most one decimal place.
+[NativeNumberFormat.swift](../native/Explorer/NativeNumberFormat.swift) reuses Foundation formatters and scales exact UInt64 values through Decimal.
+Counts use locale grouping. Confirmations omit sizes instead of implying reclaimable space. Partial,
+incomplete and changed indicators remain visible. Recorded usage is
 not guaranteed reclaimable space; detailed errors stay behind a disclosure.
 
 ## 1c Asynchronous ownership and operations
@@ -134,8 +142,14 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
   assertions await asynchronous row publication, not just input delivery.
 - "testLongDirectoryPathAndSimpleConfirmationAtMinimumWindow": direct double-click
   from an unselected row, full long target and fixed controls at minimum window size.
+- "testLocalizedStorageInTreeSelectionFooterAndConfirmation": en_US and pt_BR storage presentation.
+- "testResultMotionStylesTravelPoofAndReduceMotionFade": asserts travel, poof and fade
+  through the fixture-only `motion-style` probe. A probe pass does not verify rendered motion.
 
-Every destructive UI flow first asserts the simulated indicator. `--fixture-mode`,
+Fixture mode shows "SIMULATED" only in the window title; other content matches production.
+"testFixtureModeNamesSimulationOnlyInWindowTitle" checks the window and its confirmation.
+"testOnlyFixtureWindowTitleNamesSimulation" in
+[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift) checks the production title. `--fixture-mode`,
 `--scenario`, or `DI_UI_TEST` locks the app into fixture-only mode; incomplete or
 unknown configuration is an error, never a native fallback.
 
@@ -159,6 +173,8 @@ unknown configuration is an error, never a native fallback.
   delayed preparation completion and rejects an obsolete confirmation.
 - "testSuspendedRecoveryDoesNotOverwriteLaterNavigation" overlaps recovery and
   navigation behind the real delayed metadata lock.
+- "testResizeDebounceDuringDeletedSelectionRecoveryCannotRestoreStaleActions" overlaps
+  the real resize debounce with delayed recovery of a deleted selection.
 
 Fixture isolation is tested by "presentation_and_delay_fixtures_are_isolated" in
 [src/bridge/tests.rs](../src/bridge/tests.rs).

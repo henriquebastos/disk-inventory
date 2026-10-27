@@ -1,6 +1,14 @@
 import AppKit
 import SwiftUI
 
+/// Tree usage-bar width as a percent of the focus total, rounded half up without
+/// floating point. Nonzero entries keep a 2% sliver; zero or unknown usage stays empty.
+func usageBarPercent(_ bytes: UInt64, of total: UInt64) -> Int {
+  guard bytes > 0, total > 0 else { return 0 }
+  let rounded = (UInt128(bytes) * 100 + UInt128(total / 2)) / UInt128(total)
+  return Int(min(100, max(2, rounded)))
+}
+
 struct ContentsTree: NSViewRepresentable {
   let model: ExplorerModel
   func makeCoordinator() -> Coordinator { Coordinator(model) }
@@ -17,6 +25,7 @@ struct ContentsTree: NSViewRepresentable {
     name.width = 240
     let size = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
     size.title = "Disk usage"
+    size.headerCell.alignment = .right
     size.width = 120
     table.addTableColumn(name)
     table.addTableColumn(size)
@@ -68,6 +77,10 @@ struct ContentsTree: NSViewRepresentable {
     let c = context.coordinator
     c.model = model
     c.updating = true
+    table.enumerateAvailableRowViews { rowView, _ in
+      (rowView.view(atColumn: 0) as? Cell)?.disclosure.isEnabled =
+        c.interactive && !model.treeEditing
+    }
     if c.offset != model.outline?.offset || c.rows !== model.outlineToken {
       c.offset = model.outline?.offset
       c.rows = model.outlineToken
@@ -103,14 +116,60 @@ struct ContentsTree: NSViewRepresentable {
       if keyboard?(event.keyCode) != true { super.keyDown(with: event) }
     }
   }
+  /// Decorative type swatch: the map's file base color, or a neutral directory square.
+  @MainActor final class Swatch: NSView {
+    static let directoryColor = NSColor(
+      srgbRed: 0x7a / 255, green: 0x7a / 255, blue: 0x7f / 255, alpha: 1)
+    private(set) var color = Swatch.directoryColor
+    private(set) var directory = true
+    func show(mapRGB: UInt32?) {
+      directory = mapRGB == nil
+      color =
+        mapRGB.map {
+          NSColor(
+            srgbRed: CGFloat($0 >> 16 & 0xff) / 255, green: CGFloat($0 >> 8 & 0xff) / 255,
+            blue: CGFloat($0 & 0xff) / 255, alpha: 1)
+        } ?? Swatch.directoryColor
+      needsDisplay = true
+    }
+    override func draw(_ dirtyRect: NSRect) {
+      color.setFill()
+      let radius = directory ? 2 : bounds.width / 2
+      NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
+    }
+  }
+  /// Decorative usage bar; the size column carries the accessible amount.
+  @MainActor final class UsageBar: NSView {
+    var percent = 0 { didSet { if percent != oldValue { needsDisplay = true } } }
+    var emphasized = false { didSet { if emphasized != oldValue { needsDisplay = true } } }
+    override func draw(_ dirtyRect: NSRect) {
+      let ink: NSColor = emphasized ? .alternateSelectedControlTextColor : .labelColor
+      ink.withAlphaComponent(0.07).setFill()
+      NSBezierPath(roundedRect: bounds, xRadius: 2, yRadius: 2).fill()
+      guard percent > 0 else { return }
+      ink.withAlphaComponent(emphasized ? 0.85 : 0.35).setFill()
+      let fill = NSRect(
+        x: 0, y: 0, width: bounds.width * CGFloat(percent) / 100, height: bounds.height)
+      NSBezierPath(roundedRect: fill, xRadius: 2, yRadius: 2).fill()
+    }
+  }
   @MainActor final class Cell: NSTableCellView {
     let disclosure = NSButton()
+    let swatch = Swatch()
     let name = NSTextField(labelWithString: "")
+    let bar = UsageBar()
     var depth: UInt32 = 0
+    override var backgroundStyle: NSView.BackgroundStyle {
+      didSet { bar.emphasized = backgroundStyle == .emphasized }
+    }
     override init(frame: NSRect) {
       super.init(frame: frame)
       addSubview(disclosure)
+      addSubview(swatch)
       addSubview(name)
+      addSubview(bar)
+      swatch.setAccessibilityElement(false)
+      bar.setAccessibilityElement(false)
       disclosure.setButtonType(.onOff)
       disclosure.bezelStyle = .disclosure
       disclosure.setAccessibilityRole(.disclosureTriangle)
@@ -123,8 +182,10 @@ struct ContentsTree: NSViewRepresentable {
       super.layout()
       let indent = min(CGFloat(depth) * 14, 120)
       disclosure.frame = NSRect(x: indent + 2, y: 3, width: 18, height: 20)
+      swatch.frame = NSRect(x: indent + 24, y: 8.5, width: 9, height: 9)
+      bar.frame = NSRect(x: max(indent + 39, bounds.width - 48), y: 11, width: 44, height: 4)
       name.frame = NSRect(
-        x: indent + 24, y: 4, width: max(0, bounds.width - indent - 28), height: 18)
+        x: indent + 39, y: 4, width: max(0, bar.frame.minX - indent - 45), height: 18)
     }
   }
   @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
@@ -136,6 +197,11 @@ struct ContentsTree: NSViewRepresentable {
     var scrollSerial = 0
     var scrollObserver: NSObjectProtocol?
     init(_ model: ExplorerModel) { self.model = model }
+    var interactive: Bool {
+      model.tree != nil && !model.loading && !model.working && !model.replacingSession
+        && model.pending == nil
+    }
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { interactive }
     func numberOfRows(in tableView: NSTableView) -> Int { Int(model.outline?.total ?? 0) }
     func record(_ row: Int) -> OutlineRow? {
       guard row >= 0, let p = model.outline else { return nil }
@@ -156,6 +222,13 @@ struct ContentsTree: NSViewRepresentable {
         if cell.identifier == nil { (tableView as? Table)?.createdCells += 1 }
         cell.identifier = id
         cell.depth = value?.depth ?? 0
+        cell.swatch.isHidden = value == nil
+        cell.bar.isHidden = value == nil
+        if let value {
+          cell.swatch.show(mapRGB: value.mapRgb)
+          cell.bar.percent = usageBarPercent(
+            value.entry.subtreeBytes, of: model.records?.focus.subtreeBytes ?? 0)
+        }
         cell.name.stringValue = value.map { entryName($0.entry) } ?? "Loading…"
         cell.name.setAccessibilityIdentifier(
           value.map { "entry-\(entryName($0.entry))" } ?? "loading-row")
@@ -177,7 +250,9 @@ struct ContentsTree: NSViewRepresentable {
         (tableView.makeView(withIdentifier: id, owner: self) as? NSTextField)
         ?? NSTextField(labelWithString: "")
       cell.identifier = id
-      cell.stringValue = value.map { exactBytes($0.entry.subtreeBytes) } ?? ""
+      cell.stringValue = value.map { model.numbers.storage($0.entry.subtreeBytes) } ?? ""
+      cell.alignment = .right
+      cell.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
       cell.lineBreakMode = .byTruncatingTail
       cell.toolTip = cell.stringValue
       return cell
@@ -193,16 +268,19 @@ struct ContentsTree: NSViewRepresentable {
       return view
     }
     func tableViewSelectionDidChange(_ note: Notification) {
-      guard !updating, let table = note.object as? NSTableView, let r = record(table.selectedRow)
+      guard interactive, !updating, let table = note.object as? NSTableView,
+        let r = record(table.selectedRow)
       else { return }
       let selectedRow = table.selectedRow
       model.select(r.entry)
       model.selectedRow = selectedRow
     }
     @objc func toggle(_ sender: NSButton) {
+      guard interactive else { return }
       if let row = record(sender.tag) { model.expand(row.entry, expanded: !row.expanded) }
     }
     @objc func open(_ sender: NSTableView) {
+      guard interactive else { return }
       if let row = record(sender.clickedRow), row.entry.kind == .directory {
         model.focus(row.entry.key)
       }

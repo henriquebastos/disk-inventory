@@ -162,6 +162,19 @@ import XCTest
     model.shutdown()
   }
 
+  func testOnlyFixtureWindowTitleNamesSimulation() throws {
+    let root = try ownedRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let storage = ManagedInventoryStorage(root: root.appendingPathComponent("support"))
+    let production = ExplorerModel(arguments: [], environment: [:], storage: storage)
+    XCTAssertEqual(production.windowTitle, "Disk Inventory")
+    production.shutdown()
+    let fixture = ExplorerModel(
+      arguments: ["--fixture-mode", "--scenario", "presentation"], environment: [:])
+    XCTAssertEqual(fixture.windowTitle, "Disk Inventory — SIMULATED")
+    fixture.shutdown()
+  }
+
   func testNoScanLaunchReadsOnlySmallManagedMetadata() async throws {
     let root = try ownedRoot()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -413,5 +426,224 @@ import XCTest
     XCTAssertEqual(model.selected?.displayName, "small-files")
     XCTAssertFalse(model.motion.active)
     XCTAssertFalse(model.issues.isEmpty)
+  }
+
+  func testFixtureReduceMotionOverrideIsIgnoredOutsideFixtureMode() async throws {
+    let root = try ownedRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let storage = ManagedInventoryStorage(root: root.appendingPathComponent("support"))
+    let native = ExplorerModel(
+      arguments: [], environment: ["DI_REDUCE_MOTION": "1"], storage: storage)
+    XCTAssertFalse(native.fixtureMode)
+    XCTAssertFalse(native.fixtureReduceMotion)
+    native.shutdown()
+    let ordinary = try await fixture("presentation")
+    XCTAssertFalse(ordinary.fixtureReduceMotion)
+    let disabled = ExplorerModel(
+      arguments: ["--fixture-mode", "--scenario", "presentation"],
+      environment: ["DI_REDUCE_MOTION": "0"])
+    XCTAssertFalse(disabled.fixtureReduceMotion)
+    let model = ExplorerModel(
+      arguments: ["--fixture-mode", "--scenario", "presentation"],
+      environment: ["DI_REDUCE_MOTION": "1"])
+    XCTAssertTrue(model.fixtureReduceMotion)
+    XCTAssertTrue(model.reduceMotion)
+    try await wait { !model.loading && !model.replacingSession && model.records != nil }
+    model.select(try entry("large-file", in: model))
+    try await wait { model.selectedRegion != nil }
+    model.prepare(.permanentlyDelete)
+    try await wait { model.pending != nil }
+    model.execute()
+    try await wait { !model.working }
+    XCTAssertEqual(model.motion.lastStyle, .fade)
+    XCTAssertGreaterThan(model.motion.lastTicks, 1)
+  }
+
+  func testRecoveryPublishesBoundedSliceAndScrollForLateSurvivor() async throws {
+    let model = try await fixture("dix")
+    let session = try XCTUnwrap(model.session)
+    let projects = try entry("Projects", in: model)
+    let survivor = try await Task.detached {
+      try session.children(parent: projects.key, offset: 1000, limit: 1).entries[0]
+    }.value
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
+      backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let host = NSHostingView(rootView: ContentsTree(model: model))
+    window.contentView = host
+    defer {
+      model.shutdown()
+      window.close()
+    }
+    host.layoutSubtreeIfNeeded()
+    func table(in view: NSView) -> ContentsTree.Table? {
+      if let table = view as? ContentsTree.Table { return table }
+      return view.subviews.compactMap { table(in: $0) }.first
+    }
+    let table = try XCTUnwrap(table(in: host))
+    let serial = model.revealSerial
+    await model.recoverView(session, preserving: survivor.key)
+    let row = try XCTUnwrap(model.selectedRow)
+    XCTAssertGreaterThan(row, 255)
+    XCTAssertGreaterThan(model.revealSerial, serial)
+    XCTAssertEqual(model.restoredScrollRow, row)
+    let slice = try XCTUnwrap(model.outline)
+    XCTAssertLessThanOrEqual(slice.rows.count, 256)
+    XCTAssertGreaterThan(slice.offset, 0)
+    XCTAssertTrue(slice.rows.contains { $0.entry.key.sameEntry(other: survivor.key) })
+    try await wait {
+      host.layoutSubtreeIfNeeded()
+      return table.selectedRow == row && table.visibleRect.intersects(table.rect(ofRow: row))
+    }
+    let cell = try XCTUnwrap(
+      table.view(atColumn: 0, row: row, makeIfNecessary: true) as? ContentsTree.Cell)
+    XCTAssertEqual(cell.name.stringValue, survivor.displayName)
+    XCTAssertTrue(model.canAct)
+  }
+
+  func testRecoveryKeepsOutsideFocusSurvivorWithoutFalseTreeRow() async throws {
+    let model = try await fixture("dix")
+    let session = try XCTUnwrap(model.session)
+    let movie = try entry("Movie.mov", in: model)
+    let tiny = try entry("Tiny files", in: model)
+    model.focus(tiny.key)
+    try await wait { !model.loading }
+    let serial = model.revealSerial
+    await model.recoverView(session, preserving: movie.key)
+    XCTAssertTrue(model.records!.focus.key.sameEntry(other: tiny.key))
+    XCTAssertTrue(model.selected!.key.sameEntry(other: movie.key))
+    XCTAssertEqual(model.selectionRawPath, Data("Movie.mov".utf8))
+    XCTAssertNil(model.selectedRow)
+    XCTAssertEqual(model.revealSerial, serial)
+    XCTAssertEqual(model.outline?.offset, 0)
+    XCTAssertFalse(model.outline!.rows.contains { $0.entry.key.sameEntry(other: movie.key) })
+  }
+
+  func testRecoveryRetainsRowsWithoutInteractiveStaleTree() async throws {
+    let model = try await fixture("metadata-delay")
+    let target = try entry("large-file", in: model)
+    model.select(target)
+    try await wait { model.selectedRow != nil && model.selectionRawPath != nil }
+    let session = try XCTUnwrap(model.session)
+    let token = model.outlineToken
+    let rows = try XCTUnwrap(model.outline).total
+    let blocker = Task.detached { try session.liveMetadata(key: target.key) }
+    try await wait { session.isBusy() }
+    let recovery = Task { await model.recoverView(session, preserving: target.key) }
+    try await wait { model.tree == nil && model.loading }
+    XCTAssertTrue(model.outlineToken === token)
+    XCTAssertEqual(model.outline?.total, rows)
+    XCTAssertFalse(model.canAct)
+    let coordinator = ContentsTree.Coordinator(model)
+    let table = ContentsTree.Table()
+    table.dataSource = coordinator
+    table.delegate = coordinator
+    table.reloadData()
+    XCTAssertEqual(table.numberOfRows, Int(rows))
+    XCTAssertFalse(coordinator.tableView(table, shouldSelectRow: 0))
+    table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+    coordinator.tableViewSelectionDidChange(
+      Notification(name: NSTableView.selectionDidChangeNotification, object: table))
+    XCTAssertTrue(model.selected?.key.sameEntry(other: target.key) == true)
+    let disclosure = NSButton()
+    disclosure.tag = 0
+    coordinator.toggle(disclosure)
+    XCTAssertFalse(model.treeEditing)
+    XCTAssertTrue(coordinator.key(124))
+    model.prepare(.trash)
+    XCTAssertNil(model.pending)
+    _ = try await blocker.value
+    await recovery.value
+    XCTAssertNotNil(model.tree)
+    XCTAssertFalse(model.outlineToken === token)
+    XCTAssertTrue(model.selected?.key.sameEntry(other: target.key) == true)
+  }
+
+  func testRemovalOutcomeKeepsHostedMapViewportAndTreeRowsStable() async throws {
+    for action in [ActionKind.trash, .permanentlyDelete] {
+      let model = try await fixture("presentation-trash-inside")
+      let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
+        styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+      window.isReleasedWhenClosed = false
+      let host = NSHostingView(rootView: ExplorerView(model: model))
+      window.contentView = host
+      defer {
+        model.shutdown()
+        window.close()
+      }
+      func map(in view: NSView) -> DiagramView.MapView? {
+        if let map = view as? DiagramView.MapView { return map }
+        return view.subviews.compactMap { map(in: $0) }.first
+      }
+      host.layoutSubtreeIfNeeded()
+      let map = try XCTUnwrap(map(in: host))
+      try await wait {
+        host.layoutSubtreeIfNeeded()
+        return !model.loading && model.picture?.bitmap.height == UInt32(model.viewport.height)
+          && model.viewport.height == floor(map.bounds.height * window.backingScaleFactor)
+      }
+      try await Task.sleep(for: .milliseconds(220))
+      let bounds = map.bounds
+      let viewport = model.viewport
+      let builds = model.diagramBuilds
+      model.select(try entry("large-file", in: model))
+      try await wait { model.selectedRegion != nil }
+      model.prepare(action)
+      try await wait { model.pending != nil }
+      model.execute()
+      while model.working {
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(map.bounds, bounds)
+        XCTAssertEqual(model.viewport, viewport)
+        XCTAssertGreaterThan(model.outline?.total ?? 0, 0)
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      XCTAssertNotNil(model.outcome)
+      for _ in 0..<3 {
+        try await Task.sleep(for: .milliseconds(220))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(map.bounds, bounds)
+        XCTAssertEqual(model.viewport, viewport)
+        XCTAssertEqual(model.diagramBuilds, builds + 1)
+      }
+    }
+  }
+
+  func testInsideTrashTravelsBetweenMateriallyDistinctRegions() async throws {
+    let model = try await fixture("presentation-trash-inside")
+    model.select(try entry("large-file", in: model))
+    try await wait { model.selectedRegion != nil }
+    model.prepare(.trash)
+    try await wait { model.pending != nil }
+    model.execute()
+    try await wait { model.motion.plan != nil || !model.working }
+    let plan = try XCTUnwrap(model.motion.plan)
+    XCTAssertEqual(plan.style, .travel)
+    let destination = try XCTUnwrap(plan.destination)
+    XCTAssertGreaterThan(
+      hypot(
+        destination.x + destination.width / 2 - plan.source.x - plan.source.width / 2,
+        destination.y + destination.height / 2 - plan.source.y - plan.source.height / 2), 80)
+    try await wait { !model.working }
+    XCTAssertEqual(model.motion.lastStyle, .travel)
+    XCTAssertEqual(model.selected?.displayName, "moved")
+  }
+
+  func testInsideTrashTravelsToTheMovedTileBeyondAccessibilityTargets() async throws {
+    let model = try await fixture("presentation-trash-late-target")
+    model.select(try entry("large-file", in: model))
+    try await wait { model.selectedRegion != nil }
+    model.prepare(.trash)
+    try await wait { model.pending != nil }
+    model.execute()
+    try await wait { model.motion.plan != nil || !model.working }
+    XCTAssertEqual(try XCTUnwrap(model.motion.plan).style, .travel)
+    // This fixture places the destination after 128 small files, outside the 24 targets.
+    XCTAssertFalse(model.picture!.targets.contains { $0.relativePath == Data("trash/moved".utf8) })
+    try await wait { !model.working }
+    XCTAssertEqual(model.motion.lastStyle, .travel)
+    XCTAssertEqual(model.selected?.displayName, "moved")
   }
 }

@@ -3,14 +3,20 @@ import XCTest
 @MainActor final class ExplorerUITests: XCTestCase {
   var app: XCUIApplication!
   override func setUpWithError() throws { continueAfterFailure = false }
-  func launch(_ scenario: String = "presentation", minimumWindow: Bool = false) {
+  func launch(
+    _ scenario: String = "presentation", minimumWindow: Bool = false, reduceMotion: Bool = false,
+    locale: String = "en_US"
+  ) {
     app = XCUIApplication()
-    app.launchArguments = ["--fixture-mode", "--scenario", scenario, "-AppleLocale", "en_US"]
+    app.launchArguments = ["--fixture-mode", "--scenario", scenario, "-AppleLocale", locale]
     if minimumWindow { app.launchArguments.append("--minimum-window") }
     app.launchEnvironment["DI_UI_TEST"] = "1"
     app.launchEnvironment["DI_MODEL_TEST"] = "0"
+    // Fixture-only override; the system Reduce Motion setting is never changed.
+    if reduceMotion { app.launchEnvironment["DI_REDUCE_MOTION"] = "1" }
     app.launch()
-    XCTAssertTrue(app.staticTexts["simulated"].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.staticTexts["scope-total"].waitForExistence(timeout: 15))
+    XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
   }
   func row(_ name: String) -> XCUIElement {
     app.staticTexts.matching(NSPredicate(format: "identifier == %@", "entry-\(name)")).firstMatch
@@ -34,10 +40,10 @@ import XCTest
     add(attachment)
   }
   func prepare(_ action: String, target: String) {
-    XCTAssertTrue(app.staticTexts["simulated"].exists)
+    XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
     row(target).click()
     app.buttons[action].click()
-    XCTAssertTrue(app.staticTexts["confirmation-simulated"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
     text("confirmation-path", contains: target)
   }
   func disclosure(_ name: String) -> XCUIElement {
@@ -48,7 +54,7 @@ import XCTest
     launch()
     row("small-files").click()
     disclosure("small-files").click()
-    text("focus-name", contains: "simulated-inventory")
+    text("focus-name", contains: "Workspace")
     XCTAssertTrue(row("small-00").waitForExistence(timeout: 8))
     row("small-00").click()
     app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
@@ -60,7 +66,7 @@ import XCTest
     row("small-files").doubleClick()
     text("focus-name", contains: "small-files")
     app.buttons["breadcrumb-0"].click()
-    text("focus-name", contains: "simulated-inventory")
+    text("focus-name", contains: "Workspace")
     XCTAssertTrue(row("small-00").waitForExistence(timeout: 8))
     text("selected-name", contains: "small-files")
     screenshot("restored-tree-context")
@@ -73,7 +79,7 @@ import XCTest
     app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [.command])
     text("focus-name", contains: "small-files")
     app.buttons["breadcrumb-0"].click()
-    text("focus-name", contains: "simulated-inventory")
+    text("focus-name", contains: "Workspace")
     text("selected-name", contains: "small-files")
     let after = try XCTUnwrap(Double(String(describing: try XCTUnwrap(scrollbar.value))))
     // Scroll history stores a row, so restoration can round by less than one row.
@@ -85,7 +91,7 @@ import XCTest
     disclosure("small-files").click()
     XCTAssertTrue(row("small-00").waitForNonExistence(timeout: 8))
     row("large-file").click()
-    text("selected-usage", contains: "4,096 bytes")
+    text("selected-usage", contains: "4.1 KB")
     screenshot("balanced-overview")
   }
   func testConfirmationCancelDeleteAndStaleHandleRecovery() {
@@ -196,15 +202,43 @@ import XCTest
       XCTAssertFalse(app.buttons["open-snapshot"].isEnabled)
       XCTAssertFalse(app.buttons["create-inventory"].isEnabled)
       XCTAssertEqual(app.dialogs.count, 0)
-      XCTAssertFalse(app.staticTexts["simulated"].exists)
+      XCTAssertFalse(app.staticTexts["scope-total"].exists)
+      XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
       screenshot("fail-closed")
       app.terminate()
     }
   }
+  func testFixtureModeNamesSimulationOnlyInWindowTitle() throws {
+    launch()
+    row("large-file").click()
+    app.buttons["delete"].click()
+    XCTAssertTrue(app.staticTexts["confirmation-path"].waitForExistence(timeout: 8))
+    // Walk the window, including its confirmation sheet. Only the window title and its
+    // title-bar text element are exempt.
+    let window = try app.windows.firstMatch.snapshot()
+    var marked: [String] = []
+    var identifiers: Set<String> = []
+    func visit(_ element: XCUIElementSnapshot, isWindow: Bool) {
+      identifiers.insert(element.identifier)
+      let value = element.value as? String ?? ""
+      let texts = isWindow ? [value] : [element.label, element.title, value]
+      for text in texts
+      where text != window.title && text.range(of: "simulat", options: .caseInsensitive) != nil {
+        marked.append("\(element.elementType.rawValue) \(element.identifier): \(text)")
+      }
+      for child in element.children { visit(child, isWindow: false) }
+    }
+    XCTAssertEqual(window.title, "Disk Inventory — SIMULATED")
+    visit(window, isWindow: true)
+    XCTAssertTrue(identifiers.isSuperset(of: ["confirmation-path", "scope-total", "focus-name"]))
+    XCTAssertEqual(marked, [])
+    screenshot("simulation-title-only-confirmation")
+    app.buttons["cancel-action"].click()
+  }
   func testDirectoryConfirmationsKeepOnlyTargetScopeAndWarnings() {
     launch()
     row("small-files").click()
-    text("selected-usage", contains: "8,212 bytes")
+    text("selected-usage", contains: "8.2 KB")
     for action in ["trash", "delete"] {
       prepare(action, target: "small-files")
       text("confirmation-title", contains: "directory and its contents")
@@ -237,7 +271,7 @@ import XCTest
     screenshot("dix-independent-hover")
     target.click()
     text("selected-name", contains: name)
-    text("focus-name", contains: "simulated-inventory")
+    text("focus-name", contains: "Workspace")
     XCTAssertTrue(row(name).waitForExistence(timeout: 8))
     screenshot("dix-linked-reveal")
     XCTAssertTrue(disclosure("Projects").isEnabled)
@@ -257,7 +291,7 @@ import XCTest
     text("hover-name", contains: "four-KiB.txt")
     small.click()
     text("selected-name", contains: "four-KiB.txt")
-    text("selected-usage", contains: "4,096 bytes")
+    text("selected-usage", contains: "4.1 KB")
     XCTAssertTrue(row("empty.txt").exists)
     screenshot("dix-tiny-zoom")
     app.buttons["breadcrumb-1"].click()
@@ -290,6 +324,62 @@ import XCTest
     screenshot("minimum-window-long-path-confirmation")
     app.buttons["cancel-action"].click()
     XCTAssertTrue(row("target-directory").exists)
+  }
+
+  func testLocalizedStorageInTreeSelectionFooterAndConfirmation() {
+    for (locale, amount, total) in [
+      ("en_US", "4.1 KB", "13 KB"), ("pt_BR", "4,1 KB", "13 KB"),
+    ] {
+      launch(locale: locale)
+      row("large-file").click()
+      text("selected-usage", contains: amount)
+      text("scope-total", contains: total)
+      XCTAssertGreaterThanOrEqual(
+        app.staticTexts.matching(NSPredicate(format: "value == %@ OR label == %@", amount, amount))
+          .count,
+        2)
+      let tile = app.buttons["map-file-large-file"]
+      XCTAssertTrue(tile.waitForExistence(timeout: 8))
+      tile.hover()
+      text("hover-name", contains: amount)
+      prepare("delete", target: "large-file")
+      text("confirmation-path", contains: "large-file")
+      text("confirmation-warning", contains: "cannot be undone")
+      XCTAssertFalse(app.staticTexts["4,096 bytes"].exists)
+      screenshot("localized-storage-\(locale)")
+      app.buttons["cancel-action"].click()
+      app.terminate()
+    }
+  }
+
+  func testResultMotionStylesTravelPoofAndReduceMotionFade() throws {
+    for (scenario, action, reduceMotion, style) in [
+      ("presentation-trash-inside", "trash", false, "travel"),
+      ("presentation", "delete", false, "poof"),
+      ("presentation-trash-inside", "trash", true, "fade"),
+    ] {
+      launch(scenario, reduceMotion: reduceMotion)
+      let probe = app.descendants(matching: .any)["motion-style"]
+      XCTAssertTrue(probe.waitForExistence(timeout: 8))
+      XCTAssertEqual(probe.label, "none")
+      prepare(action, target: "large-file")
+      // Frame extraction aligns the screen recording with this wall-clock mark.
+      print("MOTION_CONFIRM \(scenario) \(style) \(Date().timeIntervalSince1970)")
+      app.buttons["confirm-action"].click()
+      text("outcome", contains: action == "trash" ? "Moved to Trash" : "Permanently deleted")
+      XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
+      XCTAssertTrue(app.staticTexts["dirty"].waitForExistence(timeout: 8))
+      let ran = NSPredicate(format: "label BEGINSWITH %@", style + " ")
+      XCTAssertEqual(
+        XCTWaiter.wait(
+          for: [XCTNSPredicateExpectation(predicate: ran, object: probe)], timeout: 8),
+        .completed, "\(scenario) must run \(style), got \(probe.label)")
+      // A 200 ms clock sampled about every 16 ms; one tick would be a jump, not motion.
+      let ticks = Int(probe.label.split(separator: " ").last ?? "") ?? 0
+      XCTAssertGreaterThanOrEqual(ticks, 4, "\(scenario) \(style) ticks")
+      screenshot("motion-\(scenario)-\(style)-final")
+      app.terminate()
+    }
   }
 
 }

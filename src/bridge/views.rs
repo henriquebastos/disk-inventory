@@ -4,6 +4,8 @@ use crate::{diagram::Diagram, tree_view::TreeView};
 #[derive(uniffi::Record)]
 pub struct OutlineRow {
     pub entry: EntryRecord,
+    /// `0xRRGGBB` base color of this entry's map file tile; `None` for directories.
+    pub map_rgb: Option<u32>,
     pub depth: u32,
     pub expanded: bool,
 }
@@ -107,6 +109,10 @@ impl ExplorerTree {
                     .rows
                     .into_iter()
                     .map(|r| OutlineRow {
+                        map_rgb: (r.entry.kind != crate::Kind::Dir).then(|| {
+                            let [red, green, blue] = crate::diagram::type_color(r.entry.basename);
+                            u32::from_be_bytes([0, red, green, blue])
+                        }),
                         entry: r.entry.into(),
                         depth: r.depth,
                         expanded: r.expanded,

@@ -24,7 +24,7 @@ final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       contentRect: NSRect(x: 0, y: 0, width: 1380, height: 850),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
     )
-    window.title = "Disk Inventory"
+    window.title = model.windowTitle
     window.contentView = NSHostingView(
       rootView: ExplorerView(model: model).frame(minWidth: 1100, minHeight: 680))
     window.minSize = NSSize(width: 1100, height: 710)
@@ -78,6 +78,17 @@ final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   func applicationWillTerminate(_ notification: Notification) { model?.shutdown() }
 }
 
+/// Fixture-only accessibility probe naming the last result motion for UI acceptance.
+/// A separate view keeps per-tick observation out of the explorer body.
+struct MotionProbe: View {
+  let motion: ResultMotion
+  var body: some View {
+    Color.clear.frame(width: 1, height: 1).accessibilityElement()
+      .accessibilityIdentifier("motion-style")
+      .accessibilityLabel(motion.lastStyle.map { "\($0.rawValue) \(motion.lastTicks)" } ?? "none")
+  }
+}
+
 struct ExplorerView: View {
   @Bindable var model: ExplorerModel
   var body: some View {
@@ -92,7 +103,9 @@ struct ExplorerView: View {
             selectionSummary
           }.frame(minWidth: 360, idealWidth: 400, maxWidth: 480)
           VStack(alignment: .leading, spacing: 0) {
-            DiagramView(model: model).padding(10)
+            DiagramView(model: model).padding(10).overlay(alignment: .topLeading) {
+              if model.fixtureMode { MotionProbe(motion: model.motion) }
+            }
             Divider()
             footer
           }.frame(minWidth: 350)
@@ -148,7 +161,7 @@ struct ExplorerView: View {
       ProgressView().controlSize(.small)
       if let sample = model.scan.progress {
         Text(model.scan.label).accessibilityIdentifier("scan-phase")
-        Text("\(sample.itemsExamined.formatted()) items examined").monospacedDigit()
+        Text("\(model.numbers.count(sample.itemsExamined)) items examined").monospacedDigit()
           .foregroundStyle(.secondary).accessibilityIdentifier("scan-items")
         Spacer()
         Button("Stop", action: model.scan.stop).disabled(!sample.cancellable)
@@ -194,11 +207,9 @@ struct ExplorerView: View {
         }.buttonStyle(.plain)
       }.scrollIndicators(.hidden).disabled(model.working || model.replacingSession)
       HStack(spacing: 5) {
-        if r.status.simulated {
-          badge("SIMULATED", id: "simulated").help("No native filesystem operations")
-        }
         if r.status.scanPartial {
-          badge("Partial", id: "partial").help("\(r.status.counters.errors) scan errors")
+          badge("Partial", id: "partial").help(
+            "\(model.numbers.count(r.status.counters.errors)) scan errors")
         }
         if r.status.stale { badge("Incomplete", id: "stale").help("Some sizes are unknown") }
         if r.status.dirty {
@@ -206,8 +217,10 @@ struct ExplorerView: View {
         }
       }
       VStack(alignment: .trailing, spacing: 2) {
-        Text(exactBytes(r.status.root.subtreeBytes) + " recorded").font(.callout.weight(.semibold))
-          .monospacedDigit().accessibilityIdentifier("scope-total")
+        Text(model.numbers.storage(r.status.root.subtreeBytes) + " recorded").font(
+          .callout.weight(.semibold)
+        )
+        .monospacedDigit().accessibilityIdentifier("scope-total")
         Text(
           model.scanDate.map { "Scanned " + $0.formatted(date: .abbreviated, time: .shortened) }
             ?? "Scan time unavailable"
@@ -233,14 +246,17 @@ struct ExplorerView: View {
             .font(.headline).lineLimit(1).truncationMode(.middle)
             .help("Show selected item in list").accessibilityIdentifier("selected-name")
           Spacer(minLength: 4)
-          Text(exactBytes(entry.kind == .directory ? entry.subtreeBytes : entry.accountedBytes))
-            .font(.callout.weight(.semibold)).monospacedDigit().accessibilityIdentifier(
-              "selected-usage")
+          Text(
+            model.numbers.storage(
+              entry.kind == .directory ? entry.subtreeBytes : entry.accountedBytes)
+          )
+          .font(.callout.weight(.semibold)).monospacedDigit().accessibilityIdentifier(
+            "selected-usage")
         }
         HStack {
           Text(
             entry.kind == .directory
-              ? "\(entry.childCount.formatted()) direct items · Recorded allocation"
+              ? "\(model.numbers.count(entry.childCount)) direct items · Recorded allocation"
               : "Recorded allocation")
           if entry.kind == .file && entry.accountedBytes < entry.allocatedBytes {
             Text(
@@ -283,43 +299,47 @@ struct ExplorerView: View {
       .padding(14).background(.bar)
   }
   var footer: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      if model.error != nil {
-        HStack {
-          Text("Could not complete the request.").foregroundStyle(.red).accessibilityIdentifier(
-            "error")
-          Button("Dismiss") { model.error = nil }
+    // Outcome and diagnostic publication must not resize the map during result motion.
+    ScrollView {
+      VStack(alignment: .leading, spacing: 5) {
+        if model.error != nil {
+          HStack {
+            Text("Could not complete the request.").foregroundStyle(.red).accessibilityIdentifier(
+              "error")
+            Button("Dismiss") { model.error = nil }
+          }
         }
-      }
-      if let outcome = model.outcome {
-        Text(outcome).textSelection(.enabled).accessibilityIdentifier("outcome")
-      }
-      if model.error != nil || !model.issues.isEmpty {
-        DisclosureGroup("Details") {
-          ScrollView {
-            if let error = model.error {
-              Text(error).textSelection(.enabled).accessibilityIdentifier("error-details")
-            }
-            Text(model.issues.joined(separator: "\n")).textSelection(.enabled).frame(
-              maxWidth: .infinity, alignment: .leading)
-          }.frame(maxHeight: 100)
-        }.accessibilityIdentifier("issues")
-      }
-      Text(
-        model.hover.map {
-          ($0.actionable ? "" : "Grouped in ")
-            + ($0.relativePath.isEmpty ? entryName($0.entry) : displayPath($0.relativePath)) + " · "
-            + exactBytes($0.bytes)
-        } ?? "Recorded disk usage · Shared space is counted once · Deleting may free less space"
-      )
-      .lineLimit(1).frame(height: 18).accessibilityIdentifier("hover-name")
-      if let p = model.picture, p.bitmap.aggregatePixels > 0 || model.rasterReduced {
+        if let outcome = model.outcome {
+          Text(outcome).textSelection(.enabled).accessibilityIdentifier("outcome")
+        }
+        if model.error != nil || !model.issues.isEmpty {
+          DisclosureGroup("Details") {
+            ScrollView {
+              if let error = model.error {
+                Text(error).textSelection(.enabled).accessibilityIdentifier("error-details")
+              }
+              Text(model.issues.joined(separator: "\n")).textSelection(.enabled).frame(
+                maxWidth: .infinity, alignment: .leading)
+            }.frame(maxHeight: 100)
+          }.accessibilityIdentifier("issues")
+        }
         Text(
-          "Some map detail is grouped or reduced at this scale; zoom or expand the tree to see more."
+          model.hover.map {
+            ($0.actionable ? "" : "Grouped in ")
+              + ($0.relativePath.isEmpty ? entryName($0.entry) : displayPath($0.relativePath))
+              + " · "
+              + model.numbers.storage($0.bytes)
+          } ?? "Recorded disk usage · Shared space is counted once · Deleting may free less space"
         )
-        .foregroundStyle(.secondary)
-      }
-    }.font(.caption).padding(12)
+        .lineLimit(1).frame(height: 18).accessibilityIdentifier("hover-name")
+        if let p = model.picture, p.bitmap.aggregatePixels > 0 || model.rasterReduced {
+          Text(
+            "Some map detail is grouped or reduced at this scale; zoom or expand the tree to see more."
+          )
+          .foregroundStyle(.secondary)
+        }
+      }.frame(maxWidth: .infinity, alignment: .leading)
+    }.frame(height: 100).font(.caption).padding(12)
   }
   func confirmation(_ pending: PendingConfirmation) -> some View {
     let permanent = pending.details.action == .permanentlyDelete
@@ -329,9 +349,6 @@ struct ExplorerView: View {
       Text(permanent ? "Permanently delete \(target)?" : "Move \(target) to Trash?")
         .font(.title2.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
         .accessibilityIdentifier("confirmation-title")
-      if model.records?.status.simulated == true {
-        Text("SIMULATED • Memory filesystem only").accessibilityIdentifier("confirmation-simulated")
-      }
       ViewThatFits(in: .vertical) {
         confirmationPath(pending)
         ScrollView { confirmationPath(pending) }

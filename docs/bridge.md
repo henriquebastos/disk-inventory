@@ -125,8 +125,10 @@ Discover entries through bounded queries: `small-files/small-00` through
 | `presentation` | Balanced 4096-byte large file and 128 small children for native UI pagination |
 | `metadata-delay` | Presentation inventory; only large-file MemoryFileSystem metadata sleeps one second |
 | `visual-details` | Isolated nested groups and a long directory path; entry-only metadata differs from subtree bytes |
-| `ordinary`, `trash-outside` | Trash moves to `/simulated-outside/moved` |
+| `ordinary`, `trash-outside` | Trash moves to `/.Trash/moved` |
 | `trash-inside` | Moves to `trash/moved` within scope |
+| `presentation-trash-inside` | Larger Trash directory separates the visible source and destination regions |
+| `presentation-trash-late-target` | Original presentation sizes place the destination outside the 24 accessibility targets |
 | `metadata-failure` | `large-file` metadata denied; selection still works |
 | `permission-failure` | `small-files` enumeration denied; removal fails unchanged |
 | `changed-target` | Live `large-file` identity differs from saved |
@@ -147,6 +149,9 @@ Discover entries through bounded queries: `small-files/small-00` through
 - "busy_poll_does_not_take_the_session_lock": independent busy access.
 - "fixture_trash_scopes_failures_and_partial_updates_survive_conversion": outcomes.
 - "fixture_errors_fail_closed_and_unknown_allocation_stays_explicit": uncertainty.
+- "presentation_trash_inside_moves_a_visible_tile_to_a_visible_destination": the moved
+  entry keeps its key and has a materially separated actionable region in the new frame.
+- "presentation_trash_late_target_has_a_region_outside_accessibility_targets": a separate fixture covers bounded-target omissions.
 - "native_snapshot_open_never_requires_the_recorded_source": partial offline snapshot.
 - "update_issue_transfer_has_an_explicit_bound": diagnostic truncation count.
 - "invalid_bridge_requests_return_typed_errors_without_source_calls": input validation.
@@ -161,7 +166,13 @@ namespace races, non-macOS and Intel linking remain untested here.
 
 `ExplorerSession.tree` returns a sparse `ExplorerTree` with bounded `rows`, `expand`
 and `reveal`, plus read-only `visible_row` (Swift `visibleRow`) for a selected
-key's optional position without opening collapsed ancestors. `diagram` returns an immutable `DiagramFrame` with flat RGBA `bitmap`,
+key's optional position without opening collapsed ancestors.
+Each `OutlineRow` includes optional `map_rgb` (Swift `mapRgb`), packed as `0xRRGGBB`.
+Files use the map's base type color. Directories have no color value.
+"outline_swatch_colors_match_map_file_tiles_and_directories_have_none" in
+[src/bridge/tests.rs](../src/bridge/tests.rs) checks this additive field.
+The saved `DMAPBEN1` format and default-feature builds remain unchanged.
+`diagram` returns an immutable `DiagramFrame` with flat RGBA `bitmap`,
 owner `hit`, selection `region` and bounded accessibility `targets`. Neither view
 is an action capability. Execution/refresh revisions reject obsolete queries.
 Bounds, payload-versus-RSS distinctions and exact tests are specified in

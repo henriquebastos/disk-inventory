@@ -50,14 +50,24 @@ publication arbitration and core cancellation tests.
 bounded bitmap and one affected region. Only confirmed `removed`/`trashed` outcomes
 can produce a plan. Failures, partial removals and indeterminate outcomes retain
 honest diagnostics and any surviving selection, without a success ghost.
+Recovery retains the bounded row slice without its obsolete tree handle. Native callbacks reject input until the new view is ready.
+The model publishes the recovered selection, rows, and map together. A fixed-height scrollable footer prevents outcome text from resizing the map.
+A resize during recovery does not start its own view request. Recovery builds at the latest viewport.
+Actions and the Finder path stay unavailable until recovery validates or clears the old selection.
+An in-focus survivor gets a row slice around its row and a scroll request. An outside-focus survivor keeps only the summary selection.
 
 The old bitmap stays visible but non-actionable while the new saved-data view is
 prepared. In roughly 200 ms, the removed region shrinks/dissolves in place and the
 layout crossfades. Travel is allowed only when the actual returned destination bytes
-match the verified in-inventory relative path and an actionable visible target in
-the new bounded frame. Outside, unknown or invisible destinations use in-place
-motion. Reduce Motion is sampled from NSWorkspace at operation completion and uses
-a fade without travel/shrink. No surviving rectangle gets its own animation object.
+match the verified in-inventory relative path and a visible region in the new frame.
+An inside-Trash move keeps the saved key. The model queries the saved selection
+and the new frame region for that key. The 24 accessibility targets do not cover
+all visible destinations. Outside, unknown or invisible destinations use in-place
+motion. The model reads Reduce Motion from NSWorkspace at operation completion.
+Reduce Motion uses a fade without translation or scaling.
+In fixture mode only, `DI_REDUCE_MOTION=1` also selects the fade.
+UI tests use this override and never change the system setting.
+No surviving rectangle gets its own animation object.
 Session/navigation generations and explicit motion cancellation prevent stale
 publication. Motion does not claim reclaimed space or undo availability.
 
@@ -92,6 +102,15 @@ publication. Motion does not claim reclaimed space or undo availability.
   fixture removal, bounded previous frame, read-only transition and replacement.
 - "testPartialRemovalPreservesSurvivingSelectionWithoutSuccessMotion": actual
   partial fixture execution retains the selected directory and issue log.
+- "testRecoveryRetainsRowsWithoutInteractiveStaleTree": retained display rows, blocked input, and replacement of the obsolete handle.
+- "testRecoveryPublishesBoundedSliceAndScrollForLateSurvivor": a survivor beyond row 255 gets its row slice and scroll request.
+- "testRecoveryKeepsOutsideFocusSurvivorWithoutFalseTreeRow": an outside-focus survivor stays selected without a tree row.
+- "testRemovalOutcomeKeepsHostedMapViewportAndTreeRowsStable": full hosted removal preserves rows and map geometry across debounce intervals.
+- "testInsideTrashTravelsBetweenMateriallyDistinctRegions": separate visible endpoints.
+- "testInsideTrashTravelsToTheMovedTileBeyondAccessibilityTargets": a simulated inside-Trash
+  move selects travel to a destination tile outside the accessibility targets.
+- "testFixtureReduceMotionOverrideIsIgnoredOutsideFixtureMode": the override needs
+  fixture mode and produces a fade for a real removal.
 
 [DixModelTests.swift](../native/ExplorerModelTests/DixModelTests.swift)
 "testDisclosureZoomBreadcrumbAndAncestorRestoreContext" and
@@ -110,7 +129,8 @@ DI_TEST_ROOT points below the external generated project. UI tests explicitly cl
 that host override and retain their own fixture-only launch arguments.
 
 Untested limits: real native chooser/Finder/Trash interactions, metadata crash
-recovery/durability faults, Intel/older macOS, full VoiceOver and visual/compositor
-motion acceptance. Hosted/offscreen tests do not replace foreground screenshots or
-UI automation. Startup failure stops that validation lane; no security changes or
+recovery/durability faults, Intel/older macOS and full VoiceOver.
+The UI test checks which motion style ran. It cannot verify compositor output.
+Manual frame-by-frame review must verify travel, poof, fade, and the final state.
+Hosted/offscreen tests do not replace foreground screenshots or UI automation. Startup failure stops that validation lane; no security changes or
 retries are a remedy.

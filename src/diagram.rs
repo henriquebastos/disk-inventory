@@ -148,7 +148,8 @@ fn gradient_color(color: [u8; 3], position: f64, border: bool) -> [u8; 3] {
         (value * if border { 0.775 } else { 1.0 }).round() as u8
     })
 }
-fn type_color(name: &[u8]) -> [u8; 3] {
+/// Base file-tile color before the gradient; tree swatches reuse it through the bridge.
+pub(crate) fn type_color(name: &[u8]) -> [u8; 3] {
     // Only known ASCII extensions matter; inspect at most twelve saved name bytes, without allocation.
     let tail = &name[name.len().saturating_sub(12)..];
     let ext = tail

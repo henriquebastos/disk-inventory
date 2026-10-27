@@ -26,11 +26,11 @@ pub(super) fn metadata(inode: u64, kind: Kind, bytes: u64) -> LiveMetadata {
     }
 }
 pub(super) fn map() -> Result<Map, BridgeError> {
-    build_map(false)
+    build_map(false, false)
 }
-fn build_map(presentation: bool) -> Result<Map, BridgeError> {
+fn build_map(presentation: bool, visible_travel: bool) -> Result<Map, BridgeError> {
     let mut map = Map {
-        root: PathBuf::from("/simulated-inventory"),
+        root: PathBuf::from("/Workspace"),
         nodes: vec![],
         names: vec![],
         counters: Counters::default(),
@@ -78,7 +78,15 @@ fn build_map(presentation: bool) -> Result<Map, BridgeError> {
     add(0, b"zero-byte", 31, Kind::File, 0, 1)?;
     add(0, b"hardlink-a", 32, Kind::File, 512, 2)?;
     add(0, b"hardlink-b", 32, Kind::File, 512, 2)?;
-    add(0, b"trash", 33, Kind::Dir, 30, 1)?;
+    // A larger owned Trash directory separates the source and destination map regions.
+    add(
+        0,
+        b"trash",
+        33,
+        Kind::Dir,
+        if visible_travel { 16384 } else { 30 },
+        1,
+    )?;
     add(0, b"raw-\xff", 34, Kind::File, 128, 1)?;
     map.aggregate()?;
     Ok(map)
@@ -86,7 +94,7 @@ fn build_map(presentation: bool) -> Result<Map, BridgeError> {
 // Bounded visual edge cases, separate from every accepted boundary/failure scenario.
 fn visual_details_map() -> Result<Map, BridgeError> {
     let mut map = Map {
-        root: PathBuf::from("/simulated-inventory"),
+        root: PathBuf::from("/Workspace"),
         nodes: vec![],
         names: vec![],
         counters: Counters::default(),
@@ -140,6 +148,8 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         "visual-details",
         "metadata-delay",
         "trash-inside",
+        "presentation-trash-inside",
+        "presentation-trash-late-target",
         "trash-outside",
         "metadata-failure",
         "permission-failure",
@@ -153,7 +163,7 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
     .contains(&scenario)
     {
         return Err(BridgeError::InvalidInput {
-            message: format!("unknown simulated scenario: {scenario}"),
+            message: format!("unknown fixture scenario: {scenario}"),
         });
     }
     let map = if matches!(scenario, "dix" | "dix-wide" | "dix-deep") {
@@ -167,28 +177,36 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         )?
     } else if scenario == "visual-details" {
         visual_details_map()?
-    } else if matches!(scenario, "presentation" | "metadata-delay") {
-        build_map(true)?
+    } else if matches!(
+        scenario,
+        "presentation"
+            | "metadata-delay"
+            | "presentation-trash-inside"
+            | "presentation-trash-late-target"
+    ) {
+        build_map(true, scenario == "presentation-trash-inside")?
     } else {
         map()?
     };
     let mut fs = MemoryFileSystem::default();
     fs.insert("/", metadata(90, Kind::Dir, 0));
-    fs.insert("/simulated-outside", metadata(91, Kind::Dir, 0));
+    fs.insert("/.Trash", metadata(91, Kind::Dir, 0));
     for id in 0..map.nodes.len() {
         let node = &map.nodes[id];
         let mut m = metadata(node.ino, node.kind, node.raw);
         m.links = node.links;
         fs.insert(map.path(id), m);
     }
-    let root = Path::new("/simulated-inventory");
-    fs.trash_behavior = TrashBehavior::MoveTo(PathBuf::from("/simulated-outside/moved"));
+    let root = Path::new("/Workspace");
+    fs.trash_behavior = TrashBehavior::MoveTo(PathBuf::from("/.Trash/moved"));
     match scenario {
         "metadata-delay" => {
             fs.metadata_delays
                 .insert(root.join("large-file"), std::time::Duration::from_secs(1));
         }
-        "trash-inside" => fs.trash_behavior = TrashBehavior::MoveTo(root.join("trash/moved")),
+        "trash-inside" | "presentation-trash-inside" | "presentation-trash-late-target" => {
+            fs.trash_behavior = TrashBehavior::MoveTo(root.join("trash/moved"))
+        }
         "metadata-failure" => {
             fs.metadata_errors.insert(root.join("large-file"));
         }
@@ -203,10 +221,9 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         }
         "trash-unknown" => fs.unknown_scope = true,
         "trash-missing" => {
-            fs.trash_behavior =
-                TrashBehavior::MissingDestination(PathBuf::from("/simulated-outside/moved"))
+            fs.trash_behavior = TrashBehavior::MissingDestination(PathBuf::from("/.Trash/moved"))
         }
-        "trash-failure" => fs.trash_behavior = TrashBehavior::Fail("simulated Trash denied".into()),
+        "trash-failure" => fs.trash_behavior = TrashBehavior::Fail("Trash access denied".into()),
         "unknown-allocation" => {
             // Singleton observations deliberately disagree for a new shared identity.
             fs.insert(root.join("unknown-a"), metadata(100, Kind::File, 100));
@@ -219,7 +236,7 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
 
 fn dix_map(count: u32, deep: bool) -> Result<Map, BridgeError> {
     let mut map = Map {
-        root: "/simulated-inventory".into(),
+        root: "/Workspace".into(),
         nodes: vec![],
         names: vec![],
         counters: Counters::default(),
