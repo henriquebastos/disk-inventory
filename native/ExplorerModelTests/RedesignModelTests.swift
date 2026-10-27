@@ -415,6 +415,43 @@ import XCTest
     XCTAssertNil(model.outcome)
   }
 
+  func testConfirmationPresentationNamesItemAndAssignsAlertRoles() async throws {
+    let model = try await fixture("presentation")
+    defer { model.shutdown() }
+    for (name, scope) in [("large-file", "File"), ("small-files", "Directory and its contents")] {
+      model.select(try entry(name, in: model))
+      for action in [ActionKind.trash, .permanentlyDelete] {
+        model.prepare(action)
+        try await wait { model.pending != nil }
+        let pending = try XCTUnwrap(model.pending)
+        XCTAssertEqual(pending.name, name)
+        XCTAssertEqual(pending.scope, scope)
+        if action == .trash {
+          XCTAssertEqual(pending.title, "Move “\(name)” to the Trash?")
+          XCTAssertEqual(pending.actionTitle, "Move to Trash")
+          XCTAssertEqual(pending.warning, "Trash may not free space until emptied.")
+          // Return confirms the Trash; the system does not draw it red.
+          XCTAssertTrue(pending.actionIsDefault)
+          XCTAssertFalse(pending.actionIsDestructive)
+        } else {
+          XCTAssertEqual(pending.title, "Delete “\(name)” immediately?")
+          XCTAssertEqual(pending.actionTitle, "Delete Immediately")
+          XCTAssertEqual(
+            pending.warning,
+            scope == "File"
+              ? "This cannot be undone."
+              : "This cannot be undone. An error may leave some contents undeleted.")
+          // No default button: Return must not delete, and Cancel is never the default.
+          XCTAssertFalse(pending.actionIsDefault)
+          XCTAssertTrue(pending.actionIsDestructive)
+        }
+        model.cancelConfirmation()
+        XCTAssertNil(model.pending)
+        try await wait { model.canAct }
+      }
+    }
+  }
+
   func testPartialRemovalPreservesSurvivingSelectionWithoutSuccessMotion() async throws {
     let model = try await fixture("partial-deletion")
     model.select(try entry("small-files", in: model))

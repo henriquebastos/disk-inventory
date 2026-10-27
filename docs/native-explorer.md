@@ -76,7 +76,7 @@ of promising every file is visible.
 
 There is no inspector pane. A compact card below the tree shows the selected
 name/path, recorded allocation (directory subtree or file accounted allocation),
-direct-child count when applicable, and Reveal in Finder/Trash/Delete actions.
+direct-child count when applicable, and Reveal in Finder, Move to Trash… and Delete… actions.
 Collapsing ancestors preserves the action target; clicking the card name reveals
 its row without zooming. Finder URLs use saved raw bytes, not the display string.
 Sharing or unknown-size caveats appear when needed. Storage uses decimal KB through EB and the system locale, with at most one decimal place.
@@ -99,12 +99,14 @@ frame must not change the viewport that requested it. Swift retains current boun
 views, selection, sparse navigation history and
 operation diagnostics, not the inventory. Hover/selection never rebuild the diagram.
 
-Trash and permanent deletion prepare off-main and retain the actual PreparedAction
-through a separate confirmation. Cancel is the default keyboard action, including permanent deletion. Rust still validates fresh metadata, raw paths and
-identity pins internally. Presentation shows only the target, directory-and-contents
-scope, relevant warnings and Cancel/named-action buttons, not hex or low-level
-metadata. Short confirmations fit their content; long paths can scroll within a
-bounded region while warnings and buttons remain outside it.
+Trash and permanent deletion prepare off-main and retain the PreparedAction
+through a separate confirmation: an NSAlert sheet
+([ConfirmationAlert.swift](../native/Explorer/ConfirmationAlert.swift)); SwiftUI drew
+destructive buttons gray. The title names the item (`Move “NAME” to the Trash?`,
+`Delete “NAME” immediately?`); long names shorten in the middle. A box shows
+the scope and full path, scrolling when long. Buttons stack: action on top, Cancel
+below. Esc cancels; Cancel is never default. Return confirms only Trash; Delete
+Immediately is red. Rust revalidates fresh metadata, raw paths and identity pins.
 Cancel, window close and session replacement release pending pins; replacement
 awaits cancellation before installing a new session. Root operations
 are visibly disabled and remain protected by Rust. Executing operations cannot be
@@ -136,7 +138,10 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
   latency scenario; XCUITest timing includes automation waits, not paint latency.
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.
 - "testDirectoryConfirmationsKeepOnlyTargetScopeAndWarnings": both action scopes,
-  explicit warnings, cancellation, and absence of misleading entry-only sizes/hex.
+  named title, scope, warnings, cancellation; no entry-only sizes/hex.
+- "testTrashConfirmationReturnConfirmsWithCancelBelowAction": Return trashes.
+- "testPermanentConfirmationHasNoDefaultAndEscapeCancels": Return does nothing, Esc
+  cancels, then deletion succeeds.
 - "testDenseMapHoverClickRevealAndTinyDirectoryZoom": independent hover, linked
   descendant reveal without zoom, disclosure and 4/8 KiB zoom visibility. Collapse
   assertions await asynchronous row publication, not just input delivery.
@@ -149,7 +154,8 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
 Fixture mode shows "SIMULATED" only in the window title; other content matches production.
 "testFixtureModeNamesSimulationOnlyInWindowTitle" checks the window and its confirmation.
 "testOnlyFixtureWindowTitleNamesSimulation" in
-[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift) checks the production title. `--fixture-mode`,
+[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift) checks the production title;
+"testConfirmationPresentationNamesItemAndAssignsAlertRoles" checks confirmation text and roles. `--fixture-mode`,
 `--scenario`, or `DI_UI_TEST` locks the app into fixture-only mode; incomplete or
 unknown configuration is an error, never a native fallback.
 

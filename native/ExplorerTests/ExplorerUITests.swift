@@ -110,6 +110,44 @@ import XCTest
     XCTAssertFalse(app.buttons["delete"].isEnabled)
     screenshot("deleted-live-inventory")
   }
+  func testTrashConfirmationReturnConfirmsWithCancelBelowAction() {
+    launch("trash-outside")
+    prepare("trash", target: "large-file")
+    let cancel = app.buttons["cancel-action"]
+    let action = app.buttons["confirm-action"]
+    XCTAssertEqual(action.title, "Move to Trash")
+    // The macOS alert stacks its buttons: the default on top, Cancel at the bottom.
+    XCTAssertGreaterThanOrEqual(cancel.frame.minY, action.frame.maxY - 1)
+    XCTAssertEqual(cancel.frame.midX, action.frame.midX, accuracy: 2)
+    text("confirmation-title", contains: "Move “large-file” to the Trash?")
+    screenshot("trash-confirmation-default-action")
+    app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+    text("outcome", contains: "Moved to Trash")
+    XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
+  }
+  func testPermanentConfirmationHasNoDefaultAndEscapeCancels() {
+    launch()
+    prepare("delete", target: "large-file")
+    let title = app.staticTexts["confirmation-title"]
+    // Return has no default button to press: the alert and the row stay.
+    app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+    XCTAssertFalse(title.waitForNonExistence(timeout: 2))
+    XCTAssertTrue(row("large-file").exists)
+    text("confirmation-title", contains: "Delete “large-file” immediately?")
+    XCTAssertEqual(app.buttons["confirm-action"].title, "Delete Immediately")
+    XCTAssertGreaterThanOrEqual(
+      app.buttons["cancel-action"].frame.minY, app.buttons["confirm-action"].frame.maxY - 1)
+    screenshot("permanent-confirmation-without-default")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    XCTAssertTrue(title.waitForNonExistence(timeout: 8))
+    XCTAssertTrue(row("large-file").exists)
+    XCTAssertFalse(app.staticTexts["outcome"].exists)
+    // A second preparation after Esc must present a new alert.
+    prepare("delete", target: "large-file")
+    app.buttons["confirm-action"].click()
+    text("outcome", contains: "Permanently deleted")
+    XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
+  }
   func testTrashInsideAndOutside() {
     for scenario in ["trash-inside", "trash-outside"] {
       launch(scenario)
@@ -241,10 +279,20 @@ import XCTest
     text("selected-usage", contains: "8.2 KB")
     for action in ["trash", "delete"] {
       prepare(action, target: "small-files")
-      text("confirmation-title", contains: "directory and its contents")
+      text("confirmation-title", contains: "“small-files”")
+      text("confirmation-scope", contains: "Directory and its contents")
+      XCTAssertLessThan(
+        app.staticTexts["confirmation-scope"].frame.maxY,
+        app.staticTexts["confirmation-path"].frame.minY + 1)
       text(
         "confirmation-warning",
-        contains: action == "trash" ? "nothing will be permanently deleted" : "cannot be undone")
+        contains: action == "trash" ? "Trash may not free space until emptied." : "cannot be undone"
+      )
+      XCTAssertFalse(
+        app.staticTexts.matching(
+          NSPredicate(
+            format: "label CONTAINS %@ OR value CONTAINS %@", "If Trash fails", "If Trash fails")
+        ).firstMatch.exists)
       XCTAssertFalse(app.staticTexts["directory-size-scope"].exists)
       XCTAssertFalse(app.staticTexts["confirmation-hex"].exists)
       XCTAssertFalse(app.staticTexts["Device / inode"].exists)
@@ -311,9 +359,11 @@ import XCTest
       row(name).doubleClick()
     }
     prepare("delete", target: "target-directory")
-    text("confirmation-title", contains: "directory and its contents")
+    text("confirmation-title", contains: "Delete “target-directory” immediately?")
+    text("confirmation-scope", contains: "Directory and its contents")
     let details = app.windows.firstMatch
     let path = app.staticTexts["confirmation-path"]
+    XCTAssertLessThan(app.staticTexts["confirmation-scope"].frame.maxY, path.frame.minY + 1)
     XCTAssertGreaterThanOrEqual(path.frame.minY, details.frame.minY - 2)
     XCTAssertLessThanOrEqual(path.frame.maxY, details.frame.maxY + 2)
     XCTAssertFalse(app.checkBoxes["show-target-hex"].exists)

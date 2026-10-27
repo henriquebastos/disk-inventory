@@ -152,9 +152,7 @@ struct ExplorerView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .sheet(item: $model.pending, onDismiss: model.cancelConfirmation) { pending in
-      confirmation(pending)
-    }
+    .background(ConfirmationAlert(model: model, pending: model.pending))
   }
   var progress: some View {
     HStack(spacing: 10) {
@@ -277,7 +275,7 @@ struct ExplorerView: View {
           Spacer(minLength: 0)
           Button("Delete…", role: .destructive) { model.prepare(.permanentlyDelete) }
             .disabled(!model.canAct).accessibilityIdentifier("delete")
-          Button("Move to Trash") { model.prepare(.trash) }.disabled(!model.canAct)
+          Button("Move to Trash…") { model.prepare(.trash) }.disabled(!model.canAct)
             .accessibilityIdentifier("trash")
         }.controlSize(.small)
         if entry.parent == nil {
@@ -341,42 +339,4 @@ struct ExplorerView: View {
       }.frame(maxWidth: .infinity, alignment: .leading)
     }.frame(height: 100).font(.caption).padding(12)
   }
-  func confirmation(_ pending: PendingConfirmation) -> some View {
-    let permanent = pending.details.action == .permanentlyDelete
-    let directory = pending.details.metadata.kind == .directory
-    let target = directory ? "this directory and its contents" : "this file"
-    return VStack(alignment: .leading, spacing: 16) {
-      Text(permanent ? "Permanently delete \(target)?" : "Move \(target) to Trash?")
-        .font(.title2.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-        .accessibilityIdentifier("confirmation-title")
-      ViewThatFits(in: .vertical) {
-        confirmationPath(pending)
-        ScrollView { confirmationPath(pending) }
-      }.frame(maxHeight: 260)
-      Text(
-        permanent
-          ? (directory
-            ? "This cannot be undone. An error may leave some contents undeleted."
-            : "This cannot be undone.")
-          : "Trash may not free space until emptied. If Trash fails, nothing will be permanently deleted."
-      ).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("confirmation-warning")
-      HStack {
-        Spacer()
-        Button("Cancel", role: .cancel, action: model.cancelConfirmation).keyboardShortcut(
-          .defaultAction
-        ).accessibilityIdentifier("cancel-action")
-        Button(
-          permanent ? "Permanently Delete" : "Move to Trash", role: .destructive,
-          action: model.execute
-        ).accessibilityIdentifier("confirm-action")
-      }
-    }.padding(24).frame(width: 510).onExitCommand(perform: model.cancelConfirmation)
-  }
-  private func confirmationPath(_ pending: PendingConfirmation) -> some View {
-    Text(displayPath(pending.details.rawPath)).font(.body).textSelection(.enabled)
-      .fixedSize(horizontal: false, vertical: true)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .accessibilityIdentifier("confirmation-path")
-  }
-
 }

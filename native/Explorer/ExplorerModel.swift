@@ -24,6 +24,25 @@ struct PendingConfirmation: Identifiable {
   let id = UUID()
   let action: PreparedAction
   let details: ConfirmationDetails
+  let name: String
+  var permanent: Bool { details.action == .permanentlyDelete }
+  var directory: Bool { details.metadata.kind == .directory }
+  var title: String {
+    // Keep the alert title near two lines; the detail box shows the full path.
+    let shown = name.count > 60 ? "\(name.prefix(29))…\(name.suffix(30))" : name
+    return permanent ? "Delete “\(shown)” immediately?" : "Move “\(shown)” to the Trash?"
+  }
+  var scope: String { directory ? "Directory and its contents" : "File" }
+  var warning: String {
+    guard permanent else { return "Trash may not free space until emptied." }
+    return directory
+      ? "This cannot be undone. An error may leave some contents undeleted."
+      : "This cannot be undone."
+  }
+  var actionTitle: String { permanent ? "Delete Immediately" : "Move to Trash" }
+  /// Return confirms a Trash. Permanent deletion has no default button.
+  var actionIsDefault: Bool { !permanent }
+  var actionIsDestructive: Bool { permanent }
 }
 
 @MainActor @Observable final class ExplorerModel {
@@ -776,7 +795,8 @@ struct PendingConfirmation: Identifiable {
           _ = try? await Task.detached { try action.0.cancel() }.value
           return
         }
-        pending = PendingConfirmation(action: action.0, details: action.1)
+        pending = PendingConfirmation(
+          action: action.0, details: action.1, name: entryName(entry))
       } catch { if version == actionVersion { self.error = "Preparation failed: \(error)" } }
       if version == actionVersion {
         working = false
