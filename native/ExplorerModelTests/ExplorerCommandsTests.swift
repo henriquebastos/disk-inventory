@@ -60,15 +60,15 @@ import XCTest
     XCTAssertEqual(model.canRefresh, enabled.contains(.refreshDirectory), state, line: line)
     XCTAssertEqual(model.canStopScan, enabled.contains(.stopScan), state, line: line)
     XCTAssertEqual(model.canOpenInventory, enabled.contains(.chooseFolder), state, line: line)
-    XCTAssertEqual(model.canOpenInventory, enabled.contains(.openSnapshot), state, line: line)
-    XCTAssertEqual(model.canOpenLastInventory, enabled.contains(.openLastScan), state, line: line)
+    XCTAssertEqual(
+      model.canReopenLastFolder, enabled.contains(.reopenLastFolder), state, line: line)
   }
 
   func testMenusFollowMenuBarOrderAndFinderShortcuts() throws {
     XCTAssertEqual(
       ExplorerCommand.fileMenu.map { $0.map(\.title) },
       [
-        ["Choose Folder…", "Open Snapshot…", "Open Last Scan"],
+        ["Choose Folder…", "Reopen Last Folder"],
         ["Refresh Directory", "Stop Scan"],
         ["Reveal in Finder", "Move to Trash…", "Delete Immediately…"],
       ])
@@ -97,7 +97,7 @@ import XCTest
     for command in ExplorerCommand.allCases {
       XCTAssertEqual(
         command.title.hasSuffix("…"),
-        [.chooseFolder, .openSnapshot, .moveToTrash, .deleteImmediately].contains(command),
+        [.chooseFolder, .moveToTrash, .deleteImmediately].contains(command),
         command.title)
     }
     // Context menus offer the selected-item commands without menu-bar shortcuts.
@@ -178,7 +178,7 @@ import XCTest
     let storage = ManagedInventoryStorage(root: support)
     let offline = ExplorerModel(arguments: [], environment: [:], storage: storage)
     defer { offline.shutdown() }
-    assertCommands(offline, enabled: [.chooseFolder, .openSnapshot], "start")
+    assertCommands(offline, enabled: [.chooseFolder], "start")
     _ = try storage.newGeneration()
     let record = ManagedInventory(
       filename: "inventory-\(UUID().uuidString).dmap", scannedAt: Date(), rootName: "/r")
@@ -187,8 +187,47 @@ import XCTest
     let later = ExplorerModel(arguments: [], environment: [:], storage: storage)
     defer { later.shutdown() }
     try await wait { later.lastInventory != nil }
-    assertCommands(
-      later, enabled: [.chooseFolder, .openSnapshot, .openLastScan], "start with last scan")
+    assertCommands(later, enabled: [.chooseFolder, .reopenLastFolder], "start with last folder")
+  }
+
+  func testReopenLastFolderNamesTheFolderAndNoSnapshotImportExists() async throws {
+    // The user chooses only folders. No command opens an arbitrary snapshot file.
+    XCTAssertEqual(
+      ExplorerCommand.allCases.map(\.title),
+      [
+        "Choose Folder…", "Reopen Last Folder", "Refresh Directory", "Stop Scan",
+        "Reveal in Finder", "Move to Trash…", "Delete Immediately…", "Open Selected Directory",
+        "Enclosing Directory",
+      ])
+    let root = try XCTUnwrap(ProcessInfo.processInfo.environment["DI_TEST_ROOT"])
+    let support = URL(fileURLWithPath: root).appendingPathComponent(
+      "native-reopen-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: support) }
+    let storage = ManagedInventoryStorage(root: support)
+    let empty = ExplorerModel(arguments: [], environment: [:], storage: storage)
+    defer { empty.shutdown() }
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertNil(empty.lastInventory)
+    XCTAssertEqual(ExplorerCommand.reopenLastFolder.title(in: empty), "Reopen Last Folder")
+    XCTAssertFalse(ExplorerCommand.reopenLastFolder.isEnabled(in: empty))
+
+    _ = try storage.newGeneration()
+    let record = ManagedInventory(
+      filename: "inventory-\(UUID().uuidString).dmap", scannedAt: Date(),
+      rootName: "/Users/someone/Workspace")
+    try JSONEncoder().encode(record).write(
+      to: support.appendingPathComponent("last-inventory.json"))
+    let named = ExplorerModel(arguments: [], environment: [:], storage: storage)
+    defer { named.shutdown() }
+    try await wait { named.lastInventory != nil }
+    XCTAssertEqual(ExplorerCommand.reopenLastFolder.title(in: named), "Reopen “Workspace”")
+    XCTAssertTrue(ExplorerCommand.reopenLastFolder.isEnabled(in: named))
+    // The name is a label only. The reopened file comes from the owned generation name.
+    XCTAssertEqual(storage.url(for: named.lastInventory!).lastPathComponent, record.filename)
+    // Other commands keep their fixed titles.
+    for command in ExplorerCommand.allCases where command != .reopenLastFolder {
+      XCTAssertEqual(command.title(in: named), command.title)
+    }
   }
 
   func testMenuTrashAndStopUseModelPathsWithoutLiveMetadata() async throws {

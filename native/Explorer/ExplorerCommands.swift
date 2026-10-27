@@ -5,8 +5,7 @@ import SwiftUI
 /// read `isEnabled(in:)` and call `perform(in:)`. Enabled states use saved model state only.
 enum ExplorerCommand: Int, CaseIterable {
   case chooseFolder = 1
-  case openSnapshot
-  case openLastScan
+  case reopenLastFolder
   case refreshDirectory
   case stopScan
   case revealInFinder
@@ -17,7 +16,7 @@ enum ExplorerCommand: Int, CaseIterable {
 
   /// File menu groups, in order. Dividers separate the groups.
   static let fileMenu: [[ExplorerCommand]] = [
-    [.chooseFolder, .openSnapshot, .openLastScan],
+    [.chooseFolder, .reopenLastFolder],
     [.refreshDirectory, .stopScan],
     [.revealInFinder, .moveToTrash, .deleteImmediately],
   ]
@@ -29,8 +28,7 @@ enum ExplorerCommand: Int, CaseIterable {
   var title: String {
     switch self {
     case .chooseFolder: "Choose Folder…"
-    case .openSnapshot: "Open Snapshot…"
-    case .openLastScan: "Open Last Scan"
+    case .reopenLastFolder: "Reopen Last Folder"
     case .refreshDirectory: "Refresh Directory"
     case .stopScan: "Stop Scan"
     case .revealInFinder: "Reveal in Finder"
@@ -39,6 +37,11 @@ enum ExplorerCommand: Int, CaseIterable {
     case .openSelectedDirectory: "Open Selected Directory"
     case .enclosingDirectory: "Enclosing Directory"
     }
+  }
+  /// The shown title. Reopen names the last folder from its metadata: a label only.
+  @MainActor func title(in model: ExplorerModel?) -> String {
+    guard self == .reopenLastFolder, let last = model?.lastInventory else { return title }
+    return last.reopenTitle
   }
   /// Menu-bar shortcut. Finder's MenuBar.nib gives Move to Trash Command-Delete and
   /// Delete Immediately Option-Command-Delete. Command-Period cancels an operation.
@@ -50,7 +53,7 @@ enum ExplorerCommand: Int, CaseIterable {
     case .deleteImmediately: KeyboardShortcut(.delete, modifiers: [.command, .option])
     case .openSelectedDirectory: KeyboardShortcut(.downArrow, modifiers: .command)
     case .enclosingDirectory: KeyboardShortcut(.upArrow, modifiers: .command)
-    case .openSnapshot, .openLastScan, .refreshDirectory, .revealInFinder: nil
+    case .reopenLastFolder, .refreshDirectory, .revealInFinder: nil
     }
   }
   var removesItem: Bool { self == .moveToTrash || self == .deleteImmediately }
@@ -59,8 +62,8 @@ enum ExplorerCommand: Int, CaseIterable {
   /// window, but the menu bar stays live.
   @MainActor func isEnabled(in model: ExplorerModel) -> Bool {
     switch self {
-    case .chooseFolder, .openSnapshot: model.canOpenInventory
-    case .openLastScan: model.canOpenLastInventory
+    case .chooseFolder: model.canOpenInventory
+    case .reopenLastFolder: model.canReopenLastFolder
     case .refreshDirectory: model.canRefresh
     case .stopScan: model.canStopScan
     case .revealInFinder: model.canRevealInFinder
@@ -73,8 +76,7 @@ enum ExplorerCommand: Int, CaseIterable {
     guard isEnabled(in: model) else { return }
     switch self {
     case .chooseFolder: model.createSnapshot()
-    case .openSnapshot: model.openSnapshot()
-    case .openLastScan: model.openLastInventory()
+    case .reopenLastFolder: model.reopenLastFolder()
     case .refreshDirectory: model.refresh()
     case .stopScan: model.scan.stop()
     case .revealInFinder: model.revealInFinder()
@@ -122,7 +124,7 @@ struct ExplorerMenuCommands: Commands {
     }
   }
   private func button(_ command: ExplorerCommand) -> some View {
-    Button(command.title) { state.perform(command) }
+    Button(command.title(in: state.model)) { state.perform(command) }
       .keyboardShortcut(command.shortcut)
       .disabled(!state.isEnabled(command))
   }

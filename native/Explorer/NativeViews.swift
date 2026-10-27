@@ -194,6 +194,25 @@ struct ContentsTree: NSViewRepresentable {
         x: indent + 39, y: 4, width: max(0, bar.frame.minX - indent - 45), height: 18)
     }
   }
+  /// Disk-usage cell. The table stretches a cell to the row height and a label draws its text
+  /// at the top, so the label gets the same centered frame as the name in `Cell`.
+  @MainActor final class SizeCell: NSTableCellView {
+    let label = NSTextField(labelWithString: "")
+    override init(frame: NSRect) {
+      super.init(frame: frame)
+      addSubview(label)
+      label.alignment = .right
+      label.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+      label.lineBreakMode = .byTruncatingTail
+      label.setAccessibilityIdentifier("tree-size")
+      textField = label
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layout() {
+      super.layout()
+      label.frame = NSRect(x: 0, y: 4, width: bounds.width, height: 18)
+    }
+  }
   @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     var model: ExplorerModel
     var updating = false
@@ -257,14 +276,10 @@ struct ContentsTree: NSViewRepresentable {
         return cell
       }
       let cell =
-        (tableView.makeView(withIdentifier: id, owner: self) as? NSTextField)
-        ?? NSTextField(labelWithString: "")
+        (tableView.makeView(withIdentifier: id, owner: self) as? SizeCell) ?? SizeCell(frame: .zero)
       cell.identifier = id
-      cell.stringValue = value.map { model.numbers.storage($0.entry.subtreeBytes) } ?? ""
-      cell.alignment = .right
-      cell.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-      cell.lineBreakMode = .byTruncatingTail
-      cell.toolTip = cell.stringValue
+      cell.label.stringValue = value.map { model.numbers.storage($0.entry.subtreeBytes) } ?? ""
+      cell.label.toolTip = cell.label.stringValue
       return cell
     }
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {

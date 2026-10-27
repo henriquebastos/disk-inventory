@@ -11,16 +11,28 @@ Support location with FileManager and appends the bundle identifier. Tests injec
 owned temporary roots; fixture-mode launch never resolves production storage.
 Normal launch reads only small last-inventory metadata, not the inventory or source.
 
-Choose Folder selects an explicit root, not an output file. A unique app-owned UUID
-generation is passed to no-clobber controlled creation. After Rust saves, reopens
-and validates it, the app atomically replaces small JSON metadata naming the last
-inventory and its scan time. Only then does it attempt removal of the previous
-managed generation. Cancellation/failure before promotion preserves the last valid
-metadata/snapshot. Cleanup accepts only direct app-owned UUID generation names and
-never deletes the generation currently referenced by metadata. Imports are not
-registered for retention or cleanup. Last scan's Open reads the saved inventory
-offline. Imported snapshots show “Scan time unavailable,” not their file modification
-time. Local refresh/removal retains the original scan time and shows “Not saved.”
+The user chooses only folders. The snapshot is an internal file, and no command opens
+another snapshot file. Choose Folder selects an explicit root, not an output file. A
+unique app-owned UUID generation is passed to no-clobber controlled creation. After
+Rust saves, reopens and validates it, the app atomically replaces small JSON metadata
+naming the last inventory, its scan time and its root as display text (`rootName`).
+Only then does it attempt removal of the previous managed generation.
+Cancellation/failure before promotion preserves the last valid metadata/snapshot.
+Cleanup accepts only direct app-owned UUID generation names and never deletes the
+generation currently referenced by metadata. Reopen reads the saved inventory offline
+and shows its saved scan time. Local refresh/removal retains the original scan time
+and shows “Not saved.”
+
+The reopen label is `Reopen “NAME”`. NAME is the last path component of `rootName`
+(`/` for the filesystem root), shortened in the middle above 60 characters. Metadata
+without `rootName`, or with an empty one, shows “Reopen Last Folder.” The name is a
+label only. Reopen opens the metadata filename, which must name an owned generation.
+
+Test-only seam: in fixture mode, `DI_FIXTURE_STORAGE_ROOT` can name an existing
+absolute directory that a UI test owns. The model only reads the metadata there.
+Fixture mode never creates, opens, promotes or cleans up an inventory, so Choose
+Folder and Reopen stay disabled. Any other value leaves fixture storage empty.
+Production ignores the variable.
 
 The directory is trusted, not protected from hostile concurrent namespace changes.
 Metadata replacement is atomic, not a crash-recovery journal or guaranteed durable
@@ -86,8 +98,13 @@ publication. Motion does not claim reclaimed space or undo availability.
   authoritative; Finder is unavailable when Foundation cannot round-trip them.
 - "testNoScanLaunchReadsOnlySmallManagedMetadata": no constructor, scan, poll or
   storage creation at normal startup with an injected root.
-- "testManagedStorageLifecycleOfflineOpenAndImportsAreNotRetained": create,
-  promotion, previous-generation cleanup, import isolation and offline last-open.
+- "testManagedStorageLifecycleReopensLastFolderOfflineAndCleansOldGeneration": create,
+  promotion, the reopen label, previous-generation cleanup, a foreign file that cleanup
+  rejects, and offline reopen.
+- "testLastFolderMetadataRoundTripsRootNameAndOldMetadataFallsBack": `rootName` round
+  trip, `/`, 60-character middle shortening, and metadata without or with an empty name.
+- "testFixtureStorageRootIsReadOnlyAndNeedsFixtureModeAndAnExistingDirectory": the
+  seam accepts only an existing absolute directory, reads only, and production ignores it.
 - "testCancelledCreatePreservesPriorSnapshotAndFailedCreateCleansGeneration":
   typed Rust pre-cancellation and failed creation preserve bytes, session and metadata.
 - "testScanPollingStopAndReplacementCallRustControlAndEndPolling": approximately

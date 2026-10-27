@@ -91,28 +91,29 @@ struct ExplorerView: View {
           Image(systemName: "externaldrive").font(.system(size: 42)).foregroundStyle(.secondary)
           Text("What should we measure?").font(.title.weight(.semibold))
           Text("Nothing is scanned until you choose.").foregroundStyle(.secondary)
-          HStack {
-            Button("Choose Folder…") { ExplorerCommand.chooseFolder.perform(in: model) }
-              .buttonStyle(.borderedProminent).accessibilityIdentifier("create-inventory")
-            Button("Open Snapshot…") { ExplorerCommand.openSnapshot.perform(in: model) }
-              .accessibilityIdentifier("open-snapshot")
-          }.disabled(!ExplorerCommand.chooseFolder.isEnabled(in: model))
+          Button("Choose Folder…") { ExplorerCommand.chooseFolder.perform(in: model) }
+            .buttonStyle(.borderedProminent).accessibilityIdentifier("create-inventory")
+            .disabled(!ExplorerCommand.chooseFolder.isEnabled(in: model))
           if let last = model.lastInventory {
             VStack(alignment: .leading, spacing: 6) {
-              Text("Last scan").font(.caption).foregroundStyle(.secondary)
-              HStack {
-                VStack(alignment: .leading) {
-                  Text(last.rootName).lineLimit(1).truncationMode(.middle).help(last.rootName)
-                  Text(last.scannedAt.formatted(date: .abbreviated, time: .shortened)).font(
-                    .caption
-                  ).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Open") { ExplorerCommand.openLastScan.perform(in: model) }
-                  .accessibilityIdentifier("open-last")
-                  .disabled(!ExplorerCommand.openLastScan.isEnabled(in: model))
+              Text("Last folder").font(.caption).foregroundStyle(.secondary)
+              if let path = last.rootName, !path.isEmpty {
+                Text(path).lineLimit(1).truncationMode(.middle).help(path)
               }
-            }.padding(12).frame(width: 420).background(
+              Text(last.scannedAt.formatted(date: .abbreviated, time: .shortened)).font(
+                .caption
+              ).foregroundStyle(.secondary)
+              // The folder name has at most 60 characters, so this row fits the title.
+              Button {
+                ExplorerCommand.reopenLastFolder.perform(in: model)
+              } label: {
+                Text(ExplorerCommand.reopenLastFolder.title(in: model)).lineLimit(1)
+                  .truncationMode(.middle)
+              }
+              .accessibilityIdentifier("reopen-last-folder")
+              .disabled(!ExplorerCommand.reopenLastFolder.isEnabled(in: model))
+              .frame(maxWidth: .infinity, alignment: .trailing)
+            }.padding(12).frame(width: 520, alignment: .leading).background(
               .quaternary, in: RoundedRectangle(cornerRadius: 8))
           }
           if model.fixtureMode {
@@ -149,12 +150,12 @@ struct ExplorerView: View {
   func header(_ r: ViewRecords) -> some View {
     HStack(spacing: 12) {
       Menu {
-        Button("Open Snapshot…") { ExplorerCommand.openSnapshot.perform(in: model) }
-          .accessibilityIdentifier("open-snapshot")
         Button("Choose Folder…") { ExplorerCommand.chooseFolder.perform(in: model) }
           .accessibilityIdentifier("create-inventory")
-        Button("Open Last Scan") { ExplorerCommand.openLastScan.perform(in: model) }
-          .disabled(!ExplorerCommand.openLastScan.isEnabled(in: model))
+        Button(ExplorerCommand.reopenLastFolder.title(in: model)) {
+          ExplorerCommand.reopenLastFolder.perform(in: model)
+        }
+        .disabled(!ExplorerCommand.reopenLastFolder.isEnabled(in: model))
       } label: {
         Image(systemName: "externaldrive")
       }
@@ -194,11 +195,10 @@ struct ExplorerView: View {
           .callout.weight(.semibold)
         )
         .monospacedDigit().accessibilityIdentifier("scope-total")
-        Text(
-          model.scanDate.map { "Scanned " + $0.formatted(date: .abbreviated, time: .shortened) }
-            ?? "Scan time unavailable"
-        )
-        .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("scan-date")
+        if let scanDate = model.scanDate {
+          Text("Scanned " + scanDate.formatted(date: .abbreviated, time: .shortened))
+            .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("scan-date")
+        }
       }.fixedSize()
       Button("Refresh Directory", systemImage: "arrow.clockwise") {
         ExplorerCommand.refreshDirectory.perform(in: model)

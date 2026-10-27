@@ -30,11 +30,10 @@ open -n "$G/DerivedData/Build/Products/Debug/DiskInventory.app" \
   --args --fixture-mode --scenario dix
 ```
 
-Normal launch scans nothing. Open Snapshot reads saved data without checking its
-source. Choose Folder uses a native directory panel for an explicit root, then saves to
-app-managed Application Support storage. Last scan opens offline; Open Snapshot
-imports remain separate. Picker URLs use filesystem byte representations, not
-display paths. Scan progress, Stop, retention and executable tests are specified in
+Normal launch scans nothing. Choose Folder uses a native directory panel for an
+explicit root, then saves to app-managed Application Support storage. Reopen opens the
+last folder's saved inventory offline. The user never opens a snapshot file. Picker
+URLs use filesystem byte representations, not display paths. Scan progress, Stop, retention and executable tests are specified in
 [native-lifecycle.md](native-lifecycle.md). No save panel or automatic scan is used.
 
 ## 1b Navigation and presentation
@@ -54,6 +53,7 @@ circle in the base color of their map tile, which Rust sends as `OutlineRow.map_
 The bar shows saved subtree bytes as an integer percent of the focus total, rounded
 half up. Nonzero entries keep a 2% sliver. Zero and unknown usage show an empty track.
 VoiceOver ignores the swatch and the bar. The size column keeps the accessible value.
+Its label has the same centered frame as the name, because a table cell fills the row.
 
 Breadcrumb navigation retains at most 64 per-directory sparse Rust tree handles,
 focus/selection keys and scroll positions, never row pages or bitmap history.
@@ -130,6 +130,8 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
 - "testImmediateSavedOnlySelection": later selection during the
   latency scenario; XCUITest timing includes automation waits, not paint latency.
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.
+- "testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows": the drawn size text and
+  name share a vertical center within 1 point on a selected and an unselected row.
 - "testDirectoryConfirmationsKeepOnlyTargetScopeAndWarnings": both action scopes,
   named title, scope, warnings, cancellation; no entry-only sizes/hex.
 - "testDenseMapHoverClickRevealAndTinyDirectoryZoom": independent hover, linked

@@ -190,7 +190,7 @@ import XCTest
     model.shutdown()
   }
 
-  func testManagedStorageLifecycleOfflineOpenAndImportsAreNotRetained() async throws {
+  func testManagedStorageLifecycleReopensLastFolderOfflineAndCleansOldGeneration() async throws {
     let root = try ownedRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let source = root.appendingPathComponent("source")
@@ -203,30 +203,129 @@ import XCTest
     XCTAssertNil(model.error)
     let first = try XCTUnwrap(model.lastInventory)
     XCTAssertNotNil(model.scanDate)
-    let imported = root.appendingPathComponent("import.dmap")
-    try FileManager.default.copyItem(at: storage.url(for: first), to: imported)
-    model.load { try ExplorerSession.openSnapshot(snapshotPath: ExplorerModel.pathBytes(imported)) }
-    try await wait { !model.replacingSession }
-    XCTAssertNil(model.scanDate)  // Import time is not a scan date.
-    XCTAssertEqual(try storage.lastInventory()?.filename, first.filename)
+    XCTAssertEqual(first.rootName, source.path)
+    XCTAssertEqual(ExplorerCommand.reopenLastFolder.title(in: model), "Reopen “source”")
+    // A file outside the app's UUID generations is never cleanup's to remove.
+    let foreign = root.appendingPathComponent("foreign.dmap")
+    try FileManager.default.copyItem(at: storage.url(for: first), to: foreign)
     model.createManaged(root: source)
     try await wait { !model.replacingSession }
     let last = try XCTUnwrap(model.lastInventory)
     XCTAssertNotEqual(first.filename, last.filename)
     XCTAssertFalse(FileManager.default.fileExists(atPath: storage.url(for: first).path))
-    XCTAssertTrue(FileManager.default.fileExists(atPath: imported.path))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: foreign.path))
     XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: storage.root.path).count, 2)
-    XCTAssertThrowsError(try storage.discard(imported))
+    XCTAssertThrowsError(try storage.discard(foreign))
     try storage.discard(storage.url(for: last))
     XCTAssertTrue(FileManager.default.fileExists(atPath: storage.url(for: last).path))
     try FileManager.default.moveItem(at: source, to: root.appendingPathComponent("offline-source"))
-    model.openLastInventory()
+    model.reopenLastFolder()
     try await wait { !model.replacingSession }
     XCTAssertNil(model.error)
     XCTAssertEqual(model.scanDate, last.scannedAt)
     XCTAssertNotNil(try entry("owned.txt", in: model))
     XCTAssertFalse(model.scan.polling)
     model.shutdown()
+  }
+
+  func testLastFolderMetadataRoundTripsRootNameAndOldMetadataFallsBack() throws {
+    let root = try ownedRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let storage = ManagedInventoryStorage(root: root.appendingPathComponent("support"))
+    let date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let generation = try storage.newGeneration()
+    let published = try storage.publish(
+      generation, scannedAt: date, rootName: "/Users/someone/Workspace")
+    let read = try XCTUnwrap(try storage.lastInventory())
+    XCTAssertEqual(read.filename, published.filename)
+    XCTAssertEqual(read.scannedAt, date)
+    XCTAssertEqual(read.rootName, "/Users/someone/Workspace")
+    XCTAssertEqual(read.reopenTitle, "Reopen “Workspace”")
+    func title(_ rootName: String?) -> String {
+      ManagedInventory(filename: "inventory-x.dmap", scannedAt: date, rootName: rootName)
+        .reopenTitle
+    }
+    // The last path component, as in the root breadcrumb. The filesystem root keeps "/".
+    XCTAssertEqual(title("/Volumes/Data/Projects/"), "Reopen “Projects”")
+    XCTAssertEqual(title("/"), "Reopen “/”")
+    // Long names shorten in the middle at 60 characters, as in the confirmation title.
+    let long = String(repeating: "very-long-folder-name-", count: 5) + "end"
+    XCTAssertEqual(
+      title("/Volumes/Archive/" + long),
+      "Reopen “\(long.prefix(29))…\(long.suffix(30))”")
+    XCTAssertEqual(title("/a/" + String(repeating: "n", count: 60)).count, 69)
+    XCTAssertEqual(title(""), "Reopen Last Folder")
+    XCTAssertEqual(title(nil), "Reopen Last Folder")
+    // Metadata written without rootName still opens the last folder, with a generic label.
+    let old = try JSONSerialization.data(withJSONObject: [
+      "filename": published.filename, "scannedAt": date.timeIntervalSinceReferenceDate,
+    ])
+    try old.write(to: storage.root.appendingPathComponent("last-inventory.json"), options: .atomic)
+    let fallback = try XCTUnwrap(try storage.lastInventory())
+    XCTAssertNil(fallback.rootName)
+    XCTAssertEqual(fallback.filename, published.filename)
+    XCTAssertEqual(fallback.scannedAt, date)
+    XCTAssertEqual(fallback.reopenTitle, "Reopen Last Folder")
+  }
+
+  func testFixtureStorageRootIsReadOnlyAndNeedsFixtureModeAndAnExistingDirectory() async throws {
+    let root = try ownedRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let support = root.appendingPathComponent("fixture-support")
+    try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    let record = ManagedInventory(
+      filename: "inventory-\(UUID().uuidString).dmap", scannedAt: Date(), rootName: "/Workspace")
+    try JSONEncoder().encode(record).write(
+      to: support.appendingPathComponent("last-inventory.json"))
+    let file = support.appendingPathComponent("last-inventory.json")
+    for value in [
+      nil, "", "relative/support", root.appendingPathComponent("missing").path, file.path,
+    ] {
+      let environment = value.map { ["DI_FIXTURE_STORAGE_ROOT": $0] } ?? [:]
+      XCTAssertNil(ExplorerModel.fixtureStorage(environment), value ?? "no value")
+    }
+    XCTAssertEqual(
+      ExplorerModel.fixtureStorage(["DI_FIXTURE_STORAGE_ROOT": support.path])?.root.path,
+      support.path)
+    func listing() throws -> [String] {
+      try FileManager.default.contentsOfDirectory(atPath: support.path).sorted().map {
+        let attributes = try FileManager.default.attributesOfItem(
+          atPath: support.appendingPathComponent($0).path)
+        return "\($0) \(attributes[.size] ?? 0) \(attributes[.modificationDate] ?? 0)"
+      }
+    }
+    let before = try listing()
+    let environment = ["DI_FIXTURE_STORAGE_ROOT": support.path]
+    let fixture = ExplorerModel(
+      arguments: ["--fixture-mode", "--scenario", "presentation"], environment: environment)
+    defer { fixture.shutdown() }
+    try await wait {
+      fixture.lastInventory != nil && fixture.records != nil && !fixture.replacingSession
+    }
+    XCTAssertEqual(fixture.lastInventory?.filename, record.filename)
+    XCTAssertEqual(ExplorerCommand.reopenLastFolder.title(in: fixture), "Reopen “Workspace”")
+    // Fixture mode only reads the metadata. It never opens, creates or cleans up.
+    XCTAssertFalse(ExplorerCommand.reopenLastFolder.isEnabled(in: fixture))
+    XCTAssertFalse(ExplorerCommand.chooseFolder.isEnabled(in: fixture))
+    fixture.reopenLastFolder()
+    fixture.createManaged(root: root)
+    XCTAssertFalse(fixture.replacingSession)
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(try listing(), before)
+    // Without the variable, fixture mode has no storage. Production ignores the variable.
+    let plain = ExplorerModel(
+      arguments: ["--fixture-mode", "--scenario", "presentation"], environment: [:])
+    defer { plain.shutdown() }
+    let other = root.appendingPathComponent("injected")
+    let injected = ManagedInventoryStorage(root: other)
+    let production = ExplorerModel(arguments: [], environment: environment, storage: injected)
+    defer { production.shutdown() }
+    try await wait { plain.records != nil && !plain.replacingSession }
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertNil(plain.lastInventory)
+    XCTAssertNil(production.lastInventory)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
+    XCTAssertEqual(try listing(), before)
   }
 
   func testCancelledCreatePreservesPriorSnapshotAndFailedCreateCleansGeneration() async throws {

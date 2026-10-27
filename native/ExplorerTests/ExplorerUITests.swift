@@ -1,11 +1,17 @@
+import AppKit
 import XCTest
 
 @MainActor final class ExplorerUITests: XCTestCase {
   var app: XCUIApplication!
+  /// Directories that a test owns. Teardown deletes them.
+  var ownedDirectories: [URL] = []
   override func setUpWithError() throws { continueAfterFailure = false }
+  override func tearDownWithError() throws {
+    for directory in ownedDirectories { try? FileManager.default.removeItem(at: directory) }
+  }
   func launch(
     _ scenario: String = "presentation", minimumWindow: Bool = false, reduceMotion: Bool = false,
-    locale: String = "en_US"
+    locale: String = "en_US", storage: URL? = nil
   ) {
     app = XCUIApplication()
     app.launchArguments = ["--fixture-mode", "--scenario", scenario, "-AppleLocale", locale]
@@ -14,6 +20,8 @@ import XCTest
     app.launchEnvironment["DI_MODEL_TEST"] = "0"
     // Fixture-only override; the system Reduce Motion setting is never changed.
     if reduceMotion { app.launchEnvironment["DI_REDUCE_MOTION"] = "1" }
+    // Fixture-only, read-only metadata root that the test owns.
+    if let storage { app.launchEnvironment["DI_FIXTURE_STORAGE_ROOT"] = storage.path }
     app.launch()
     XCTAssertTrue(app.staticTexts["scope-total"].waitForExistence(timeout: 15))
     XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
@@ -237,7 +245,7 @@ import XCTest
       app.launchEnvironment["DI_MODEL_TEST"] = "0"
       app.launch()
       XCTAssertTrue(app.staticTexts["fixture-locked"].waitForExistence(timeout: 8))
-      XCTAssertFalse(app.buttons["open-snapshot"].isEnabled)
+      XCTAssertFalse(app.buttons["open-snapshot"].exists)
       XCTAssertFalse(app.buttons["create-inventory"].isEnabled)
       XCTAssertEqual(app.dialogs.count, 0)
       XCTAssertFalse(app.staticTexts["scope-total"].exists)
@@ -417,8 +425,7 @@ import XCTest
     launch()
     // Fixture mode keeps the native panels closed in the menu as on the start screen.
     XCTAssertFalse(menuItem("File", "Choose Folder…").isEnabled)
-    XCTAssertFalse(menuBarItem("File").menuItems["Open Snapshot…"].isEnabled)
-    XCTAssertFalse(menuBarItem("File").menuItems["Open Last Scan"].isEnabled)
+    XCTAssertFalse(menuBarItem("File").menuItems["Reopen Last Folder"].isEnabled)
     XCTAssertTrue(menuBarItem("File").menuItems["Refresh Directory"].isEnabled)
     XCTAssertFalse(menuBarItem("File").menuItems["Stop Scan"].isEnabled)
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
@@ -496,6 +503,155 @@ import XCTest
     XCTAssertEqual(navigate.map { titles.index(after: $0) }, titles.firstIndex(of: "Window"))
     XCTAssertLessThan(navigate ?? .max, titles.firstIndex(of: "Help") ?? -1, "\(titles)")
     XCTAssertLessThan(titles.firstIndex(of: "File") ?? .max, navigate ?? -1, "\(titles)")
+  }
+  /// Writes last-folder metadata into a new directory that the test owns. A nil `rootName`
+  /// writes metadata without the field.
+  func lastFolderMetadata(rootName: String?) throws -> URL {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "reopen-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    var record: [String: Any] = [
+      "filename": "inventory-\(UUID().uuidString).dmap",
+      "scannedAt": Date().timeIntervalSinceReferenceDate,
+    ]
+    if let rootName { record["rootName"] = rootName }
+    try JSONSerialization.data(withJSONObject: record).write(
+      to: directory.appendingPathComponent("last-inventory.json"))
+    ownedDirectories.append(directory)
+    return directory
+  }
+  /// Names, sizes and modification dates of the files in `directory`.
+  func listing(_ directory: URL) throws -> [String] {
+    try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted().map {
+      let attributes = try FileManager.default.attributesOfItem(
+        atPath: directory.appendingPathComponent($0).path)
+      return "\($0) \(attributes[.size] ?? 0) \(attributes[.modificationDate] ?? 0)"
+    }
+  }
+  /// The fail-closed fixture start screen: no scenario, native access disabled.
+  func launchStartScreen(storage: URL) {
+    app = XCUIApplication()
+    app.launchArguments = ["--fixture-mode", "-AppleLocale", "en_US"]
+    app.launchEnvironment["DI_UI_TEST"] = "1"
+    app.launchEnvironment["DI_MODEL_TEST"] = "0"
+    app.launchEnvironment["DI_FIXTURE_STORAGE_ROOT"] = storage.path
+    app.launch()
+    XCTAssertTrue(app.staticTexts["fixture-locked"].waitForExistence(timeout: 8))
+    XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
+  }
+  func fileMenuTitles() -> [String] {
+    menuBarItem("File").click()
+    XCTAssertTrue(menuBarItem("File").menuItems["Choose Folder…"].waitForExistence(timeout: 5))
+    return menuBarItem("File").menuItems.allElementsBoundByIndex.map(\.title)
+  }
+  func testFileMenuShowsReopenWorkspaceAndNoOpenSnapshot() throws {
+    launch(storage: try lastFolderMetadata(rootName: "/Workspace"))
+    let titles = fileMenuTitles()
+    XCTAssertEqual(
+      Array(titles.prefix(2)), ["Choose Folder…", "Reopen “Workspace”"], "\(titles)")
+    XCTAssertFalse(titles.contains("Open Snapshot…"), "\(titles)")
+    XCTAssertFalse(titles.contains { $0.hasPrefix("Open Last") }, "\(titles)")
+    // Fixture mode only reads the metadata. Reopen stays disabled.
+    XCTAssertFalse(menuBarItem("File").menuItems["Reopen “Workspace”"].isEnabled)
+    screenshot("reopen-file-menu")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+  }
+  func testStartScreenShowsReopenWorkspace() throws {
+    launchStartScreen(storage: try lastFolderMetadata(rootName: "/Workspace"))
+    let reopen = app.buttons["reopen-last-folder"]
+    XCTAssertTrue(reopen.waitForExistence(timeout: 8))
+    XCTAssertEqual(reopen.label, "Reopen “Workspace”")
+    XCTAssertFalse(reopen.isEnabled)
+    XCTAssertFalse(app.buttons["open-snapshot"].exists)
+    XCTAssertFalse(app.buttons["Open Snapshot…"].exists)
+    screenshot("reopen-start-screen")
+  }
+  func testOldMetadataShowsReopenLastFolder() throws {
+    launchStartScreen(storage: try lastFolderMetadata(rootName: nil))
+    let reopen = app.buttons["reopen-last-folder"]
+    XCTAssertTrue(reopen.waitForExistence(timeout: 8))
+    XCTAssertEqual(reopen.label, "Reopen Last Folder")
+    let titles = fileMenuTitles()
+    XCTAssertEqual(
+      Array(titles.prefix(2)), ["Choose Folder…", "Reopen Last Folder"], "\(titles)")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    screenshot("reopen-start-screen-old-metadata")
+  }
+  func testFixtureStorageDirectoryStaysUnchanged() throws {
+    let storage = try lastFolderMetadata(rootName: "/Workspace")
+    let before = try listing(storage)
+    launch(storage: storage)
+    // The label proves that the app read this directory.
+    XCTAssertTrue(menuItem("File", "Reopen “Workspace”").exists)
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    app.typeKey("o", modifierFlags: [.command])
+    XCTAssertEqual(app.dialogs.count, 0)
+    app.terminate()
+    launchStartScreen(storage: storage)
+    let reopen = app.buttons["reopen-last-folder"]
+    XCTAssertTrue(reopen.waitForExistence(timeout: 8))
+    XCTAssertEqual(reopen.label, "Reopen “Workspace”")
+    reopen.click()
+    app.typeKey("o", modifierFlags: [.command])
+    XCTAssertEqual(app.dialogs.count, 0)
+    XCTAssertTrue(app.staticTexts["fixture-locked"].exists)
+    app.terminate()
+    XCTAssertEqual(try listing(storage), before)
+  }
+  /// Vertical center of the text drawn inside `element` and `row`, in screen points. The ink
+  /// runs from its top pixel row down to the baseline: the most common lowest ink row of the
+  /// pixel columns, so a descender does not move the center.
+  func inkCenter(_ element: XCUIElement, row: XCUIElement, image: NSBitmapImageRep) -> CGFloat? {
+    let screen = NSScreen.screens.first?.frame ?? .zero
+    let scale = CGFloat(image.pixelsWide) / screen.width
+    let frame = element.frame.intersection(row.frame.insetBy(dx: 0, dy: 1.5))
+    let x0 = Int(frame.minX * scale)
+    let x1 = Int((frame.maxX - 1) * scale)
+    let y0 = Int(frame.minY * scale)
+    let y1 = Int(frame.maxY * scale)
+    guard x0 < x1, y0 < y1 else { return nil }
+    var pixel = [Int](repeating: 0, count: 8)
+    var reference = [Int](repeating: 0, count: 8)
+    var top: Int?
+    var lowest: [Int: Int] = [:]
+    for y in y0..<y1 {
+      // One point left of the text frame is background on every pixel row.
+      image.getPixel(&reference, atX: x0 - Int(scale), y: y)
+      for x in x0..<x1 {
+        image.getPixel(&pixel, atX: x, y: y)
+        if (0..<3).contains(where: { abs(pixel[$0] - reference[$0]) > 64 }) {
+          top = top ?? y
+          lowest[x] = y
+        }
+      }
+    }
+    let rows = Dictionary(grouping: lowest.values, by: { $0 }).mapValues(\.count)
+    guard let top, let baseline = rows.max(by: { ($0.value, $0.key) < ($1.value, $1.key) })?.key
+    else { return nil }
+    return CGFloat(top + baseline + 1) / 2 / scale
+  }
+  func testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows() throws {
+    launch()
+    continueAfterFailure = true  // Report both rows.
+    row("small-files").click()
+    text("selected-name", contains: "small-files")
+    let image = try XCTUnwrap(
+      NSBitmapImageRep(data: XCUIScreen.main.screenshot().pngRepresentation))
+    XCTAssertEqual(image.bitsPerSample, 8)
+    for (name, selected) in [("small-files", true), ("trash", false)] {
+      let tableRow = app.outlines["entry-tree"].tableRows.containing(
+        .staticText, identifier: "entry-\(name)"
+      ).firstMatch
+      XCTAssertEqual(tableRow.isSelected, selected, name)
+      let size = tableRow.staticTexts["tree-size"]
+      XCTAssertTrue(size.exists, name)
+      let nameCenter = try XCTUnwrap(inkCenter(row(name), row: tableRow, image: image), name)
+      let sizeCenter = try XCTUnwrap(inkCenter(size, row: tableRow, image: image), name)
+      XCTAssertEqual(
+        sizeCenter, nameCenter, accuracy: 1,
+        "\(name): size text center \(sizeCenter), name text center \(nameCenter)")
+    }
+    screenshot("tree-size-centered")
   }
   func testContextMenusOnTreeRowAndMapBlock() {
     launch()

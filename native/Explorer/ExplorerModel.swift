@@ -5,6 +5,10 @@ func displayPath(_ data: Data) -> String { String(decoding: data, as: UTF8.self)
 func entryName(_ entry: EntryRecord) -> String {
   entry.displayName.isEmpty ? "Inventory root" : entry.displayName
 }
+/// Shortens a name over 60 characters in the middle, so a title stays near two lines.
+func middleTruncated(_ name: String) -> String {
+  name.count > 60 ? "\(name.prefix(29))…\(name.suffix(30))" : name
+}
 
 struct ViewRecords: Sendable {
   let status: SessionStatus
@@ -29,7 +33,7 @@ struct PendingConfirmation: Identifiable {
   var directory: Bool { details.metadata.kind == .directory }
   var title: String {
     // Keep the alert title near two lines; the detail box shows the full path.
-    let shown = name.count > 60 ? "\(name.prefix(29))…\(name.suffix(30))" : name
+    let shown = middleTruncated(name)
     return permanent ? "Delete “\(shown)” immediately?" : "Move “\(shown)” to the Trash?"
   }
   var scope: String { directory ? "Directory and its contents" : "File" }
@@ -185,8 +189,10 @@ struct PendingConfirmation: Identifiable {
       || environment["DI_UI_TEST"] != nil
     fixtureReduceMotion = fixtureMode && environment["DI_REDUCE_MOTION"] == "1"
     self.storage =
-      storage ?? (fixtureMode ? nil : try? ManagedInventoryStorage.applicationSupport())
-    if !fixtureMode, let storage = self.storage {
+      storage
+      ?? (fixtureMode
+        ? Self.fixtureStorage(environment) : try? ManagedInventoryStorage.applicationSupport())
+    if let storage = self.storage {
       Task {
         let version = sessionVersion
         do {
@@ -205,6 +211,20 @@ struct PendingConfirmation: Identifiable {
       let scenario = arguments[i + 1]
       load { try ExplorerSession.fixture(scenario: scenario) }
     }
+  }
+
+  /// Test-only metadata root for fixture UI tests: DI_FIXTURE_STORAGE_ROOT must name an
+  /// existing absolute directory. Fixture mode only reads it: it never creates, opens or
+  /// cleans up an inventory there. Production never calls this.
+  static func fixtureStorage(_ environment: [String: String]) -> ManagedInventoryStorage? {
+    guard let path = environment["DI_FIXTURE_STORAGE_ROOT"], path.hasPrefix("/") else {
+      return nil
+    }
+    var directory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: path, isDirectory: &directory),
+      directory.boolValue
+    else { return nil }
+    return ManagedInventoryStorage(root: URL(fileURLWithPath: path, isDirectory: true))
   }
 
   func load(
@@ -786,7 +806,7 @@ struct PendingConfirmation: Identifiable {
   // Command enable rules. Each reads saved state only and is false while a confirmation is
   // pending; ExplorerCommand gives them to the menu bar, the card and the context menus.
   var canOpenInventory: Bool { !fixtureMode && !working && !replacingSession && pending == nil }
-  var canOpenLastInventory: Bool { canOpenInventory && storage != nil && lastInventory != nil }
+  var canReopenLastFolder: Bool { canOpenInventory && storage != nil && lastInventory != nil }
   var canRefresh: Bool {
     !working && !loading && !replacingSession && pending == nil && session != nil
       && records != nil
@@ -989,16 +1009,6 @@ struct PendingConfirmation: Identifiable {
       if generation == sessionVersion { working = false }
     }
   }
-  func openSnapshot() {
-    guard !fixtureMode, !working, !replacingSession else { return }
-    let panel = NSOpenPanel()
-    panel.canChooseDirectories = false
-    panel.allowsMultipleSelection = false
-    panel.message = "Open saved inventory without scanning its source."
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    let path = Self.pathBytes(url)
-    load { try ExplorerSession.openSnapshot(snapshotPath: path) }
-  }
   func createSnapshot() {
     guard !fixtureMode, !working, !replacingSession else { return }
     let panel = NSOpenPanel()
@@ -1008,7 +1018,9 @@ struct PendingConfirmation: Identifiable {
     guard panel.runModal() == .OK, let root = panel.url else { return }
     createManaged(root: root)
   }
-  func openLastInventory() {
+  /// Opens the last folder's managed snapshot offline. The metadata filename, not its display
+  /// name, selects the file.
+  func reopenLastFolder() {
     guard !fixtureMode, !working, !replacingSession, let storage, let lastInventory else { return }
     let path = Self.pathBytes(storage.url(for: lastInventory))
     load(scanDate: lastInventory.scannedAt) { try ExplorerSession.openSnapshot(snapshotPath: path) }

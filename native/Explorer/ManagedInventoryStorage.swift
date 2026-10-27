@@ -3,10 +3,19 @@ import Foundation
 struct ManagedInventory: Codable, Sendable {
   let filename: String
   let scannedAt: Date
-  let rootName: String
+  /// The scanned root as lossy display text. Older metadata may lack it. It is a label only:
+  /// reopening uses `filename`, which must name an owned generation.
+  let rootName: String?
+
+  /// "Reopen “NAME”" with the root's last path component, as in the root breadcrumb.
+  var reopenTitle: String {
+    guard let rootName, !rootName.isEmpty else { return "Reopen Last Folder" }
+    let name = rootName.split(separator: "/").last.map(String.init) ?? rootName
+    return "Reopen “\(middleTruncated(name))”"
+  }
 }
 
-// Only this app's UUID generations are eligible for retention cleanup. Imports never enter here.
+// Only this app's UUID generations are eligible for retention cleanup.
 final class ManagedInventoryStorage: @unchecked Sendable {
   let root: URL
   private let fileManager: FileManager

@@ -60,8 +60,10 @@ import XCTest
       let coordinator = ContentsTree.Coordinator(model)
       let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
       let cell = try XCTUnwrap(
-        coordinator.tableView(NSTableView(), viewFor: column, row: row) as? NSTextField)
-      XCTAssertEqual(cell.stringValue, text)
+        coordinator.tableView(NSTableView(), viewFor: column, row: row)
+          as? ContentsTree.SizeCell)
+      XCTAssertEqual(cell.label.stringValue, text)
+      XCTAssertEqual(cell.label.toolTip, text)
     }
   }
 }
