@@ -40,8 +40,11 @@ green images, pink audio, gold archives, purple apps, cyan code, orange caches,
 olive data and muted documents/unknowns. Classification is ASCII case-insensitive
 by extension, not content or package inspection. A 155-degree linear gradient runs
 from 14% white through the base at 55% to 16% black, independent of ancestor depth.
-A subtle top/left backing-pixel inset separates files; gray diagonal hatching marks
-non-actionable aggregates. Selection dimming and hover outlines remain native overlays,
+A top/left backing-pixel seam separates files; gray diagonal hatching marks
+non-actionable aggregates. `diagram` takes a `MapAppearance`: light, dark and both
+Increase Contrast variants change only the hatch and the seam strength, as specified with
+the color owners in [native-appearance.md](native-appearance.md). Swift tags the bitmap as
+sRGB. Selection dimming and hover outlines remain native overlays,
 not baked into the bitmap or owner buffer.
 
 `DiagramFrame.bitmap` transfers one flat RGBA buffer plus counts/timing/payload

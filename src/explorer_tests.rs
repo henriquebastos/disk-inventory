@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     Node,
+    diagram::MapAppearance,
     inventory::Inventory,
     layout::{Layout, LayoutOptions, MAX_DEPTH, MAX_RECTANGLES, Rect, TileKind},
 };
@@ -665,7 +666,9 @@ fn diagram_pixel_detail_and_zoom_preserve_weights_and_hit_authority() {
     add(&mut map, tiny, b"8k.txt", Kind::File, 8192);
     add(&mut map, tiny, b"empty", Kind::File, 0);
     let e = explorer(map);
-    let frame = e.diagram(e.root_handle(), 640, 400).unwrap();
+    let frame = e
+        .diagram(e.root_handle(), 640, 400, MapAppearance::Dark)
+        .unwrap();
     assert!(frame.stats.tiles > 160);
     assert_eq!(
         frame.layout.tiles.iter().map(|t| t.bytes).sum::<u64>(),
@@ -673,7 +676,9 @@ fn diagram_pixel_detail_and_zoom_preserve_weights_and_hit_authority() {
     );
     assert!(frame.stats.child_visits <= 2 * crate::diagram::MAX_REGIONS);
     assert_eq!(frame.rgba().len(), 640 * 400 * 4);
-    let zoom = e.diagram(e.handle(tiny), 100, 100).unwrap();
+    let zoom = e
+        .diagram(e.handle(tiny), 100, 100, MapAppearance::Dark)
+        .unwrap();
     let r = zoom.region(e.handle(small)).unwrap();
     let hit = zoom
         .hit((r.x + r.width / 2.0) as u32, (r.y + r.height / 2.0) as u32)
@@ -681,10 +686,17 @@ fn diagram_pixel_detail_and_zoom_preserve_weights_and_hit_authority() {
     assert_eq!(hit.key, e.handle(small));
     assert!(hit.actionable);
     assert_eq!(hit.bytes, 4096);
-    assert!(e.diagram(e.root_handle(), u32::MAX, u32::MAX).is_err());
-    let one = e.diagram(e.root_handle(), 1, 1).unwrap();
+    assert!(
+        e.diagram(e.root_handle(), u32::MAX, u32::MAX, MapAppearance::Dark)
+            .is_err()
+    );
+    let one = e
+        .diagram(e.root_handle(), 1, 1, MapAppearance::Dark)
+        .unwrap();
     assert!(!one.hit(0, 0).unwrap().actionable);
-    let again = e.diagram(e.root_handle(), 640, 400).unwrap();
+    let again = e
+        .diagram(e.root_handle(), 640, 400, MapAppearance::Dark)
+        .unwrap();
     assert_eq!(frame.rgba(), again.rgba());
 }
 
@@ -699,7 +711,9 @@ fn diagram_squarify_places_compact_siblings_in_wide_tall_and_retina_frames() {
     }
     let e = explorer(map);
     for (width, height) in [(1000, 300), (300, 1000), (2000, 600), (600, 2000)] {
-        let frame = e.diagram(e.root_handle(), width, height).unwrap();
+        let frame = e
+            .diagram(e.root_handle(), width, height, MapAppearance::Dark)
+            .unwrap();
         assert_eq!(frame.layout.tiles.len(), 72);
         for tile in &frame.layout.tiles {
             let expected = width as f64 * height as f64 / 72.0;
@@ -791,7 +805,9 @@ fn diagram_skewed_nested_geometry_keeps_area_coverage_zero_and_budget_semantics(
     }
     let e = explorer(map);
     for (w, h) in [(713, 421), (421, 713), (1426, 842)] {
-        let f = e.diagram(e.root_handle(), w, h).unwrap();
+        let f = e
+            .diagram(e.root_handle(), w, h, MapAppearance::Dark)
+            .unwrap();
         assert!(f.region(e.handle(deep)).is_some(), "no fixed depth policy");
         assert!(f.region(e.handle(zero)).is_none());
         assert_eq!(
@@ -818,7 +834,9 @@ fn diagram_skewed_nested_geometry_keeps_area_coverage_zero_and_budget_semantics(
     empty.nodes[0].subtree = 0;
     add(&mut empty, 0, b"zero", Kind::File, 0);
     let e = explorer(empty);
-    let frame = e.diagram(e.root_handle(), 32, 32).unwrap();
+    let frame = e
+        .diagram(e.root_handle(), 32, 32, MapAppearance::Dark)
+        .unwrap();
     assert!(frame.layout.tiles.is_empty());
     assert!(frame.hit(0, 0).is_none());
 }
@@ -851,7 +869,9 @@ fn diagram_integer_precision_hardlinks_and_zero_entries_survive_squarify() {
     let zero = add(&mut map, 0, b"zero", Kind::File, 0);
     let e = explorer(map);
     for (width, height) in [(160, 100), (100, 160), (1, 1)] {
-        let f = e.diagram(e.root_handle(), width, height).unwrap();
+        let f = e
+            .diagram(e.root_handle(), width, height, MapAppearance::Dark)
+            .unwrap();
         assert_eq!(f.layout.total_bytes, u64::MAX);
         assert_eq!(
             f.layout.tiles.iter().map(|t| t.bytes as u128).sum::<u128>(),
@@ -912,8 +932,12 @@ fn diagram_flat_gradient_has_no_ancestor_ridges_and_aggregates_are_hatched() {
     };
     let shallow = make(0);
     let nested = make(12);
-    let a = shallow.diagram(shallow.root_handle(), 101, 81).unwrap();
-    let b = nested.diagram(nested.root_handle(), 101, 81).unwrap();
+    let a = shallow
+        .diagram(shallow.root_handle(), 101, 81, MapAppearance::Dark)
+        .unwrap();
+    let b = nested
+        .diagram(nested.root_handle(), 101, 81, MapAppearance::Dark)
+        .unwrap();
     assert_eq!(a.rgba(), b.rgba(), "ancestors must not add lighting ridges");
     assert_eq!(a.stats.surface_payload_bytes, 0);
     assert_eq!(b.stats.surface_payload_bytes, 0);
@@ -929,7 +953,9 @@ fn diagram_flat_gradient_has_no_ancestor_ridges_and_aggregates_are_hatched() {
     assert_eq!(pixel(1, 1), [105, 167, 119]);
     assert_eq!(pixel(99, 79), [69, 129, 83]);
     let aggregate = explorer(tree());
-    let f = aggregate.diagram(aggregate.root_handle(), 8, 8).unwrap();
+    let f = aggregate
+        .diagram(aggregate.root_handle(), 8, 8, MapAppearance::Dark)
+        .unwrap();
     assert_eq!(f.stats.aggregate_pixels, 64);
     for y in 0..8 {
         for x in 0..8 {
@@ -944,4 +970,118 @@ fn diagram_flat_gradient_has_no_ancestor_ridges_and_aggregates_are_hatched() {
             assert!(!f.hit(x as u32, y as u32).unwrap().actionable);
         }
     }
+}
+
+/// WCAG 2 contrast ratio of two sRGB colors.
+fn contrast(a: &[u8], b: &[u8]) -> f64 {
+    let luminance = |c: &[u8]| {
+        let linear = |v: u8| {
+            let v = v as f64 / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(c[0]) + 0.7152 * linear(c[1]) + 0.0722 * linear(c[2])
+    };
+    let (x, y) = (luminance(a), luminance(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+#[test]
+fn diagram_appearance_changes_only_hatch_and_seam_colors() {
+    let names: [&[u8]; 9] = [
+        b"a.png", b"a.mov", b"a.wav", b"a.zip", b"a.app", b"a.swift", b"a.cache", b"a.bin",
+        b"a.pdf",
+    ];
+    let mut map = tree();
+    map.nodes[0].raw = 900;
+    let group = add(&mut map, 0, b"group", Kind::Dir, 700);
+    for (i, name) in names.iter().enumerate() {
+        add(&mut map, 0, name, Kind::File, 2_000 + 300 * i as u64);
+        add(&mut map, group, name, Kind::File, 400 + 50 * i as u64);
+    }
+    let mixed = explorer(map);
+    // One file per frame puts its seam on every gradient position, from the highlighted
+    // top-left corner to the shaded far end of a long thin tile.
+    let singles: Vec<Explorer> = names
+        .iter()
+        .map(|name| {
+            let mut map = tree();
+            map.nodes[0].raw = 0;
+            add(&mut map, 0, name, Kind::File, 100);
+            explorer(map)
+        })
+        .collect();
+    let mut frames = vec![(&mixed, 240, 160)];
+    for e in &singles {
+        for (width, height) in [(400, 5), (5, 400), (64, 64), (6, 6), (300, 40)] {
+            frames.push((e, width, height));
+        }
+    }
+    let mut minimum = f64::MAX;
+    let mut seams = 0;
+    let mut hatched = 0;
+    for (e, width, height) in frames {
+        let all = [
+            MapAppearance::Light,
+            MapAppearance::Dark,
+            MapAppearance::LightIncreasedContrast,
+            MapAppearance::DarkIncreasedContrast,
+        ]
+        .map(|a| (a, e.diagram(e.root_handle(), width, height, a).unwrap()));
+        let dark = &all[1].1;
+        for y in 0..height {
+            for x in 0..width {
+                let at = (y * width + x) as usize * 4;
+                let hit = dark.hit(x, y).unwrap();
+                let tile = hit.rect;
+                let x0 = (tile.x - 0.5).ceil().max(0.0) as u32;
+                let y0 = (tile.y - 0.5).ceil().max(0.0) as u32;
+                let x1 = ((tile.x + tile.width - 0.5).ceil() as u32).min(width);
+                let y1 = ((tile.y + tile.height - 0.5).ceil() as u32).min(height);
+                let seam = x1 - x0 > 3 && y1 - y0 > 3 && (x == x0 || y == y0);
+                let interior = (
+                    if x == x0 { x + 1 } else { x },
+                    if y == y0 { y + 1 } else { y },
+                );
+                let next = (interior.1 * width + interior.0) as usize * 4;
+                for (appearance, frame) in &all {
+                    let pixel = &frame.rgba()[at..at + 4];
+                    let same = frame.hit(x, y).unwrap();
+                    assert_eq!(
+                        (same.key, same.actionable, same.bytes),
+                        (hit.key, hit.actionable, hit.bytes)
+                    );
+                    assert_eq!(pixel[3], 255);
+                    if !hit.actionable {
+                        let [light, dark] = appearance.hatch();
+                        let stripe = if (x + y) % 4 < 2 { light } else { dark };
+                        assert_eq!(&pixel[..3], stripe, "{appearance:?} hatch at {x},{y}");
+                        hatched += 1;
+                    } else if !seam {
+                        assert_eq!(pixel, &dark.rgba()[at..at + 4], "{appearance:?} interior");
+                    } else {
+                        // Light keeps the dark seam. Increase Contrast scales the same
+                        // gradient value by its own factor instead of 0.775.
+                        let ratio = appearance.seam_factor() / 0.775;
+                        for (&value, &old) in pixel[..3].iter().zip(&dark.rgba()[at..at + 3]) {
+                            assert!((value as f64 - old as f64 * ratio).abs() <= 1.0);
+                        }
+                        let inside = &frame.rgba()[next..next + 3];
+                        if appearance.seam_factor() < 0.775 {
+                            minimum = minimum.min(contrast(&pixel[..3], inside));
+                            seams += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(MapAppearance::Light.seam_factor(), 0.775);
+    assert_eq!(MapAppearance::Dark.seam_factor(), 0.775);
+    assert!(hatched > 0 && seams > 1_000);
+    println!("Increase Contrast seam minimum contrast {minimum:.3}:1 over {seams} seam pixels");
+    assert!(minimum >= 3.0, "seam contrast {minimum}");
 }

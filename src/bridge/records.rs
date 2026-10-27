@@ -70,6 +70,24 @@ impl From<ActionKind> for operations::Action {
         }
     }
 }
+/// Mirror of the core `MapAppearance`; the core has no UniFFI dependency.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum MapAppearance {
+    Light,
+    Dark,
+    LightIncreasedContrast,
+    DarkIncreasedContrast,
+}
+impl From<MapAppearance> for crate::diagram::MapAppearance {
+    fn from(a: MapAppearance) -> Self {
+        match a {
+            MapAppearance::Light => Self::Light,
+            MapAppearance::Dark => Self::Dark,
+            MapAppearance::LightIncreasedContrast => Self::LightIncreasedContrast,
+            MapAppearance::DarkIncreasedContrast => Self::DarkIncreasedContrast,
+        }
+    }
+}
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct EntryRecord {
     pub key: Arc<EntryKey>,

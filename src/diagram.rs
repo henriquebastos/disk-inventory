@@ -37,8 +37,42 @@ pub struct DiagramHit {
     pub rect: Rect,
     pub bytes: u64,
 }
+/// System appearance of a raster. It changes only the aggregate hatch and the file seam;
+/// the type palette, the gradient, the geometry and the owners stay the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapAppearance {
+    Light,
+    Dark,
+    LightIncreasedContrast,
+    DarkIncreasedContrast,
+}
+impl MapAppearance {
+    /// Multiplier for the top and left file seam. Increase Contrast keeps at least 3:1
+    /// against the next interior pixel of the same tile at every gradient position.
+    pub fn seam_factor(self) -> f64 {
+        match self {
+            Self::Light | Self::Dark => 0.775,
+            Self::LightIncreasedContrast | Self::DarkIncreasedContrast => 0.33,
+        }
+    }
+    /// Two sRGB stripes of the aggregate hatch.
+    pub fn hatch(self) -> [[u8; 3]; 2] {
+        match self {
+            Self::Dark => [[59, 59, 62], [38, 38, 40]],
+            Self::Light => [[206, 206, 210], [184, 184, 189]],
+            Self::DarkIncreasedContrast => [[96, 96, 100], [28, 28, 30]],
+            Self::LightIncreasedContrast => [[232, 232, 236], [150, 150, 156]],
+        }
+    }
+}
 impl Explorer {
-    pub fn diagram(&self, focus: EntryHandle, width: u32, height: u32) -> io::Result<Diagram> {
+    pub fn diagram(
+        &self,
+        focus: EntryHandle,
+        width: u32,
+        height: u32,
+        appearance: MapAppearance,
+    ) -> io::Result<Diagram> {
         let pixels = (width as usize)
             .checked_mul(height as usize)
             .ok_or_else(|| invalid("diagram dimensions overflow"))?;
@@ -68,6 +102,8 @@ impl Explorer {
         let mut rgba = vec![0u8; pixels * 4];
         let mut owners = vec![0; pixels];
         let mut aggregate_pixels = 0;
+        let seam = appearance.seam_factor();
+        let [hatch_light, hatch_dark] = appearance.hatch();
         for (i, tile) in layout.tiles.iter().enumerate() {
             let file = match tile.kind {
                 TileKind::Entry(key) if self.map.nodes[key.index() as usize].kind != Kind::Dir => {
@@ -93,14 +129,12 @@ impl Explorer {
                             + (y as f64 + 0.5 - r.y) * GRADIENT_Y)
                             / gradient_span;
                         let border = x1 - x0 > 3 && y1 - y0 > 3 && (x == x0 || y == y0);
-                        gradient_color(color, position, border)
-                    } else {
+                        gradient_color(color, position, if border { seam } else { 1.0 })
+                    } else if (x + y) % 4 < 2 {
                         // Aggregates are visibly distinct and never become file action targets.
-                        if (x + y) % 4 < 2 {
-                            [59, 59, 62]
-                        } else {
-                            [38, 38, 40]
-                        }
+                        hatch_light
+                    } else {
+                        hatch_dark
                     };
                     let at = y * width as usize + x;
                     debug_assert_eq!(owners[at], 0, "overlapping diagram pixels");
@@ -138,14 +172,15 @@ impl Explorer {
 // Restrained top-left highlight to bottom-right shade, without inherited depth ridges.
 const GRADIENT_X: f64 = 0.42261826174069944; // sin(155deg)
 const GRADIENT_Y: f64 = 0.9063077870366499; // -cos(155deg)
-fn gradient_color(color: [u8; 3], position: f64, border: bool) -> [u8; 3] {
+/// `seam` is 1.0 inside a tile. On the top and left edge it is the appearance's seam factor,
+/// which approximates the prototype's half-pixel black inset on the backing grid.
+fn gradient_color(color: [u8; 3], position: f64, seam: f64) -> [u8; 3] {
     let position = position.clamp(0.0, 1.0);
     let highlight = 0.14 * (1.0 - position / 0.55).max(0.0);
     let shade = 0.16 * ((position - 0.55) / 0.45).max(0.0);
     color.map(|channel| {
         let value = (channel as f64 + (255.0 - channel as f64) * highlight) * (1.0 - shade);
-        // Approximate the prototype's half-pixel black inset on the backing grid.
-        (value * if border { 0.775 } else { 1.0 }).round() as u8
+        (value * seam).round() as u8
     })
 }
 /// Base file-tile color before the gradient; tree swatches reuse it through the bridge.
@@ -246,15 +281,15 @@ mod tests {
             (b"a.pdf", [127, 135, 147]),
         ] {
             assert_eq!(type_color(name), color);
-            assert_eq!(gradient_color(color, 0.55, false), color);
-            let mut previous = gradient_color(color, 0.0, false);
+            assert_eq!(gradient_color(color, 0.55, 1.0), color);
+            let mut previous = gradient_color(color, 0.0, 1.0);
             for step in 1..=100 {
-                let next = gradient_color(color, step as f64 / 100.0, false);
+                let next = gradient_color(color, step as f64 / 100.0, 1.0);
                 assert!((0..3).all(|c| next[c] <= previous[c]));
                 previous = next;
             }
             assert_eq!(
-                gradient_color(color, 1.0, false),
+                gradient_color(color, 1.0, 1.0),
                 color.map(|c| (c as f64 * 0.84).round() as u8)
             );
         }

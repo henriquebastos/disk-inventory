@@ -135,7 +135,10 @@ fn changed_after_prepare_consumes_action_without_mutating_replacement() {
     let a = s.prepare(key, ActionKind::PermanentlyDelete).unwrap();
     let root = s.status().unwrap().root.key;
     let old_tree = s.clone().tree(root.clone()).unwrap();
-    let old_frame = s.clone().diagram(root.clone(), 64, 32).unwrap();
+    let old_frame = s
+        .clone()
+        .diagram(root.clone(), 64, 32, MapAppearance::Dark)
+        .unwrap();
     memory(&s, |f| {
         f.insert(
             "/Workspace/large-file",
@@ -149,7 +152,12 @@ fn changed_after_prepare_consumes_action_without_mutating_replacement() {
     assert!(old_tree.rows(0, 1).is_err());
     assert!(old_frame.hit(0, 0).is_err());
     assert!(s.clone().tree(root.clone()).unwrap().rows(0, 1).is_ok());
-    assert!(s.diagram(root, 64, 32).unwrap().hit(0, 0).is_ok());
+    assert!(
+        s.diagram(root, 64, 32, MapAppearance::Dark)
+            .unwrap()
+            .hit(0, 0)
+            .is_ok()
+    );
 }
 #[test]
 fn fixture_trash_scopes_failures_and_partial_updates_survive_conversion() {
@@ -489,7 +497,10 @@ fn diagram_and_virtual_tree_are_native_free_bounded_and_revision_guarded() {
             .is_err()
     );
     tree.expand(projects.clone(), true).unwrap();
-    let frame = s.clone().diagram(root, 640, 400).unwrap();
+    let frame = s
+        .clone()
+        .diagram(root, 640, 400, MapAppearance::Dark)
+        .unwrap();
     let image = frame.bitmap();
     assert!(
         image.tiles > 160,
@@ -504,7 +515,12 @@ fn diagram_and_virtual_tree_are_native_free_bounded_and_revision_guarded() {
     for (width, height) in [(640, 400), (400, 640), (713, 421), (1426, 842)] {
         let image = s
             .clone()
-            .diagram(s.status().unwrap().root.key, width, height)
+            .diagram(
+                s.status().unwrap().root.key,
+                width,
+                height,
+                MapAppearance::Dark,
+            )
             .unwrap()
             .bitmap();
         assert!(image.tiles > 160, "{width}x{height}: {} tiles", image.tiles);
@@ -569,7 +585,10 @@ fn outline_swatch_colors_match_map_file_tiles_and_directories_have_none() {
         assert_eq!(swatch(name), Some(rgb), "{name}");
     }
     // The base color lies inside the rendered gradient of the same file tile.
-    let frame = s.clone().diagram(notes, 200, 100).unwrap();
+    let frame = s
+        .clone()
+        .diagram(notes, 200, 100, MapAppearance::Dark)
+        .unwrap();
     let image = frame.bitmap();
     for name in ["eight-KiB.png", "four-KiB.txt"] {
         let base = swatch(name).unwrap().to_be_bytes();
@@ -609,7 +628,7 @@ fn presentation_trash_inside_moves_a_visible_tile_to_a_visible_destination() {
     let target = find(&s, b"large-file");
     let frame = |s: &Arc<ExplorerSession>| {
         s.clone()
-            .diagram(s.status().unwrap().root.key, 640, 400)
+            .diagram(s.status().unwrap().root.key, 640, 400, MapAppearance::Dark)
             .unwrap()
     };
     let before = frame(&s).region(target.clone()).unwrap().unwrap();
@@ -657,7 +676,7 @@ fn presentation_trash_late_target_has_a_region_outside_accessibility_targets() {
     s.execute(action).unwrap();
     let frame = s
         .clone()
-        .diagram(s.status().unwrap().root.key, 650, 520)
+        .diagram(s.status().unwrap().root.key, 650, 520, MapAppearance::Dark)
         .unwrap();
     assert!(frame.region(key.clone()).unwrap().is_some());
     assert_eq!(s.selection(key).unwrap().relative_path, b"trash/moved");
@@ -669,4 +688,60 @@ fn presentation_trash_late_target_has_a_region_outside_accessibility_targets() {
             .iter()
             .all(|t| t.relative_path != b"trash/moved")
     );
+}
+
+#[test]
+fn diagram_appearance_is_forwarded_and_swatch_colors_are_unchanged() {
+    let s = session("dix");
+    let root = s.status().unwrap().root.key;
+    let tree = s.clone().tree(root.clone()).unwrap();
+    let swatches = |tree: &ExplorerTree| {
+        tree.rows(0, 32)
+            .unwrap()
+            .rows
+            .into_iter()
+            .map(|r| (r.entry.display_name, r.map_rgb))
+            .collect::<Vec<_>>()
+    };
+    let before = swatches(&tree);
+    let dark = s
+        .clone()
+        .diagram(root.clone(), 320, 200, MapAppearance::Dark)
+        .unwrap();
+    let dark_image = dark.bitmap();
+    for appearance in [
+        MapAppearance::Light,
+        MapAppearance::Dark,
+        MapAppearance::LightIncreasedContrast,
+        MapAppearance::DarkIncreasedContrast,
+    ] {
+        let frame = s
+            .clone()
+            .diagram(root.clone(), 320, 200, appearance)
+            .unwrap();
+        let image = frame.bitmap();
+        let [light, darker] = crate::diagram::MapAppearance::from(appearance).hatch();
+        let (mut hatched, mut interior) = (0, 0);
+        for y in 0..image.height {
+            for x in 0..image.width {
+                let hit = frame.hit(x, y).unwrap().unwrap();
+                let other = dark.hit(x, y).unwrap().unwrap();
+                assert!(hit.entry.key.same_entry(other.entry.key.clone()));
+                assert_eq!(hit.actionable, other.actionable);
+                let at = (y * image.width + x) as usize * 4;
+                let pixel = &image.rgba[at..at + 3];
+                if !hit.actionable {
+                    let stripe = if (x + y) % 4 < 2 { light } else { darker };
+                    assert_eq!(pixel, stripe, "{appearance:?} hatch");
+                    hatched += 1;
+                } else if x as f64 > hit.rect.x + 1.0 && y as f64 > hit.rect.y + 1.0 {
+                    // File interiors, and so the swatch base colors, do not change.
+                    assert_eq!(pixel, &dark_image.rgba[at..at + 3], "{appearance:?}");
+                    interior += 1;
+                }
+            }
+        }
+        assert!(hatched > 0 && interior > 10_000, "{appearance:?}");
+    }
+    assert_eq!(swatches(&tree), before);
 }

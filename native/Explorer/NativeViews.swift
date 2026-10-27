@@ -19,7 +19,8 @@ struct ContentsTree: NSViewRepresentable {
     table.setAccessibilityRole(.outline)
     table.rowHeight = 26
     table.usesAlternatingRowBackgroundColors = false
-    table.style = .sourceList
+    // A content outline: the inset style draws the opaque system content background.
+    table.style = .inset
     let name = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
     name.title = "Name"
     name.width = 240
@@ -124,8 +125,8 @@ struct ContentsTree: NSViewRepresentable {
   }
   /// Decorative type swatch: the map's file base color, or a neutral directory square.
   @MainActor final class Swatch: NSView {
-    static let directoryColor = NSColor(
-      srgbRed: 0x7a / 255, green: 0x7a / 255, blue: 0x7f / 255, alpha: 1)
+    /// Adapts to light, dark and Increase Contrast when drawn.
+    static let directoryColor = NSColor.systemGray
     private(set) var color = Swatch.directoryColor
     private(set) var directory = true
     func show(mapRGB: UInt32?) {
@@ -371,6 +372,9 @@ struct DiagramView: NSViewRepresentable {
       setAccessibilityElement(false)
       setAccessibilityIdentifier("disk-map")
       setAccessibilityLabel("Disk usage map")
+      NSWorkspace.shared.notificationCenter.addObserver(
+        self, selector: #selector(accessibilityDisplayOptionsChanged),
+        name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
     }
     required init?(coder: NSCoder) { nil }
     func updatePicture() {
@@ -402,6 +406,18 @@ struct DiagramView: NSViewRepresentable {
       window?.acceptsMouseMovedEvents = true
       updateTargets()
       reportSize()
+      reportAppearance()
+    }
+    override func viewDidChangeEffectiveAppearance() {
+      super.viewDidChangeEffectiveAppearance()
+      reportAppearance()
+    }
+    @objc nonisolated func accessibilityDisplayOptionsChanged(_ notification: Notification) {
+      Task { @MainActor [weak self] in self?.reportAppearance() }
+    }
+    func reportAppearance() {
+      guard let model else { return }
+      model.mapAppearanceChanged(model.mapAppearance(for: effectiveAppearance))
     }
     override func layout() {
       super.layout()
@@ -441,8 +457,16 @@ struct DiagramView: NSViewRepresentable {
         shade.fill()
       }
       if let r = hoverRect, model?.motion.active != true {
-        NSColor.white.withAlphaComponent(0.7).setStroke()
-        NSBezierPath(rect: rect(r).insetBy(dx: 0.5, dy: 0.5)).stroke()
+        if model?.picture?.appearance.increasedContrast == true {
+          // Increase Contrast: an opaque 2-point outline inside the block.
+          NSColor.white.setStroke()
+          let path = NSBezierPath(rect: rect(r).insetBy(dx: 1, dy: 1))
+          path.lineWidth = 2
+          path.stroke()
+        } else {
+          NSColor.white.withAlphaComponent(0.7).setStroke()
+          NSBezierPath(rect: rect(r).insetBy(dx: 0.5, dy: 0.5)).stroke()
+        }
       }
       if let r = selectionRect, model?.motion.active != true {
         let path = NSBezierPath(rect: rect(r).insetBy(dx: 1.5, dy: 1.5))

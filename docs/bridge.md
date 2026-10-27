@@ -172,7 +172,8 @@ Files use the map's base type color. Directories have no color value.
 "outline_swatch_colors_match_map_file_tiles_and_directories_have_none" in
 [src/bridge/tests.rs](../src/bridge/tests.rs) checks this additive field.
 The saved `DMAPBEN1` format and default-feature builds remain unchanged.
-`diagram` returns an immutable `DiagramFrame` with flat RGBA `bitmap`,
+`diagram` takes a `MapAppearance` (light, dark, light or dark Increase Contrast; a mirror
+of the core enum) and returns an immutable `DiagramFrame` with flat sRGB RGBA `bitmap`,
 owner `hit`, selection `region` and bounded accessibility `targets`. Neither view
 is an action capability. Execution/refresh revisions reject obsolete queries.
 Bounds, payload-versus-RSS distinctions and exact tests are specified in

@@ -48,12 +48,14 @@ directory double-click, Return or Open Selected Directory (Command-Down) changes
 tree and map root; Enclosing Directory (Command-Up) focuses the parent. Menus,
 shortcuts and context menus are specified in [native-commands.md](native-commands.md).
 Each row shows a decorative 9-point type swatch and a 44-point usage bar before the
-right-aligned human-readable size. Directories use a gray rounded square. Other entries use a
+right-aligned human-readable size. Directories use a system-gray rounded square. Other entries use a
 circle in the base color of their map tile, which Rust sends as `OutlineRow.map_rgb`.
 The bar shows saved subtree bytes as an integer percent of the focus total, rounded
 half up. Nonzero entries keep a 2% sliver. Zero and unknown usage show an empty track.
 VoiceOver ignores the swatch and the bar. The size column keeps the accessible value.
 Its label has the same centered frame as the name, because a table cell fills the row.
+The table uses the inset style, so its background is the opaque system content color.
+Colors follow light, dark and Increase Contrast ([native-appearance.md](native-appearance.md)).
 
 Breadcrumb navigation retains at most 64 per-directory sparse Rust tree handles,
 focus/selection keys and scroll positions, never row pages or bitmap history.
@@ -182,7 +184,7 @@ The original >2^53 fixture is unchanged.
 
 Untested limits: real Trash, native GUI picker lifecycle, hostile namespace races,
 full VoiceOver traversal (the tree is the exhaustive accessible alternative),
-light-mode screenshot review, large-inventory GUI paint latency,
+large-inventory GUI paint latency,
 and cancellation of destructive executing work (unsupported). The additional native model/geometry tests
 are linked from [native-diagram.md](native-diagram.md); offscreen callback tests
 do not substitute for foreground input/screenshot acceptance. XCUITest requires an unlocked interactive

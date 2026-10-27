@@ -90,7 +90,7 @@ struct ConfirmationDetailBox: View {
   let scrolls: Bool
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(pending.scope).font(.caption).foregroundStyle(.secondary)
+      Text(pending.scope).font(.caption)
         .accessibilityIdentifier("confirmation-scope")
       if scrolls { ScrollView { path } } else { path }
     }.padding(10).frame(width: 380, alignment: .topLeading)

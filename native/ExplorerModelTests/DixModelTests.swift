@@ -642,13 +642,13 @@ import XCTest
         | UInt32((c.greenComponent * 255).rounded()) << 8
         | UInt32((c.blueComponent * 255).rounded())
     }
-    // Same base colors as Rust's map file tiles (blue video); directories stay neutral squares.
+    // Same base colors as Rust's map file tiles (blue video); directories use system gray.
     let movie = try cell("Movie.mov")
     XCTAssertFalse(movie.swatch.directory)
     XCTAssertEqual(rgb(movie.swatch.color), 0x4f8ac6)
     for name in ["Projects", "Tiny files", "Notes"] {
       XCTAssertTrue(try cell(name).swatch.directory, name)
-      XCTAssertEqual(rgb(try cell(name).swatch.color), 0x7a7a7f, name)
+      XCTAssertTrue(try cell(name).swatch.color == NSColor.systemGray, name)
     }
     // 67,108,864 and 69,636,096 of 136,769,536 focus bytes; 20,480 bytes keep the sliver.
     XCTAssertEqual(movie.bar.percent, 49)

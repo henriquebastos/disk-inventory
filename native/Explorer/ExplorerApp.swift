@@ -21,6 +21,10 @@ final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
       : ExplorerModel()
     self.model = model
     menu.model = model
+    // Fixture-only appearance for UI acceptance; the system setting is never changed.
+    if let appearance = model.fixtureAppearance {
+      NSApp.appearance = NSAppearance(named: appearance.dark ? .darkAqua : .aqua)
+    }
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1380, height: 850),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
@@ -51,6 +55,16 @@ final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
   func applicationWillTerminate(_ notification: Notification) { model?.shutdown() }
 }
 
+/// Fixture-only accessibility probe naming the appearance of the displayed map picture.
+struct MapAppearanceProbe: View {
+  let model: ExplorerModel
+  var body: some View {
+    Color.clear.frame(width: 1, height: 1).accessibilityElement()
+      .accessibilityIdentifier("map-appearance")
+      .accessibilityLabel(model.picture?.appearance.fixtureName ?? "none")
+  }
+}
+
 /// Fixture-only accessibility probe naming the last result motion for UI acceptance.
 /// A separate view keeps per-tick observation out of the explorer body.
 struct MotionProbe: View {
@@ -62,6 +76,8 @@ struct MotionProbe: View {
   }
 }
 
+/// Text keeps the primary label color. The secondary label color measures 3.95:1 on the
+/// light window, below the 4.5:1 text minimum, so font size and weight carry the hierarchy.
 struct ExplorerView: View {
   @Bindable var model: ExplorerModel
   var body: some View {
@@ -77,7 +93,12 @@ struct ExplorerView: View {
           }.frame(minWidth: 360, idealWidth: 400, maxWidth: 480)
           VStack(alignment: .leading, spacing: 0) {
             DiagramView(model: model).padding(10).overlay(alignment: .topLeading) {
-              if model.fixtureMode { MotionProbe(motion: model.motion) }
+              if model.fixtureMode {
+                HStack(spacing: 0) {
+                  MotionProbe(motion: model.motion)
+                  MapAppearanceProbe(model: model)
+                }
+              }
             }
             Divider()
             footer
@@ -90,19 +111,19 @@ struct ExplorerView: View {
         VStack(spacing: 20) {
           Image(systemName: "externaldrive").font(.system(size: 42)).foregroundStyle(.secondary)
           Text("What should we measure?").font(.title.weight(.semibold))
-          Text("Nothing is scanned until you choose.").foregroundStyle(.secondary)
+          Text("Nothing is scanned until you choose.")
           Button("Choose Folder…") { ExplorerCommand.chooseFolder.perform(in: model) }
             .buttonStyle(.borderedProminent).accessibilityIdentifier("create-inventory")
             .disabled(!ExplorerCommand.chooseFolder.isEnabled(in: model))
           if let last = model.lastInventory {
             VStack(alignment: .leading, spacing: 6) {
-              Text("Last folder").font(.caption).foregroundStyle(.secondary)
+              Text("Last folder").font(.caption)
               if let path = last.rootName, !path.isEmpty {
                 Text(path).lineLimit(1).truncationMode(.middle).help(path)
               }
               Text(last.scannedAt.formatted(date: .abbreviated, time: .shortened)).font(
                 .caption
-              ).foregroundStyle(.secondary)
+              )
               // The folder name has at most 60 characters, so this row fits the title.
               Button {
                 ExplorerCommand.reopenLastFolder.perform(in: model)
@@ -135,7 +156,7 @@ struct ExplorerView: View {
       if let sample = model.scan.progress {
         Text(model.scan.label).accessibilityIdentifier("scan-phase")
         Text("\(model.numbers.count(sample.itemsExamined)) items examined").monospacedDigit()
-          .foregroundStyle(.secondary).accessibilityIdentifier("scan-items")
+          .accessibilityIdentifier("scan-items")
         Spacer()
         Button("Stop") { ExplorerCommand.stopScan.perform(in: model) }
           .disabled(!ExplorerCommand.stopScan.isEnabled(in: model))
@@ -168,7 +189,7 @@ struct ExplorerView: View {
           {
             Button(r.breadcrumbName(r.status.root)) { model.focus(r.status.root.key) }
               .help(r.breadcrumbHelp(r.status.root)).accessibilityIdentifier("breadcrumb-root")
-            Text("…").foregroundStyle(.secondary)
+            Text("…")
           }
           ForEach(Array(r.ancestors.enumerated()), id: \.offset) { i, entry in
             Button(r.breadcrumbName(entry)) { model.focus(entry.key) }.help(r.breadcrumbHelp(entry))
@@ -197,7 +218,7 @@ struct ExplorerView: View {
         .monospacedDigit().accessibilityIdentifier("scope-total")
         if let scanDate = model.scanDate {
           Text("Scanned " + scanDate.formatted(date: .abbreviated, time: .shortened))
-            .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("scan-date")
+            .font(.caption).accessibilityIdentifier("scan-date")
         }
       }.fixedSize()
       Button("Refresh Directory", systemImage: "arrow.clockwise") {
@@ -240,9 +261,9 @@ struct ExplorerView: View {
             )
             .accessibilityIdentifier("sharing-note")
           }
-        }.font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        }.font(.caption).lineLimit(2)
         Text(model.selectedDisplayPath ?? "Loading path…")
-          .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+          .font(.system(.caption, design: .monospaced))
           .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
           .help(model.selectedDisplayPath ?? "").accessibilityIdentifier("selected-path")
         HStack(spacing: 6) {
@@ -264,11 +285,11 @@ struct ExplorerView: View {
             "root-protected")
         }
       } else if let text = model.aggregateText {
-        Text(text).foregroundStyle(.secondary)
+        Text(text)
         Button("Show Directory Contents") { if let key = model.aggregate { model.focus(key) } }
       } else {
         Text("Nothing selected").font(.headline)
-        Text("Click to select. Double-click a directory to focus it.").foregroundStyle(.secondary)
+        Text("Click to select. Double-click a directory to focus it.")
         if let root = model.records?.status.root {
           Button("Select Inventory Root") { model.select(root) }.accessibilityIdentifier(
             "inspect-root")
@@ -315,7 +336,6 @@ struct ExplorerView: View {
           Text(
             "Some map detail is grouped or reduced at this scale; zoom or expand the tree to see more."
           )
-          .foregroundStyle(.secondary)
         }
       }.frame(maxWidth: .infinity, alignment: .leading)
     }.frame(height: 100).font(.caption).padding(12)

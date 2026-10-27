@@ -71,6 +71,7 @@ struct PendingConfirmation: Identifiable {
     let focus: EntryKey
     let tree: ExplorerTree?
     let size: CGSize
+    let appearance: MapAppearance
     let sessionVersion: Int
     let viewVersion: Int
     let restore: NavigationContext?
@@ -125,6 +126,11 @@ struct PendingConfirmation: Identifiable {
   var reduceMotion: Bool {
     fixtureReduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
   }
+  /// UI acceptance override from DI_APPEARANCE, honored only in fixture mode. AppKit cannot
+  /// create a high-contrast appearance, so a contrast value changes the map, not the chrome.
+  let fixtureAppearance: MapAppearance?
+  /// The appearance of the next map build. Hatch and seam colors depend on it.
+  private(set) var mapAppearance: MapAppearance
   var loading = false
   private(set) var replacingSession = false
   var working = false
@@ -175,7 +181,7 @@ struct PendingConfirmation: Identifiable {
   private var preparing = false
   private var cancellationTask: Task<Void, Never>?
   private var requestedFocus: EntryKey?
-  private var resizeTask: Task<Void, Never>?
+  private var rebuildTask: Task<Void, Never>?
 
   init(
     arguments: [String] = ProcessInfo.processInfo.arguments,
@@ -188,6 +194,13 @@ struct PendingConfirmation: Identifiable {
       arguments.contains("--fixture-mode") || arguments.contains("--scenario")
       || environment["DI_UI_TEST"] != nil
     fixtureReduceMotion = fixtureMode && environment["DI_REDUCE_MOTION"] == "1"
+    fixtureAppearance =
+      fixtureMode ? environment["DI_APPEARANCE"].flatMap(MapAppearance.init(fixtureName:)) : nil
+    mapAppearance =
+      fixtureAppearance
+      ?? MapAppearance(
+        NSApplication.shared.effectiveAppearance,
+        increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)
     self.storage =
       storage
       ?? (fixtureMode
@@ -358,7 +371,7 @@ struct PendingConfirmation: Identifiable {
     await withCheckedContinuation { done in
       viewRequest?.done.resume()
       viewRequest = ViewRequest(
-        session: s, focus: focus, tree: reuse, size: viewport,
+        session: s, focus: focus, tree: reuse, size: viewport, appearance: mapAppearance,
         sessionVersion: sessionVersion, viewVersion: version, restore: restore,
         recovery: recovery, selection: selection, done: done)
       guard !viewWorkerRunning else { return }
@@ -407,7 +420,9 @@ struct PendingConfirmation: Identifiable {
               let selectedRow = try selection.flatMap { try tree.visibleRow(key: $0.entry.key) }.map
               { Int($0) }
               if request.recovery, let selectedRow { offset = UInt64(selectedRow) }
-              let picture = try DiagramPicture(session: s, focus: request.focus, size: request.size)
+              let picture = try DiagramPicture(
+                session: s, focus: request.focus, size: request.size,
+                appearance: request.appearance)
               let publishedRows =
                 request.recovery
                 ? try tree.rows(offset: offset > 32 ? offset - 32 : 0, limit: 256) : rows
@@ -790,11 +805,27 @@ struct PendingConfirmation: Identifiable {
       height: min(4_000_000, max(1, floor(proposed.height * scale))))
     guard size != viewport else { return }
     viewport = size
-    resizeTask?.cancel()
-    resizeTask = Task {
+    scheduleMapRebuild()
+  }
+  /// The map variant for a view appearance. The fixture override wins over the system.
+  func mapAppearance(for appearance: NSAppearance) -> MapAppearance {
+    fixtureAppearance
+      ?? MapAppearance(
+        appearance, increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)
+  }
+  /// A light, dark or Increase Contrast change rebuilds the map from saved data with the
+  /// resize debounce. It never scans and never reads live metadata.
+  func mapAppearanceChanged(_ appearance: MapAppearance) {
+    guard appearance != mapAppearance else { return }
+    mapAppearance = appearance
+    scheduleMapRebuild()
+  }
+  private func scheduleMapRebuild() {
+    rebuildTask?.cancel()
+    rebuildTask = Task {
       try? await Task.sleep(for: .milliseconds(180))
-      // Recovery rebuilds at the latest viewport before releasing its retained selection.
-      // An ordinary resize request must not supersede that validation.
+      // Recovery rebuilds at the latest viewport and appearance before releasing its
+      // retained selection. An ordinary rebuild request must not supersede that validation.
       guard !Task.isCancelled, recoveryToken == nil, let key = requestedFocus else { return }
       await updateView(focus: key)
     }
@@ -979,9 +1010,10 @@ struct PendingConfirmation: Identifiable {
       requestedFocus = key
       while recoveryToken == token {
         let size = viewport
+        let appearance = mapAppearance
         await updateView(focus: key, recovery: true, preserving: selection)
         guard generation == sessionVersion, recoveryToken == token else { return }
-        if size == viewport { break }
+        if size == viewport && appearance == mapAppearance { break }
       }
     } else {
       selected = nil

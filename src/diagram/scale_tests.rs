@@ -32,7 +32,9 @@ fn million_file_diagram_respects_pixel_region_work_and_memory_envelopes() {
     }
     map.aggregate().unwrap();
     let e = Explorer::from_map(map).unwrap();
-    let frame = e.diagram(e.root_handle(), 2000, 2000).unwrap();
+    let frame = e
+        .diagram(e.root_handle(), 2000, 2000, MapAppearance::Dark)
+        .unwrap();
     assert!(frame.stats.tiles + frame.stats.groups <= MAX_REGIONS);
     assert_eq!(frame.stats.pixels, MAX_PIXELS);
     assert!(frame.stats.child_visits <= 2 * MAX_REGIONS);

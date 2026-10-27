@@ -122,7 +122,7 @@ struct BridgeSmoke {
         let projects = try find(dix, "Projects")
         require(try tree.expand(key: projects, expanded: true) == 2003, "virtual expansion")
         require(try tree.rows(offset: 250, limit: 256).rows.count == 256, "bounded row transfer")
-        let diagram = try dix.diagram(focus: dixRoot, width: 640, height: 400)
+        let diagram = try dix.diagram(focus: dixRoot, width: 640, height: 400, appearance: .dark)
         let bitmap = diagram.bitmap()
         require(bitmap.rgba.count == 640 * 400 * 4 && bitmap.tiles > 160, "flat detailed bitmap")
         let target = try diagram.targets().first!

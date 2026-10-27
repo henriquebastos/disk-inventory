@@ -11,7 +11,7 @@ import XCTest
   }
   func launch(
     _ scenario: String = "presentation", minimumWindow: Bool = false, reduceMotion: Bool = false,
-    locale: String = "en_US", storage: URL? = nil
+    locale: String = "en_US", storage: URL? = nil, appearance: String? = nil
   ) {
     app = XCUIApplication()
     app.launchArguments = ["--fixture-mode", "--scenario", scenario, "-AppleLocale", locale]
@@ -22,6 +22,8 @@ import XCTest
     if reduceMotion { app.launchEnvironment["DI_REDUCE_MOTION"] = "1" }
     // Fixture-only, read-only metadata root that the test owns.
     if let storage { app.launchEnvironment["DI_FIXTURE_STORAGE_ROOT"] = storage.path }
+    // Fixture-only appearance; the system appearance and Increase Contrast never change.
+    if let appearance { app.launchEnvironment["DI_APPEARANCE"] = appearance }
     app.launch()
     XCTAssertTrue(app.staticTexts["scope-total"].waitForExistence(timeout: 15))
     XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
@@ -529,12 +531,13 @@ import XCTest
     }
   }
   /// The fail-closed fixture start screen: no scenario, native access disabled.
-  func launchStartScreen(storage: URL) {
+  func launchStartScreen(storage: URL, appearance: String? = nil) {
     app = XCUIApplication()
     app.launchArguments = ["--fixture-mode", "-AppleLocale", "en_US"]
     app.launchEnvironment["DI_UI_TEST"] = "1"
     app.launchEnvironment["DI_MODEL_TEST"] = "0"
     app.launchEnvironment["DI_FIXTURE_STORAGE_ROOT"] = storage.path
+    if let appearance { app.launchEnvironment["DI_APPEARANCE"] = appearance }
     app.launch()
     XCTAssertTrue(app.staticTexts["fixture-locked"].waitForExistence(timeout: 8))
     XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
@@ -631,27 +634,30 @@ import XCTest
     return CGFloat(top + baseline + 1) / 2 / scale
   }
   func testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows() throws {
-    launch()
-    continueAfterFailure = true  // Report both rows.
-    row("small-files").click()
-    text("selected-name", contains: "small-files")
-    let image = try XCTUnwrap(
-      NSBitmapImageRep(data: XCUIScreen.main.screenshot().pngRepresentation))
-    XCTAssertEqual(image.bitsPerSample, 8)
-    for (name, selected) in [("small-files", true), ("trash", false)] {
-      let tableRow = app.outlines["entry-tree"].tableRows.containing(
-        .staticText, identifier: "entry-\(name)"
-      ).firstMatch
-      XCTAssertEqual(tableRow.isSelected, selected, name)
-      let size = tableRow.staticTexts["tree-size"]
-      XCTAssertTrue(size.exists, name)
-      let nameCenter = try XCTUnwrap(inkCenter(row(name), row: tableRow, image: image), name)
-      let sizeCenter = try XCTUnwrap(inkCenter(size, row: tableRow, image: image), name)
-      XCTAssertEqual(
-        sizeCenter, nameCenter, accuracy: 1,
-        "\(name): size text center \(sizeCenter), name text center \(nameCenter)")
+    continueAfterFailure = true  // Report both rows in every appearance.
+    for appearance in Self.appearances {
+      launch(appearance: appearance)
+      row("small-files").click()
+      text("selected-name", contains: "small-files")
+      let image = try XCTUnwrap(
+        NSBitmapImageRep(data: XCUIScreen.main.screenshot().pngRepresentation))
+      XCTAssertEqual(image.bitsPerSample, 8)
+      for (name, selected) in [("small-files", true), ("trash", false)] {
+        let tableRow = app.outlines["entry-tree"].tableRows.containing(
+          .staticText, identifier: "entry-\(name)"
+        ).firstMatch
+        XCTAssertEqual(tableRow.isSelected, selected, name)
+        let size = tableRow.staticTexts["tree-size"]
+        XCTAssertTrue(size.exists, name)
+        let nameCenter = try XCTUnwrap(inkCenter(row(name), row: tableRow, image: image), name)
+        let sizeCenter = try XCTUnwrap(inkCenter(size, row: tableRow, image: image), name)
+        XCTAssertEqual(
+          sizeCenter, nameCenter, accuracy: 1,
+          "\(appearance) \(name): size text center \(sizeCenter), name text center \(nameCenter)")
+      }
+      screenshot("tree-size-centered-\(appearance)")
+      app.terminate()
     }
-    screenshot("tree-size-centered")
   }
   func testContextMenusOnTreeRowAndMapBlock() {
     launch()
@@ -730,4 +736,308 @@ import XCTest
     }
   }
 
+  /// The four `DI_APPEARANCE` values. Contrast values change the map only: AppKit cannot
+  /// create a high-contrast appearance without the system setting.
+  static let appearances = ["light", "dark", "light-contrast", "dark-contrast"]
+  /// The window screenshot, in pixels, with conversions from screen points.
+  struct WindowPixels {
+    let image: NSBitmapImageRep
+    let origin: CGPoint
+    let scale: CGFloat
+    func rgb(_ x: Int, _ y: Int) -> [Int] {
+      var pixel = [Int](repeating: 0, count: 8)
+      image.getPixel(&pixel, atX: x, y: y)
+      return Array(pixel.prefix(3))
+    }
+    func x(_ point: CGFloat) -> Int { Int(((point - origin.x) * scale).rounded(.down)) }
+    func y(_ point: CGFloat) -> Int { Int(((point - origin.y) * scale).rounded(.down)) }
+    /// Mean color of the 3x3 pixels around a screen point.
+    func mean(_ point: CGPoint) -> [Double] {
+      var sum = [0.0, 0.0, 0.0]
+      for dy in -1...1 {
+        for dx in -1...1 {
+          for (c, v) in rgb(x(point.x) + dx, y(point.y) + dy).enumerated() { sum[c] += Double(v) }
+        }
+      }
+      return sum.map { $0 / 9 }
+    }
+  }
+  func windowPixels() throws -> WindowPixels {
+    let window = app.windows.firstMatch
+    let image = try XCTUnwrap(NSBitmapImageRep(data: window.screenshot().pngRepresentation))
+    XCTAssertEqual(image.bitsPerSample, 8)
+    return WindowPixels(
+      image: image, origin: window.frame.origin,
+      scale: CGFloat(image.pixelsWide) / window.frame.width)
+  }
+  /// WCAG 2 contrast ratio of two 8-bit colors.
+  static func contrast(_ a: [Int], _ b: [Int]) -> Double {
+    func luminance(_ c: [Int]) -> Double {
+      let linear = c.map { v -> Double in
+        let v = Double(v) / 255
+        return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+      }
+      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+    let (x, y) = (luminance(a), luminance(b))
+    return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+  }
+  /// Moves the pointer off the map so that no hover outline covers it.
+  func leaveMap() {
+    row("zero-byte").hover()
+    text("hover-name", contains: "Recorded disk usage")
+  }
+  /// Gray levels of the aggregate hatch right of `minX`: neutral diagonal stripes, two pixels
+  /// wide with a period of four, as Rust draws them on the backing grid.
+  func hatchLevels(_ p: WindowPixels, minX: CGFloat) -> (light: Int, dark: Int, pixels: Int) {
+    var light: [Int: Int] = [:]
+    var dark: [Int: Int] = [:]
+    func neutral(_ c: [Int]) -> Bool { c.max()! - c.min()! <= 8 }
+    func same(_ a: [Int], _ b: [Int]) -> Bool { zip(a, b).allSatisfy { abs($0 - $1) <= 2 } }
+    for y in 1..<(p.image.pixelsHigh - 1) {
+      for x in max(0, p.x(minX))..<(p.image.pixelsWide - 4) {
+        let a = p.rgb(x, y)
+        guard neutral(a) else { continue }
+        let b = p.rgb(x + 2, y)
+        guard neutral(b), abs(a[1] - b[1]) > 8, same(a, p.rgb(x + 4, y)),
+          same(a, p.rgb(x + 1, y - 1))
+        else { continue }
+        if a[1] > b[1] { light[a[1], default: 0] += 1 } else { dark[a[1], default: 0] += 1 }
+      }
+    }
+    let mode = { (levels: [Int: Int]) in levels.max { $0.value < $1.value }?.key ?? -1 }
+    return (mode(light), mode(dark), light.values.reduce(0, +) + dark.values.reduce(0, +))
+  }
+  func testAppearanceVariantsRenderMapChromeAndSheets() {
+    for appearance in Self.appearances {
+      launch(appearance: appearance)
+      let probe = app.descendants(matching: .any)["map-appearance"]
+      XCTAssertTrue(probe.waitForExistence(timeout: 8), appearance)
+      XCTAssertEqual(probe.label, appearance)
+      leaveMap()
+      screenshot("\(appearance)-overview")
+      row("large-file").click()
+      text("selected-name", contains: "large-file")
+      text("selected-path", contains: "large-file")
+      screenshot("\(appearance)-selection")
+      let tile = app.buttons["map-file-large-file"]
+      XCTAssertTrue(tile.waitForExistence(timeout: 8))
+      tile.hover()
+      text("hover-name", contains: "large-file")
+      screenshot("\(appearance)-hover")
+      for action in ["trash", "delete"] {
+        prepare(action, target: "large-file")
+        screenshot("\(appearance)-\(action)-sheet")
+        app.buttons["cancel-action"].click()
+        XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
+      }
+      // Each sheet and the hover keep the appearance: no rebuild with another variant.
+      XCTAssertEqual(probe.label, appearance)
+      app.terminate()
+    }
+  }
+  func testMapHatchFollowsAppearance() throws {
+    continueAfterFailure = true  // Report every appearance.
+    for appearance in Self.appearances {
+      launch(appearance: appearance)
+      XCTAssertTrue(app.buttons["map-file-large-file"].waitForExistence(timeout: 8))
+      leaveMap()
+      let hatch = hatchLevels(
+        try windowPixels(), minX: app.outlines["entry-tree"].frame.maxX)
+      let ratio = Self.contrast(
+        [hatch.light, hatch.light, hatch.light], [hatch.dark, hatch.dark, hatch.dark])
+      print(
+        "HATCH \(appearance) light=\(hatch.light) dark=\(hatch.dark) ratio=\(ratio) pixels=\(hatch.pixels)"
+      )
+      XCTAssertGreaterThan(hatch.pixels, 500, appearance)
+      if appearance.hasPrefix("light") {
+        XCTAssertGreaterThan(hatch.dark, 140, "\(appearance): light hatch on a light window")
+      } else {
+        XCTAssertLessThan(hatch.light, 110, "\(appearance): dark hatch on a dark window")
+      }
+      if appearance.hasSuffix("contrast") {
+        XCTAssertGreaterThan(ratio, 2.3, "\(appearance): stronger hatch stripes")
+      } else {
+        XCTAssertLessThan(ratio, 1.5, appearance)
+      }
+      screenshot("hatch-\(appearance)")
+      app.terminate()
+    }
+  }
+  /// Contrast of the top seam of a map tile against the next pixel row inside the tile, at
+  /// three columns. The seam is the row above two matching interior rows.
+  func seamContrast(_ tile: XCUIElement, _ p: WindowPixels) -> Double? {
+    var ratios: [Double] = []
+    for fraction in [0.25, 0.5, 0.75] {
+      let x = p.x(tile.frame.minX + tile.frame.width * fraction)
+      let top = p.y(tile.frame.minY)
+      for y in (top - 3)...(top + 3) {
+        let (seam, inside, next) = (p.rgb(x, y), p.rgb(x, y + 1), p.rgb(x, y + 2))
+        if zip(inside, next).allSatisfy({ abs($0 - $1) <= 3 }),
+          zip(seam, inside).contains(where: { abs($0 - $1) > 3 })
+        {
+          ratios.append(Self.contrast(seam, inside))
+          break
+        }
+      }
+    }
+    return ratios.count == 3 ? ratios.min() : nil
+  }
+  func testIncreasedContrastDarkensMapSeams() throws {
+    continueAfterFailure = true
+    for appearance in Self.appearances {
+      launch(appearance: appearance)
+      let tile = app.buttons["map-file-large-file"]
+      XCTAssertTrue(tile.waitForExistence(timeout: 8))
+      leaveMap()
+      let ratio = try XCTUnwrap(seamContrast(tile, try windowPixels()), appearance)
+      print("SEAM \(appearance) ratio=\(ratio)")
+      if appearance.hasSuffix("contrast") {
+        XCTAssertGreaterThanOrEqual(ratio, 3.0, "\(appearance) seam")
+      } else {
+        // The ordinary seam stays subtle.
+        XCTAssertLessThan(ratio, 2.0, "\(appearance) seam")
+      }
+      screenshot("seam-\(appearance)")
+      app.terminate()
+    }
+  }
+  func testIncreasedContrastHoverStrokeIsOpaqueAndTwoPointsWide() throws {
+    continueAfterFailure = true
+    for appearance in ["light-contrast", "dark-contrast"] {
+      launch(appearance: appearance)
+      let tile = app.buttons["map-file-large-file"]
+      XCTAssertTrue(tile.waitForExistence(timeout: 8))
+      tile.hover()
+      text("hover-name", contains: "large-file")
+      let p = try windowPixels()
+      // Four backing pixels from the left and the top edge: the first three are fully covered.
+      let left = Int(((tile.frame.minX - p.origin.x) * p.scale).rounded(.up))
+      let top = Int(((tile.frame.minY - p.origin.y) * p.scale).rounded(.up))
+      let midX = p.x(tile.frame.midX)
+      let midY = p.y(tile.frame.midY)
+      let edge =
+        (0..<3).map { p.rgb(left + $0, midY) } + (0..<3).map { p.rgb(midX, top + $0) }
+      print("HOVER \(appearance) edge=\(edge)")
+      for pixel in edge {
+        XCTAssertGreaterThanOrEqual(pixel.min()!, 250, "\(appearance): opaque white \(pixel)")
+      }
+      screenshot("hover-stroke-\(appearance)")
+      app.terminate()
+    }
+  }
+  func testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch() throws {
+    continueAfterFailure = true
+    for appearance in Self.appearances {
+      launch(appearance: appearance)
+      XCTAssertTrue(row("zero-byte").waitForExistence(timeout: 8))
+      let p = try windowPixels()
+      var expected: (background: [Double], swatch: [Double]) = ([], [])
+      NSAppearance(named: appearance.hasPrefix("light") ? .aqua : .darkAqua)!
+        .performAsCurrentDrawingAppearance {
+          func rgb(_ color: NSColor) -> [Double] {
+            let c = color.usingColorSpace(.sRGB)!
+            return [c.redComponent, c.greenComponent, c.blueComponent].map { $0 * 255 }
+          }
+          expected = (rgb(.controlBackgroundColor), rgb(.systemGray))
+        }
+      // Empty tree area below the last row, and the center of an unselected directory swatch.
+      let empty = CGPoint(
+        x: app.outlines["entry-tree"].frame.midX, y: row("zero-byte").frame.maxY + 60)
+      let name = row("small-files").frame
+      let swatch = CGPoint(x: name.minX - 10.5, y: name.midY)
+      let background = p.mean(empty)
+      let square = p.mean(swatch)
+      print("TREE \(appearance) background=\(background) swatch=\(square) expected=\(expected)")
+      for c in 0..<3 {
+        XCTAssertEqual(
+          background[c], expected.background[c], accuracy: 4, "\(appearance) background")
+        XCTAssertEqual(square[c], expected.swatch[c], accuracy: 6, "\(appearance) swatch")
+      }
+      screenshot("tree-inset-\(appearance)")
+      app.terminate()
+    }
+  }
+  func testMapTileBaseColorMatchesTreeSwatchOnScreen() throws {
+    continueAfterFailure = true
+    for appearance in ["light", "dark"] {
+      launch("dix", appearance: appearance)
+      let tile = app.buttons["map-file-Movie.mov"]
+      XCTAssertTrue(tile.waitForExistence(timeout: 8))
+      row("Tiny files").hover()
+      let p = try windowPixels()
+      let name = row("Movie.mov").frame
+      let swatch = p.mean(CGPoint(x: name.minX - 10.5, y: name.midY)).map { Int($0.rounded()) }
+      // The tile gradient passes through its base color, which the swatch shows.
+      var nearest = Int.max
+      let frame = tile.frame.insetBy(dx: 4, dy: 4)
+      for y in stride(from: p.y(frame.minY), to: p.y(frame.maxY), by: 2) {
+        for x in stride(from: p.x(frame.minX), to: p.x(frame.maxX), by: 2) {
+          nearest = min(nearest, zip(p.rgb(x, y), swatch).map { abs($0 - $1) }.max()!)
+        }
+      }
+      print("SRGB \(appearance) swatch=\(swatch) nearest=\(nearest)")
+      XCTAssertLessThanOrEqual(nearest, 3, "\(appearance): map tile and swatch colors differ")
+      screenshot("srgb-swatch-\(appearance)")
+      app.terminate()
+    }
+  }
+  /// Text contrast inside an element frame: the most common color is the background, and the
+  /// 99th-percentile pixel contrast against it is the ink, so one stray pixel does not count.
+  func textContrast(_ element: XCUIElement, _ p: WindowPixels) -> Double {
+    var counts: [[Int]: Int] = [:]
+    var colors: [[Int]] = []
+    let frame = element.frame
+    for y in p.y(frame.minY)..<p.y(frame.maxY) {
+      for x in p.x(frame.minX)..<p.x(frame.maxX) {
+        let c = p.rgb(x, y)
+        counts[c, default: 0] += 1
+        colors.append(c)
+      }
+    }
+    guard let background = counts.max(by: { $0.value < $1.value })?.key else { return 0 }
+    let ratios = colors.filter { $0 != background }.map { Self.contrast($0, background) }.sorted()
+    guard ratios.count > 20 else { return ratios.last ?? 0 }
+    return ratios[ratios.count * 99 / 100 - 1]
+  }
+  func staticText(_ prefix: String) -> XCUIElement {
+    app.staticTexts.matching(
+      NSPredicate(format: "value BEGINSWITH %@ OR label BEGINSWITH %@", prefix, prefix)
+    ).firstMatch
+  }
+  func testCaptionAndSecondaryTextMeetFourAndAHalfToOne() throws {
+    continueAfterFailure = true
+    let storage = try lastFolderMetadata(rootName: "/Workspace")
+    for appearance in ["light", "dark"] {
+      launch(appearance: appearance)
+      // Measure only in the requested appearance.
+      let probe = app.descendants(matching: .any)["map-appearance"]
+      XCTAssertTrue(probe.waitForExistence(timeout: 8), appearance)
+      if probe.exists { XCTAssertEqual(probe.label, appearance) }
+      leaveMap()
+      func check(_ name: String, _ element: XCUIElement, _ pixels: WindowPixels) {
+        XCTAssertTrue(element.exists, name)
+        let ratio = textContrast(element, pixels)
+        print("TEXT \(appearance) \(name) ratio=\(ratio)")
+        XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(appearance) \(name)")
+      }
+      check("empty-card hint", staticText("Click to select"), try windowPixels())
+      row("large-file").click()
+      text("selected-path", contains: "large-file")
+      leaveMap()
+      let selection = try windowPixels()
+      check("card caption", staticText("Recorded allocation"), selection)
+      check("card path", app.staticTexts["selected-path"], selection)
+      check("footer note", staticText("Some map detail"), selection)
+      screenshot("text-contrast-\(appearance)")
+      app.terminate()
+      launchStartScreen(storage: storage, appearance: appearance)
+      XCTAssertTrue(app.buttons["reopen-last-folder"].waitForExistence(timeout: 8))
+      let start = try windowPixels()
+      check("start subtitle", staticText("Nothing is scanned"), start)
+      check("last-folder caption", staticText("Last folder"), start)
+      screenshot("text-contrast-start-\(appearance)")
+      app.terminate()
+    }
+  }
 }

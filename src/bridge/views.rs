@@ -73,12 +73,18 @@ impl ExplorerSession {
         focus: Arc<EntryKey>,
         width: u32,
         height: u32,
+        appearance: MapAppearance,
     ) -> Result<Arc<DiagramFrame>, BridgeError> {
         self.with(|b| {
             Ok(Arc::new(DiagramFrame {
                 session: self.clone(),
                 revision: self.revision.load(Ordering::Acquire),
-                diagram: b.explorer().diagram(b.validate(&focus)?, width, height)?,
+                diagram: b.explorer().diagram(
+                    b.validate(&focus)?,
+                    width,
+                    height,
+                    appearance.into(),
+                )?,
             }))
         })
     }
