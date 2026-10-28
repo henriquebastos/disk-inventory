@@ -39,9 +39,10 @@ struct PendingConfirmation: Identifiable {
   var scope: String { directory ? "Directory and its contents" : "File" }
   var warning: String {
     guard permanent else { return "Trash may not free space until emptied." }
+    // Shared or cloned storage stays allocated, so deletion can free less than recorded.
     return directory
-      ? "This cannot be undone. An error may leave some contents undeleted."
-      : "This cannot be undone."
+      ? "This cannot be undone. Deleting may free less space than shown. An error may leave some contents undeleted."
+      : "This cannot be undone. Deleting may free less space than shown."
   }
   var actionTitle: String { permanent ? "Delete Immediately" : "Move to Trash" }
   /// Return confirms a Trash. Permanent deletion has no default button.
@@ -77,6 +78,9 @@ struct PendingConfirmation: Identifiable {
     let restore: NavigationContext?
     let recovery: Bool
     let selection: EntryKey?
+    /// The selection shown now. Its region publishes with the new picture, so a rebuild
+    /// never draws one frame without the selection dim.
+    let shownSelection: EntryKey?
     let done: CheckedContinuation<Void, Never>
   }
   var treeEditing = false
@@ -136,7 +140,16 @@ struct PendingConfirmation: Identifiable {
   var working = false
   var error: String?
   var outcome: String?
-  var issues: [String] = []
+  /// The session issue log. The outcome banner shows it until dismissed; new issues show it again.
+  var issues: [String] = [] { didSet { if issues.isEmpty { dismissedIssues = 0 } } }
+  private(set) var dismissedIssues = 0
+  /// The outcome banner over the map: errors, operation outcomes and new issues.
+  var bannerVisible: Bool { error != nil || outcome != nil || issues.count > dismissedIssues }
+  func dismissBanner() {
+    error = nil
+    outcome = nil
+    dismissedIssues = issues.count
+  }
   var pending: PendingConfirmation?
   var aggregate: EntryKey?
   var aggregateText: String?
@@ -373,7 +386,7 @@ struct PendingConfirmation: Identifiable {
       viewRequest = ViewRequest(
         session: s, focus: focus, tree: reuse, size: viewport, appearance: mapAppearance,
         sessionVersion: sessionVersion, viewVersion: version, restore: restore,
-        recovery: recovery, selection: selection, done: done)
+        recovery: recovery, selection: selection, shownSelection: selected?.key, done: done)
       guard !viewWorkerRunning else { return }
       viewWorkerRunning = true
       Task {
@@ -423,13 +436,15 @@ struct PendingConfirmation: Identifiable {
               let picture = try DiagramPicture(
                 session: s, focus: request.focus, size: request.size,
                 appearance: request.appearance)
+              let regionKey = selection?.entry.key ?? request.shownSelection
+              let region = regionKey.flatMap { try? picture.frame.region(key: $0) }
               let publishedRows =
                 request.recovery
                 ? try tree.rows(offset: offset > 32 ? offset - 32 : 0, limit: 256) : rows
               return (
                 ViewRecords(status: status, focus: entry, ancestors: ancestors), tree,
                 publishedRows,
-                picture, selection, offset, selectedRow
+                picture, selection, offset, selectedRow, (regionKey, region)
               )
             }.value
             if request.sessionVersion == sessionVersion && request.viewVersion == viewVersion {
@@ -458,7 +473,16 @@ struct PendingConfirmation: Identifiable {
               picture = result.3
               diagramBuilds += 1
               loading = false
-              if let selected { updateSelectedRegion(selected.key) }
+              if let selected {
+                // The region came with the picture when the selection is the same entry.
+                if let key = result.7.0, key.sameEntry(other: selected.key) {
+                  selectedRegion = result.7.1
+                } else {
+                  updateSelectedRegion(selected.key)
+                }
+              } else {
+                selectedRegion = nil
+              }
             }
           } catch {
             if request.sessionVersion == sessionVersion && request.viewVersion == viewVersion {
@@ -600,9 +624,14 @@ struct PendingConfirmation: Identifiable {
       parentWorkerRunning = false
     }
   }
+  /// The shown region stays until the new one arrives. Clearing it first drew the map
+  /// without the selection dim for one to three frames whenever a display refresh fell
+  /// between the click and the session-locked region query: the click flicker.
   private func updateSelectedRegion(_ key: EntryKey) {
-    selectedRegion = nil
-    guard let frame = picture?.frame else { return }
+    guard let frame = picture?.frame else {
+      selectedRegion = nil
+      return
+    }
     regionRequest = (frame, key, sessionVersion, viewVersion, selectionVersion)
     guard !regionWorkerRunning else { return }
     regionWorkerRunning = true
@@ -648,7 +677,8 @@ struct PendingConfirmation: Identifiable {
         if request.click {
           guard request.version == clickVersion, let hit else { continue }
           if hit.actionable {
-            select(hit.entry)
+            // An actionable hit is one tile, so its rectangle is the selection region.
+            select(hit.entry, region: hit.rect)
             if request.doubleClick, hit.entry.kind == .directory { focus(hit.entry.key) }
           } else {
             selectAggregate(hit.entry.key, bytes: hit.bytes)
@@ -667,7 +697,9 @@ struct PendingConfirmation: Identifiable {
     hover = nil
   }
 
-  func select(_ entry: EntryRecord) {
+  /// `region` is the known map rectangle of a clicked tile. Without it the region comes
+  /// from the current frame.
+  func select(_ entry: EntryRecord, region: Rectangle? = nil) {
     // Local highlight is published before any blocking generated call is dispatched.
     clickVersion += 1
     selected = entry
@@ -678,7 +710,12 @@ struct PendingConfirmation: Identifiable {
     selectionPath = nil
     selectionVersion += 1
     reveal(entry)
-    updateSelectedRegion(entry.key)
+    if let region {
+      regionRequest = nil
+      selectedRegion = region
+    } else {
+      updateSelectedRegion(entry.key)
+    }
     guard let s = session else { return }
     pathRequest = PathRequest(
       session: s, key: entry.key,
@@ -700,6 +737,28 @@ struct PendingConfirmation: Identifiable {
       }
       pathWorkerRunning = false
     }
+  }
+
+  /// Esc in the map or the tree: no selected item, region, card or tree highlight. Saved
+  /// data, focus, expansion and scroll stay.
+  var canClearSelection: Bool {
+    (selected != nil || aggregate != nil) && !working && !loading && !replacingSession
+      && pending == nil && !motion.active
+  }
+  func clearSelection() {
+    guard canClearSelection else { return }
+    clickVersion += 1
+    pathRequest = nil
+    regionRequest = nil
+    parentRequest = nil
+    selectionVersion += 1
+    selected = nil
+    selectedRow = nil
+    selectedRegion = nil
+    selectionRawPath = nil
+    selectionPath = nil
+    aggregate = nil
+    aggregateText = nil
   }
 
   func selectAggregate(_ key: EntryKey, bytes: UInt64) {
@@ -1023,22 +1082,34 @@ struct PendingConfirmation: Identifiable {
       loading = false
     }
   }
+  /// Refreshes the focused folder in memory with the scan's progress, counter and Stop.
+  /// Stop before the update leaves the inventory and the shown view unchanged.
   func refresh() {
-    guard !working, !loading, !replacingSession, let s = session, let key = records?.focus.key
-    else { return }
+    guard !working, !loading, !replacingSession, let s = session, let records else { return }
+    let key = records.focus.key
+    let name = records.breadcrumbName(records.focus)
+    let control = ScanControl()
     working = true
+    scan.begin(control, refreshing: name)
     let generation = sessionVersion
     Task {
       do {
         let update = try await Task.detached(priority: .userInitiated) {
-          try s.refreshDirectory(key: key)
+          try s.refreshDirectoryControlled(key: key, control: control)
         }.value
         guard generation == sessionVersion else { return }
         retainIssues(update)
-        outcome = "Directory refreshed in memory. Saved snapshot unchanged."
+        outcome = "Refreshed “\(name)” in memory. Saved snapshot unchanged."
         await recoverView(s)
+      } catch BridgeError.Cancelled {
+        if generation == sessionVersion {
+          outcome = "Refresh of “\(name)” stopped. The previous data is unchanged."
+        }
       } catch { if generation == sessionVersion { self.error = "Refresh failed: \(error)" } }
-      if generation == sessionVersion { working = false }
+      if generation == sessionVersion {
+        scan.stopPolling(cancelScan: false)
+        working = false
+      }
     }
   }
   func createSnapshot() {

@@ -17,18 +17,17 @@ remaining-weight ratios preserve exact byte accounting even above floating-point
 integer precision; only geometry uses floating point. Unrepresentable subdivisions
 retain their parent. Native raster geometry uses cumulative integer-weight endpoints
 and final-edge closure to prevent drift across large sibling prefixes at nonzero
-origins. Legacy per-child floating-length arithmetic and limits remain unchanged;
-row scoring/orientation is shared, not a second placement algorithm.
+origins.
 
 The placement equals the design prototype's `layout()`: the same rows, worst-ratio test,
 orientation, largest-first order and no padding.
 "squarify_matches_prototype_layout_at_render_and_portrait_viewports" in
 [prototype_parity_tests.rs](../src/bridge/fixture/prototype_parity_tests.rs) ports its `sq()`
 and `place()` and lays out the `prototype-home` fixture. At 939×750 (the design render),
-640×900 and 1702×1251, all 514 drawn files match within 1 px. Not compared: files that the
-prototype omits (hatched directories under 3 px, files under 0.5 px²) and files inside our
-aggregates. A rollup is one sibling with the summed weight, so at 200×150 and 60×40 later
-siblings can move.
+640×900 and 1702×1443 (the app map), all 503 compared files match within 1 px. Not compared:
+files that the prototype omits (hatched directories under 3 px, files under 0.5 px²) and files
+inside our aggregates or the root Trash region (11 files). A rollup is one sibling with the
+summed weight, so at 200×150 and 60×40 later siblings can move.
 
 Both views use the same priority-driven bounded refinement machinery, preserving
 zero-area semantics. Directory accounting and unresolved descendants remain aggregates.
@@ -50,24 +49,25 @@ green images, pink audio, gold archives, purple apps, cyan code, orange caches,
 olive data and muted documents/unknowns. Classification is ASCII case-insensitive
 by extension, not content or package inspection. A 155-degree linear gradient runs
 from 14% white through the base at 55% to 16% black, independent of ancestor depth.
-A top/left backing-pixel seam separates files; gray diagonal hatching marks
-non-actionable aggregates. `diagram` takes a `MapAppearance`: light, dark and both
-Increase Contrast variants change only the hatch and the seam strength, as specified with
-the color owners in [native-appearance.md](native-appearance.md). Swift tags the bitmap as
+Each file tile has a one-backing-pixel seam on all four edges, the design's 0.5-point inset
+at 45% black. Gray diagonal hatching marks non-actionable aggregates. The root Trash (a
+`.Trash` directory that is a direct child of the inventory root, the design's rule) is one
+actionable tile with the design's TRASH stripes. Its children are never read, so it selects
+the Trash directory. A Trash focus draws its files normally. A volume scan has no such child.
+`diagram` takes a `MapAppearance`, which changes only the hatch, the Trash fill and the seam
+strength ([native-appearance.md](native-appearance.md)). Swift tags the bitmap as
 sRGB. Selection dimming and hover outlines remain native overlays,
 not baked into the bitmap or owner buffer.
 
 `DiagramFrame.bitmap` transfers one flat RGBA buffer plus counts/timing/payload
 statistics. `hit` transfers one owner; `region` one rectangle. `targets` supplies at
-most 24 sufficiently large file targets for drawing accessibility, not the complete
-inventory; the virtual tree is exhaustive. Swift scales the raster with nearest-neighbor
+most 24 sufficiently large file or Trash targets for drawing accessibility; the virtual
+tree is exhaustive. Swift scales the raster with nearest-neighbor
 sampling when the pixel envelope binds and maps input back into that raster.
 
 Counts are bounds, not memory or display-time guarantees. Retained vector payload
 excludes allocator overhead, layout scratch, FFI copies and native image-provider
-memory. The generated `surface_payload_bytes` statistic remains compatible but is
-always zero: the raster no longer allocates a lighting-surface map. Core process RSS and Swift/process peak measurements
-must be reported separately. Two frame builds cannot run concurrently in the model;
+memory. `surface_payload_bytes` is always zero. Core RSS and Swift peak are separate. Two frame builds cannot run concurrently in the model;
 a displayed old frame may coexist with the next build and transfer copies. Bounded
 in-flight hit/region queries can briefly retain an obsolete frame; accessibility
 targets hold only weak frame references. Deep-path
@@ -81,8 +81,7 @@ It stores expanded branches and prefix counts, not a presentation object per chi
 Virtual rows address a huge fanout without enumerating its siblings. Transfers contain
 1–256 rows with depth/expansion and work/payload counts. Reveal opens saved ancestors
 and updates affected expansion prefixes; collapse removes descendant expansion state.
-Row visits count addressing branches. Bridge payload reporting adds constant-time
-header/cached-sum reads, not a traversal of retained expansion state. Prefix/child-map
+Row visits count addressing branches. Prefix/child-map
 payload is maintained on expansion edits; allocator overhead remains excluded. Read-only `visible_row`
 (Swift `visibleRow`) ascends expanded ancestors using CSR rank searches and binary
 searches over cached prefix counts; it never scans all rows or opens a branch.
@@ -107,8 +106,8 @@ request plus one replaceable pending request, with identity/generation and inter
 state checks before dispatch and publication.
 
 Session/view/selection generations reject obsolete work. Core frames and trees also
-capture an inventory revision; execution and refresh invalidate their queries before
-potential mutation. An immutable old bitmap remains drawable, but obsolete hit/region/
+capture an inventory revision; execution and an applied refresh invalidate their queries.
+A stopped refresh changed nothing, so its old queries stay valid. An immutable old bitmap remains drawable, but obsolete hit/region/
 row calls fail. Navigation contexts clear on replacement/recovery; obsolete saved trees
 rebuild rather than republishing stale row counts. Preparing actions still performs
 fresh metadata/pin checks inside Rust, separate from ordinary presentation.
@@ -131,7 +130,9 @@ A failed constructor rebuilds the retained session before ending read-only repla
 - "diagram_integer_precision_hardlinks_and_zero_entries_survive_squarify": exact
   u64::MAX accounting, hardlink deduplication, zero-area tree access and pixel/work bounds.
 - "diagram_flat_gradient_has_no_ancestor_ridges_and_aggregates_are_hatched": identical
-  shallow/deep raster bytes, monotonic interior shading, exact colors and aggregate authority.
+  shallow/deep raster bytes, monotonic interior shading, four-edge seams and aggregate authority.
+- "diagram_paints_root_trash_whole_with_trash_stripes_until_focused": exact TRASH pixels,
+  one actionable Trash region, unread children, a nested `.Trash` with type colors.
 
 [src/diagram.rs](../src/diagram.rs):
 "type_palette_matches_prototype_and_flat_gradient_is_monotonic".
@@ -165,9 +166,8 @@ coverage, bounded visits, no source access and revision guards.
 - "testDisclosurePreservesUnaffectedMovieSelection".
 - "testDisclosureRecomputesMovieRowAfterPrecedingSiblingChanges".
 - "testDisclosureHidesSelectedDescendantWithoutReopeningOrRetargeting".
-- "testDisclosureResultsRejectNewerSelectionSessionAndMutation" uses the real
-  delayed metadata lock to overlap disclosure with newer root selection (which
-  does not reveal), session replacement and mutation recovery.
+- "testDisclosureResultsRejectNewerSelectionSessionAndMutation": the real delayed
+  metadata lock overlaps disclosure with newer selection, replacement and recovery.
 - "testHistoryCapPayloadAndSessionAndMutationInvalidation".
 - "testHistoryRebuildsAfterExternalRevisionChange".
 - "testHistoryRestoresNativeTopRowRatherThanOnlyMakingItVisible": real offscreen
@@ -183,8 +183,7 @@ coverage, bounded visits, no source access and revision guards.
 - "testDownsampledPointerMatchesRustOwnerAndAppKitDrawUsesCachedImage": backing
   mapping and cached offscreen AppKit drawing, not display completion.
 - "testOffscreenAppKitTrackingKeyboardAndDisclosureCallbacks": actual native
-  disclosure/key/tracking callbacks. Move/enter events must not read `clickCount`;
-  AppKit raises an exception for that message.
+  disclosure, key and tracking callbacks.
 - "testUsageBarPercentRoundsHalfUpKeepsSliverAndEmptiesZeroOrUnknown": integer
   rounding beyond Double precision, the sliver, clamping and empty bars.
 - "testTreeRowsDrawMapSwatchesAndFocusRelativeUsageBars" and
@@ -203,7 +202,3 @@ coverage, bounded visits, no source access and revision guards.
 Foreground input, modal operations and screenshots are tested separately in
 [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift), as listed in
 [native-explorer.md](native-explorer.md). They require an unlocked interactive console.
-
-[NativeNumberFormatTests.swift](../native/ExplorerModelTests/NativeNumberFormatTests.swift):
-"testDecimalStorageUsesLocaleAndPreservesUnsignedRange" checks decimal units, grouped counts, zero and UInt64.max with en_US and pt_BR.
-"testVisibleTreeSizeUsesInjectedLocaleWithoutChangingAccounting" checks native size cells against unchanged exact counts.

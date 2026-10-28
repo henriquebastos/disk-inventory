@@ -66,6 +66,15 @@ removal (including an outside move), surviving groups receive a targeted identit
 validated alias observation; failure retains recorded allocation and marks stale.
 Directory-own allocation remains separate.
 
+`refresh_directory_controlled` takes a [ScanControl](scan-control.md). It reads the live
+subtree first and changes nothing during that read; Stop returns `ScanCancelled`. A
+compare-exchange from Scanning to Committing then arbitrates Stop, and the same reconciliation
+runs from the read. A request that the read did not make uses the filesystem. The read holds
+one subtree of directory records in memory, like a scan. "stopped_controlled_refresh_leaves_the_inventory_unchanged"
+and "controlled_refresh_applies_the_same_update_and_counts_directory_records" in
+[src/operations/tests.rs](../src/operations/tests.rs) cover every Stop point and equality with
+`refresh_directory`.
+
 Stable arena slots, tombstones, a sorted identity-ID baseline, an additions overlay
 and affected CSR child-list overrides avoid a global accounting rebuild. Work is
 bounded by the changed/selected region, affected parent fanout, ancestor depth and

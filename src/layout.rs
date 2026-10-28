@@ -144,6 +144,36 @@ impl Explorer {
         depth_limit: u32,
         cumulative_endpoints: bool,
     ) -> io::Result<Layout> {
+        self.layout_with_trash(
+            focus,
+            options,
+            rectangle_limit,
+            depth_limit,
+            cumulative_endpoints,
+            false,
+        )
+    }
+    /// The design's Trash rule: a directory named `.Trash` that is a direct child of the
+    /// inventory root. A volume scan has no such child, so it shows no Trash region.
+    pub(crate) fn is_root_trash(&self, id: u32) -> bool {
+        let node = &self.map.nodes[id as usize];
+        id != 0
+            && node.parent == 0
+            && node.kind == Kind::Dir
+            && self.map.basename(id as usize) == b".Trash"
+    }
+    /// `whole_root_trash` keeps the root Trash as one tile, never reading its children.
+    /// Only a root focus expands the root, so a Trash focus or a focus inside it draws
+    /// its children normally.
+    pub(crate) fn layout_with_trash(
+        &self,
+        focus: EntryHandle,
+        options: LayoutOptions,
+        rectangle_limit: usize,
+        depth_limit: u32,
+        cumulative_endpoints: bool,
+        whole_root_trash: bool,
+    ) -> io::Result<Layout> {
         let id = self.resolve(focus)?;
         if self.map.nodes[id as usize].kind != Kind::Dir {
             return Err(invalid("layout focus must be a directory"));
@@ -266,7 +296,8 @@ impl Explorer {
             for part in parts {
                 match part.kind {
                     TileKind::Entry(handle)
-                        if self.map.nodes[handle.index() as usize].kind == Kind::Dir =>
+                        if self.map.nodes[handle.index() as usize].kind == Kind::Dir
+                            && !(whole_root_trash && self.is_root_trash(handle.index())) =>
                     {
                         pending.push(Pending {
                             id: handle.index(),

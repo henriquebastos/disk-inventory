@@ -43,6 +43,16 @@ import XCTest
     }
     XCTAssertEqual(result, .completed, "\(id) must contain \(value)")
   }
+  /// Waits until the fixture-only `map-hover` probe names `value` ("none" without a hover).
+  /// The status bar shows only the selected path, so the hover has no visible text.
+  func hovered(_ value: String, timeout: TimeInterval = 8) {
+    let probe = app.descendants(matching: .any)["map-hover"]
+    XCTAssertTrue(probe.waitForExistence(timeout: timeout))
+    let predicate = NSPredicate(format: "label CONTAINS %@", value)
+    let result = XCTWaiter.wait(
+      for: [XCTNSPredicateExpectation(predicate: predicate, object: probe)], timeout: timeout)
+    XCTAssertEqual(result, .completed, "hover must name \(value), got \(probe.label)")
+  }
   func screenshot(_ name: String) {
     let attachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
     attachment.name = name
@@ -324,7 +334,7 @@ import XCTest
     screenshot("dix-dense-overview")
     row("Movie.mov").click()
     target.hover()
-    text("hover-name", contains: name)
+    hovered(name)
     text("selected-name", contains: "Movie.mov")
     screenshot("dix-independent-hover")
     target.click()
@@ -346,7 +356,7 @@ import XCTest
     let small = app.buttons["map-file-four-KiB.txt"]
     XCTAssertTrue(small.waitForExistence(timeout: 8))
     small.hover()
-    text("hover-name", contains: "four-KiB.txt")
+    hovered("four-KiB.txt")
     small.click()
     text("selected-name", contains: "four-KiB.txt")
     text("selected-usage", contains: "4.1 KB")
@@ -386,7 +396,7 @@ import XCTest
     XCTAssertTrue(row("target-directory").exists)
   }
 
-  func testLocalizedStorageInTreeSelectionFooterAndConfirmation() {
+  func testLocalizedStorageInTreeSelectionAndConfirmation() {
     for (locale, amount, total) in [
       ("en_US", "4.1 KB", "13 KB"), ("pt_BR", "4,1 KB", "13 KB"),
     ] {
@@ -401,7 +411,9 @@ import XCTest
       let tile = app.buttons["map-file-large-file"]
       XCTAssertTrue(tile.waitForExistence(timeout: 8))
       tile.hover()
-      text("hover-name", contains: amount)
+      hovered("large-file")
+      // The status bar shows the selected path, not a localized amount.
+      text("status-path", contains: "/Workspace/large-file")
       prepare("delete", target: "large-file")
       text("confirmation-path", contains: "large-file")
       text("confirmation-warning", contains: "cannot be undone")
@@ -680,7 +692,7 @@ import XCTest
     let tile = app.buttons["map-file-large-file"]
     XCTAssertTrue(tile.waitForExistence(timeout: 8))
     tile.hover()
-    text("hover-name", contains: "large-file")
+    hovered("large-file")
     tile.rightClick()
     XCTAssertTrue(contextItem("deleteImmediately").waitForExistence(timeout: 5))
     text("selected-name", contains: "large-file")
@@ -762,9 +774,14 @@ import XCTest
       return sum.map { $0 / 9 }
     }
   }
-  func windowPixels() throws -> WindowPixels {
+  /// `srgb` converts the screenshot from the display profile to sRGB, so colored pixels
+  /// compare with the sRGB bytes that Rust draws. Neutral grays do not need it.
+  func windowPixels(srgb: Bool = false) throws -> WindowPixels {
     let window = app.windows.firstMatch
-    let image = try XCTUnwrap(NSBitmapImageRep(data: window.screenshot().pngRepresentation))
+    var image = try XCTUnwrap(NSBitmapImageRep(data: window.screenshot().pngRepresentation))
+    if srgb {
+      image = try XCTUnwrap(image.converting(to: .sRGB, renderingIntent: .default))
+    }
     XCTAssertEqual(image.bitsPerSample, 8)
     return WindowPixels(
       image: image, origin: window.frame.origin,
@@ -785,7 +802,17 @@ import XCTest
   /// Moves the pointer off the map so that no hover outline covers it.
   func leaveMap() {
     row("zero-byte").hover()
-    text("hover-name", contains: "Recorded disk usage")
+    hovered("none")
+  }
+  /// Moves the pointer to the tree. Without the hover probe (an older product) it waits a
+  /// fixed second, so a measurement still runs and fails on the measured property.
+  func offMap() {
+    app.outlines["entry-tree"].hover()
+    if app.descendants(matching: .any)["map-hover"].waitForExistence(timeout: 2) {
+      hovered("none")
+    } else {
+      Thread.sleep(forTimeInterval: 1)
+    }
   }
   /// Gray levels of the aggregate hatch right of `minX`: neutral diagonal stripes, two pixels
   /// wide with a period of four, as Rust draws them on the backing grid.
@@ -808,6 +835,35 @@ import XCTest
     let mode = { (levels: [Int: Int]) in levels.max { $0.value < $1.value }?.key ?? -1 }
     return (mode(light), mode(dark), light.values.reduce(0, +) + dark.values.reduce(0, +))
   }
+  /// Top edge of the status bar: 28 points plus the divider above it.
+  func statusBarTop() -> CGFloat { app.windows.firstMatch.frame.maxY - 29 }
+  /// Clicks the middle of an area of aggregate hatch on the map, which selects the grouped
+  /// directory allocation.
+  func clickHatch() throws {
+    let p = try windowPixels()
+    let minX = app.outlines["entry-tree"].frame.maxX
+    let levels = hatchLevels(p, minX: minX)
+    XCTAssertGreaterThan(levels.pixels, 0, "the map shows aggregate hatch")
+    func hatch(_ x: Int, _ y: Int) -> Bool {
+      let c = p.rgb(x, y)
+      return c.max()! - c.min()! <= 8
+        && (abs(c[1] - levels.light) <= 3 || abs(c[1] - levels.dark) <= 3)
+    }
+    let top = p.y(app.windows.firstMatch.frame.minY + 120)
+    for y in stride(from: top, to: p.image.pixelsHigh - 8, by: 2) {
+      for x in stride(from: max(0, p.x(minX)) + 8, to: p.image.pixelsWide - 8, by: 2)
+      where (-6...6).allSatisfy({ d in hatch(x + d, y) && hatch(x, y + d) }) {
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: .zero).withOffset(
+          CGVector(
+            dx: CGFloat(x) / p.scale + p.origin.x - window.frame.minX,
+            dy: CGFloat(y) / p.scale + p.origin.y - window.frame.minY)
+        ).click()
+        return
+      }
+    }
+    XCTFail("no hatch area to click")
+  }
   func testAppearanceVariantsRenderMapChromeAndSheets() {
     for appearance in Self.appearances {
       launch(appearance: appearance)
@@ -823,7 +879,7 @@ import XCTest
       let tile = app.buttons["map-file-large-file"]
       XCTAssertTrue(tile.waitForExistence(timeout: 8))
       tile.hover()
-      text("hover-name", contains: "large-file")
+      hovered("large-file")
       screenshot("\(appearance)-hover")
       for action in ["trash", "delete"] {
         prepare(action, target: "large-file")
@@ -895,8 +951,9 @@ import XCTest
       if appearance.hasSuffix("contrast") {
         XCTAssertGreaterThanOrEqual(ratio, 3.0, "\(appearance) seam")
       } else {
-        // The ordinary seam stays subtle.
-        XCTAssertLessThan(ratio, 2.0, "\(appearance) seam")
+        // The ordinary seam is the design's inset (x0.55); Increase Contrast is stronger.
+        XCTAssertGreaterThanOrEqual(ratio, 1.8, "\(appearance) seam")
+        XCTAssertLessThan(ratio, 3.0, "\(appearance) seam")
       }
       screenshot("seam-\(appearance)")
       app.terminate()
@@ -911,7 +968,7 @@ import XCTest
       let tile = app.buttons["map-file-large-file"]
       XCTAssertTrue(tile.waitForExistence(timeout: 8))
       tile.hover()
-      text("hover-name", contains: "large-file")
+      hovered("large-file")
       screenshot("hover-stroke-\(appearance)")
       let p = try windowPixels()
       // Backing pixels from the left and the top edge. With 2 points (4 backing pixels), the
@@ -1012,15 +1069,15 @@ import XCTest
       let largest = scenario == "presentation" ? "large-file" : "Interview raw.mov"
       XCTAssertTrue(app.buttons["map-file-\(largest)"].waitForExistence(timeout: 8))
       row(scenario == "presentation" ? "zero-byte" : "Documents").hover()
-      text("hover-name", contains: "Recorded disk usage")
+      hovered("none")
       screenshot("\(scenario)-\(appearance)")
       // The map view is not an accessibility element. Its padded area starts at the probe,
-      // right of the tree, and ends above the footer; 20 points inside that area is map.
+      // right of the tree, and ends above the status bar; 20 points inside that area is map.
       let left = app.outlines["entry-tree"].frame.maxX + 20
       let top = probe.frame.minY + 20
       let map = CGRect(
         x: left, y: top, width: app.windows.firstMatch.frame.maxX - 20 - left,
-        height: app.staticTexts["hover-name"].frame.minY - 20 - top)
+        height: statusBarTop() - 20 - top)
       let result = kindShares(try windowPixels(), map: map)
       let report = result.shares.sorted { $0.key < $1.key }
         .map { "\($0.key)=\(String(format: "%.3f", $0.value))" }.joined(separator: " ")
@@ -1141,7 +1198,12 @@ import XCTest
       let selection = try windowPixels()
       check("card caption", staticText("Recorded allocation"), selection)
       check("card path", app.staticTexts["selected-path"], selection)
-      check("footer note", staticText("Some map detail"), selection)
+      check("status path", app.staticTexts["status-path"], selection)
+      // The grouped-detail note moved from the footer to the card of a grouped block.
+      try clickHatch()
+      XCTAssertTrue(app.staticTexts["grouped-note"].waitForExistence(timeout: 8), appearance)
+      leaveMap()
+      check("card grouped note", app.staticTexts["grouped-note"], try windowPixels())
       screenshot("text-contrast-\(appearance)")
       app.terminate()
       launchStartScreen(storage: storage, appearance: appearance)
@@ -1152,5 +1214,461 @@ import XCTest
       screenshot("text-contrast-start-\(appearance)")
       app.terminate()
     }
+  }
+
+  // MARK: Dogfood feedback
+
+  /// The map area 12 points inside the padded map view: right of the tree, below the
+  /// appearance probe and above the status bar.
+  func mapArea() -> CGRect {
+    let probe = app.descendants(matching: .any)["map-appearance"]
+    let left = app.outlines["entry-tree"].frame.maxX + 12
+    let top = probe.frame.minY + 12
+    return CGRect(
+      x: left, y: top, width: app.windows.firstMatch.frame.maxX - 12 - left,
+      height: statusBarTop() - 12 - top)
+  }
+  /// Clicks a screen point in the window.
+  func click(_ point: CGPoint, double: Bool = false) {
+    let window = app.windows.firstMatch
+    let target = window.coordinate(withNormalizedOffset: .zero).withOffset(
+      CGVector(dx: point.x - window.frame.minX, dy: point.y - window.frame.minY))
+    if double { target.doubleClick() } else { target.click() }
+  }
+  /// The text of the status bar; empty when it shows nothing.
+  func statusPath() -> String {
+    let element = app.staticTexts["status-path"]
+    guard element.exists else { return "" }
+    return (element.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? element.label
+  }
+  /// Rust `MapAppearance::trash` band colors (plain, then striped) at 21 gradient positions.
+  static func trashBands(_ appearance: String) -> [[Double]] {
+    let base: [Double] =
+      appearance == "dark"
+      ? [68, 72, 78]
+      : appearance == "dark-contrast"
+        ? [132, 136, 142]
+        : [185, 190, 198]
+    let stripe: Double = appearance.hasPrefix("dark") ? 255 : 0
+    let alpha = appearance.hasSuffix("contrast") ? 0.30 : 0.09
+    var bands: [[Double]] = []
+    for step in 0...20 {
+      let t = Double(step) / 20
+      let (a, white) = (0.08 * (1 - t) + 0.12 * t, 255 * 0.08 * (1 - t))
+      let plain = base.map { $0 * (1 - a) + white }
+      bands.append(plain)
+      bands.append(plain.map { $0 * (1 - alpha) + stripe * alpha })
+    }
+    return bands
+  }
+  /// Map pixels within 4 sRGB levels of a Trash band color whose neighbors 3 pixels away also
+  /// match (thin seam lines of gray tiles do not), sampled every second pixel. Also returns
+  /// their bounding box in screen points and the mean plain and striped band colors.
+  func trashPixels(_ p: WindowPixels, map: CGRect, appearance: String) -> (
+    count: Int, deep: [CGPoint], plain: [Int], striped: [Int]
+  ) {
+    let bands = Self.trashBands(appearance).map { $0.map { Int($0.rounded()) } }
+    let low = bands.map { $0.min()! }.min()! - 4
+    let high = bands.map { $0.max()! }.max()! + 4
+    /// The band index within 4 levels, or nil.
+    func band(_ x: Int, _ y: Int) -> Int? {
+      let c = p.rgb(x, y)
+      guard c.min()! >= low, c.max()! <= high, c[2] >= c[0] else { return nil }
+      for (i, b) in bands.enumerated()
+      where abs(c[0] - b[0]) <= 4 && abs(c[1] - b[1]) <= 4 && abs(c[2] - b[2]) <= 4 {
+        return i
+      }
+      return nil
+    }
+    var (count, plain, striped) = (0, [0, 0, 0, 0], [0, 0, 0, 0])
+    var matched = Set<[Int]>()
+    for y in stride(from: p.y(map.minY) + 3, to: p.y(map.maxY) - 3, by: 2) {
+      for x in stride(from: p.x(map.minX) + 3, to: p.x(map.maxX) - 3, by: 2) {
+        guard let index = band(x, y), band(x - 3, y) != nil, band(x + 3, y) != nil,
+          band(x, y - 3) != nil, band(x, y + 3) != nil
+        else { continue }
+        count += 1
+        matched.insert([x, y])
+        let c = p.rgb(x, y)
+        if index % 2 == 0 {
+          plain = [plain[0] + c[0], plain[1] + c[1], plain[2] + c[2], plain[3] + 1]
+        } else {
+          striped = [striped[0] + c[0], striped[1] + c[1], striped[2] + c[2], striped[3] + 1]
+        }
+      }
+    }
+    let mean = { (s: [Int]) in s[3] > 0 ? (0..<3).map { s[$0] / s[3] } : [] }
+    // Deep points: every sampled pixel within 12 pixels also matches, so a click there lands
+    // inside the striped region and not on a gray tile that shares a band color.
+    let deep = matched.filter { m in
+      stride(from: -12, through: 12, by: 2).allSatisfy { dy in
+        stride(from: -12, through: 12, by: 2).allSatisfy { dx in
+          matched.contains([m[0] + dx, m[1] + dy])
+        }
+      }
+    }.sorted { ($0[1], $0[0]) < ($1[1], $1[0]) }.map {
+      CGPoint(x: CGFloat($0[0]) / p.scale + p.origin.x, y: CGFloat($0[1]) / p.scale + p.origin.y)
+    }
+    return (count, deep, mean(plain), mean(striped))
+  }
+  /// The root `.Trash` is one striped region with the design's TRASH fill that selects the
+  /// Trash directory. Focused, the Trash shows its files with type colors.
+  func testRootTrashShowsTrashStripesAndSelectsTheTrashUntilFocused() throws {
+    continueAfterFailure = true
+    for appearance in Self.appearances {
+      launch("prototype-home", appearance: appearance)
+      let probe = app.descendants(matching: .any)["map-appearance"]
+      XCTAssertTrue(probe.waitForExistence(timeout: 8))
+      offMap()
+      screenshot("trash-\(appearance)-home")
+      let trash = trashPixels(try windowPixels(srgb: true), map: mapArea(), appearance: appearance)
+      let ratio =
+        trash.plain.isEmpty || trash.striped.isEmpty
+        ? 0 : Self.contrast(trash.plain, trash.striped)
+      print(
+        "TRASH \(appearance) pixels=\(trash.count) deep=\(trash.deep.count) plain=\(trash.plain) striped=\(trash.striped) ratio=\(ratio)"
+      )
+      guard trash.count > 500, trash.deep.count > 20 else {
+        XCTFail("\(appearance): no Trash stripes on the home map")
+        app.terminate()
+        continue
+      }
+      XCTAssertGreaterThan(
+        ratio, appearance.hasSuffix("contrast") ? 1.4 : 1.1, "\(appearance): visible stripes")
+      // One hit region: every point selects the Trash directory, not a file inside it.
+      let deep = trash.deep
+      for point in [deep[0], deep[deep.count / 2], deep[deep.count - 1]] {
+        click(point)
+        text("selected-name", contains: ".Trash")
+        XCTAssertEqual(statusPath(), "/Users/ana/.Trash", appearance)
+      }
+      screenshot("trash-\(appearance)-selected")
+      click(deep[deep.count / 2], double: true)
+      text("focus-name", contains: ".Trash")
+      XCTAssertTrue(app.buttons["map-file-Old clip 01.mov"].waitForExistence(timeout: 8))
+      offMap()
+      let pixels = try windowPixels(srgb: true)
+      let inside = trashPixels(pixels, map: mapArea(), appearance: appearance)
+      let video = kindShares(pixels, map: mapArea()).shares["video"] ?? 0
+      print(
+        "TRASH \(appearance) focused pixels=\(inside.count) deep=\(inside.deep.count) video=\(video)"
+      )
+      XCTAssertEqual(inside.deep.count, 0, "\(appearance): focused Trash has no striped region")
+      XCTAssertGreaterThan(video, 0.3, "\(appearance): focused Trash shows video colors")
+      screenshot("trash-\(appearance)-focused")
+      app.terminate()
+    }
+  }
+  /// Contrast of the seam pixel against the next pixel inside the same tile on the left, top,
+  /// right and bottom edge, each the minimum over three points along the edge. The seam is the
+  /// first or second backing pixel inside the edge (the larger contrast counts), so the seam
+  /// of a neighbor outside the tile never counts.
+  func edgeContrasts(_ tile: CGRect, _ p: WindowPixels) -> [Double] {
+    func first(_ point: CGFloat, _ origin: CGFloat) -> Int {
+      Int(((point - origin) * p.scale - 0.5).rounded(.up))
+    }
+    let (x0, y0) = (first(tile.minX, p.origin.x), first(tile.minY, p.origin.y))
+    let (x1, y1) = (first(tile.maxX, p.origin.x), first(tile.maxY, p.origin.y))
+    var sides: [Double] = []
+    for side in 0..<4 {
+      var ratios: [Double] = []
+      for fraction in [0.25, 0.5, 0.75] {
+        let x = x0 + Int(Double(x1 - x0) * fraction)
+        let y = y0 + Int(Double(y1 - y0) * fraction)
+        let pairs: [((Int, Int), (Int, Int))] =
+          switch side {
+          case 0: [((x0, y), (x0 + 1, y)), ((x0 + 1, y), (x0 + 2, y))]
+          case 1: [((x, y0), (x, y0 + 1)), ((x, y0 + 1), (x, y0 + 2))]
+          case 2: [((x1 - 1, y), (x1 - 2, y)), ((x1 - 2, y), (x1 - 3, y))]
+          default: [((x, y1 - 1), (x, y1 - 2)), ((x, y1 - 2), (x, y1 - 3))]
+          }
+        ratios.append(
+          pairs.map { Self.contrast(p.rgb($0.0.0, $0.0.1), p.rgb($0.1.0, $0.1.1)) }.max()!)
+      }
+      sides.append(ratios.min()!)
+    }
+    return sides
+  }
+  /// Up to six of the largest file tiles with an accessibility target and a unique name,
+  /// each at least 40 points wide and high.
+  func largeTiles() -> [(name: String, frame: CGRect)] {
+    let targets = app.buttons.matching(
+      NSPredicate(format: "identifier BEGINSWITH %@", "map-file-"))
+    var seen: [String: Int] = [:]
+    var tiles: [(name: String, frame: CGRect)] = []
+    for i in 0..<targets.count {
+      let element = targets.element(boundBy: i)
+      let name = String(element.identifier.dropFirst("map-file-".count))
+      seen[name, default: 0] += 1
+      if element.frame.width >= 40, element.frame.height >= 40 {
+        tiles.append((name, element.frame))
+      }
+    }
+    return Array(
+      tiles.filter { seen[$0.name] == 1 }
+        .sorted { $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height }
+        .prefix(6))
+  }
+  /// Every tile has the design's seam on all four sides: one backing pixel at x0.55
+  /// (the 0.5-point inset at 45% black). Increase Contrast keeps at least 3:1 on each side.
+  func testMapTilesHaveTheDesignSeamOnAllFourSides() throws {
+    continueAfterFailure = true
+    for appearance in Self.appearances {
+      launch("prototype-home", appearance: appearance)
+      XCTAssertTrue(app.buttons["map-file-Interview raw.mov"].waitForExistence(timeout: 8))
+      offMap()
+      let p = try windowPixels()
+      var minimum = [Double](repeating: 99, count: 4)
+      var measured = 0
+      for (name, frame) in largeTiles() {
+        measured += 1
+        let sides = edgeContrasts(frame, p)
+        print("SEAMS \(appearance) \(name) left/top/right/bottom=\(sides)")
+        minimum = zip(minimum, sides).map { min($0, $1) }
+      }
+      XCTAssertGreaterThanOrEqual(measured, 3, appearance)
+      print("SEAMS \(appearance) minimum left/top/right/bottom=\(minimum)")
+      let floor = appearance.hasSuffix("contrast") ? 3.0 : 1.8
+      for (side, ratio) in zip(["left", "top", "right", "bottom"], minimum) {
+        XCTAssertGreaterThanOrEqual(ratio, floor, "\(appearance) \(side) seam")
+      }
+      screenshot("seams-\(appearance)")
+      app.terminate()
+    }
+  }
+  /// Dark prototype-home against the design: tile interiors equal the CSS gradient over the
+  /// kind color, and the seam darkens one backing pixel on each edge to 0.55 of the interior
+  /// (the design's inset on a 2x grid). The old top/left seam at 0.775 left the map brighter.
+  func testPrototypeHomeDarkMapMatchesTheDesignBrightness() throws {
+    launch("prototype-home", appearance: "dark")
+    XCTAssertTrue(app.buttons["map-file-Interview raw.mov"].waitForExistence(timeout: 8))
+    offMap()
+    let p = try windowPixels(srgb: true)
+    // Rust `type_color`: the prototype palette by extension.
+    let kinds: [String: [Double]] = [
+      "mov": [79, 138, 198], "mp4": [79, 138, 198], "heic": [81, 153, 98], "jpg": [81, 153, 98],
+      "png": [81, 153, 98], "m4a": [171, 109, 166], "wav": [171, 109, 166],
+      "zip": [173, 124, 47], "dmg": [173, 124, 47], "app": [133, 122, 196], "o": [0, 153, 160],
+      "swiftmodule": [0, 153, 160], "js": [0, 153, 160], "db": [190, 110, 82],
+      "cache": [190, 110, 82], "sqlite": [138, 140, 52], "bin": [138, 140, 52],
+    ]
+    var edgeRatios: [Double] = []
+    for (name, frame) in largeTiles() {
+      let base = kinds[String(name.split(separator: ".").last!)] ?? [127, 135, 147]
+      // The center sits at 0.5 along the 155-degree gradient: base plus 1.27% white.
+      let expected = base.map { $0 + (255 - $0) * 0.14 * (1 - 0.5 / 0.55) }
+      let center = p.mean(CGPoint(x: frame.midX, y: frame.midY))
+      print(
+        "BRIGHTNESS \(name) center=\(center.map { Int($0.rounded()) }) expected=\(expected.map { Int($0.rounded()) })"
+      )
+      for c in 0..<3 { XCTAssertEqual(center[c], expected[c], accuracy: 3, "\(name) interior") }
+      let f = frame
+      let (x0, y0) = (
+        Int(((f.minX - p.origin.x) * p.scale - 0.5).rounded(.up)),
+        Int(((f.minY - p.origin.y) * p.scale - 0.5).rounded(.up))
+      )
+      let (x1, y1) = (
+        Int(((f.maxX - p.origin.x) * p.scale - 0.5).rounded(.up)),
+        Int(((f.maxY - p.origin.y) * p.scale - 0.5).rounded(.up))
+      )
+      let (mx, my) = ((x0 + x1) / 2, (y0 + y1) / 2)
+      for (edge, inside) in [
+        ((x0, my), (x0 + 1, my)), ((mx, y0), (mx, y0 + 1)), ((x1 - 1, my), (x1 - 2, my)),
+        ((mx, y1 - 1), (mx, y1 - 2)),
+      ] {
+        let (e, i) = (p.rgb(edge.0, edge.1), p.rgb(inside.0, inside.1))
+        edgeRatios.append(Double(e.reduce(0, +)) / Double(max(1, i.reduce(0, +))))
+      }
+    }
+    let mean = edgeRatios.reduce(0, +) / Double(max(1, edgeRatios.count))
+    var whole = [0.0, 0, 0]
+    var count = 0.0
+    let map = mapArea()
+    for y in stride(from: p.y(map.minY), to: p.y(map.maxY), by: 2) {
+      for x in stride(from: p.x(map.minX), to: p.x(map.maxX), by: 2) {
+        for (c, v) in p.rgb(x, y).enumerated() { whole[c] += Double(v) }
+        count += 1
+      }
+    }
+    print(
+      "BRIGHTNESS edge/interior mean=\(mean) over \(edgeRatios.count) edges; whole map mean sRGB=\(whole.map { ($0 / count * 10).rounded() / 10 })"
+    )
+    XCTAssertGreaterThanOrEqual(edgeRatios.count, 12)
+    XCTAssertEqual(mean, 0.55, accuracy: 0.04, "design seam on every edge")
+    screenshot("brightness-dark")
+  }
+  /// The selection dims the rest of the map by 12% black (the design uses 28%). Every
+  /// unselected seam stays visible, and the selected block keeps its white ring.
+  func testSelectionDimIsLightAndKeepsUnselectedSeamsVisible() throws {
+    continueAfterFailure = true
+    for appearance in ["dark", "light"] {
+      launch("prototype-home", appearance: appearance)
+      XCTAssertTrue(app.buttons["map-file-Interview raw.mov"].waitForExistence(timeout: 8))
+      let tiles = largeTiles()
+      guard tiles.count >= 3 else {
+        XCTFail("\(appearance): large tiles \(tiles.map(\.name))")
+        app.terminate()
+        continue
+      }
+      let (selected, others) = (tiles[0], tiles.dropFirst())
+      offMap()
+      let before = try windowPixels(srgb: true)
+      app.buttons["map-file-\(selected.name)"].click()
+      text("selected-name", contains: selected.name)
+      offMap()
+      let after = try windowPixels(srgb: true)
+      var factors: [Double] = []
+      var (seamsBefore, seamsAfter) = (99.0, 99.0)
+      for other in others {
+        let point = CGPoint(x: other.frame.midX, y: other.frame.midY)
+        let (a, b) = (after.mean(point), before.mean(point))
+        factors.append((0..<3).map { a[$0] / b[$0] }.reduce(0, +) / 3)
+        seamsBefore = min(seamsBefore, edgeContrasts(other.frame, before).min()!)
+        seamsAfter = min(seamsAfter, edgeContrasts(other.frame, after).min()!)
+      }
+      let dim = factors.reduce(0, +) / Double(factors.count)
+      // The ring: 2 points of white centered 1.5 points inside the selected block's edge.
+      let ring = after.mean(CGPoint(x: selected.frame.midX, y: selected.frame.minY + 1.5))
+      print(
+        "DIM \(appearance) factor=\(dim) per-tile=\(factors) seam-minimum-before=\(seamsBefore) seam-minimum-after=\(seamsAfter) ring=\(ring)"
+      )
+      XCTAssertEqual(dim, 0.88, accuracy: 0.03, "\(appearance): 12% dim")
+      XCTAssertGreaterThanOrEqual(seamsAfter, 1.8, "\(appearance): unselected seams stay visible")
+      XCTAssertGreaterThan(ring.min()!, 235, "\(appearance): white selection ring")
+      screenshot("selection-dim-\(appearance)")
+      app.terminate()
+    }
+  }
+  /// Esc clears a tree or map selection: no card, no tree highlight, no dim, no status path.
+  /// An open confirmation keeps its own Esc (Cancel) and the selection.
+  func testEscapeClearsTheSelectionInTreeAndMap() throws {
+    launch()
+    let tile = app.buttons["map-file-large-file"]
+    XCTAssertTrue(tile.waitForExistence(timeout: 8))
+    offMap()
+    let clear = try windowPixels()
+    let probe = CGPoint(x: tile.frame.minX - 30, y: tile.frame.midY)
+    row("large-file").click()
+    text("selected-name", contains: "large-file")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    XCTAssertTrue(app.buttons["selected-name"].waitForNonExistence(timeout: 8), "tree Esc")
+    XCTAssertTrue(staticText("Nothing selected").exists)
+    XCTAssertEqual(statusPath(), "")
+    XCTAssertFalse(row("large-file").isSelected)
+    offMap()
+    let after = try windowPixels()
+    XCTAssertEqual(after.mean(probe), clear.mean(probe), "no dim after Esc")
+    screenshot("esc-after-tree")
+    tile.click()
+    text("selected-name", contains: "large-file")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    XCTAssertTrue(app.buttons["selected-name"].waitForNonExistence(timeout: 8), "map Esc")
+    // A confirmation sheet owns Esc: it cancels and the selection stays.
+    prepare("delete", target: "large-file")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
+    text("selected-name", contains: "large-file")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    XCTAssertTrue(app.buttons["selected-name"].waitForNonExistence(timeout: 8))
+    XCTAssertTrue(row("large-file").exists)
+    screenshot("esc-after-map")
+  }
+  /// The status bar shows only the complete path of the selected item. Hover text, the old
+  /// default text and outcomes are gone from it; outcomes use the banner over the map.
+  func testStatusBarShowsOnlyTheSelectedItemPath() throws {
+    launch()
+    let tile = app.buttons["map-file-large-file"]
+    XCTAssertTrue(tile.waitForExistence(timeout: 8))
+    XCTAssertEqual(statusPath(), "")
+    XCTAssertEqual(
+      app.staticTexts.matching(
+        NSPredicate(
+          format: "value CONTAINS %@ OR label CONTAINS %@", "Recorded disk usage",
+          "Recorded disk usage")
+      ).count, 0)
+    tile.hover()
+    hovered("large-file")
+    XCTAssertEqual(statusPath(), "", "no hover text")
+    row("large-file").click()
+    text("status-path", contains: "/Workspace/large-file")
+    XCTAssertEqual(statusPath(), "/Workspace/large-file")
+    XCTAssertGreaterThanOrEqual(app.staticTexts["status-path"].frame.minY, statusBarTop() - 1)
+    screenshot("status-bar-selected")
+    // Deletion keeps the less-space warning in its confirmation.
+    prepare("delete", target: "zero-byte")
+    text("confirmation-warning", contains: "Deleting may free less space than shown.")
+    app.buttons["cancel-action"].click()
+    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
+    prepare("trash", target: "large-file")
+    text("confirmation-warning", contains: "Trash may not free space until emptied.")
+    app.buttons["confirm-action"].click()
+    text("outcome", contains: "Moved to Trash")
+    let outcome = app.staticTexts["outcome"]
+    XCTAssertLessThan(outcome.frame.maxY, statusBarTop(), "the outcome is over the map")
+    XCTAssertGreaterThan(outcome.frame.minX, app.outlines["entry-tree"].frame.maxX)
+    XCTAssertFalse(statusPath().contains("Moved"))
+    screenshot("status-bar-outcome-banner")
+    app.buttons["dismiss-banner"].click()
+    XCTAssertTrue(outcome.waitForNonExistence(timeout: 8))
+    screenshot("status-bar-after-dismiss")
+  }
+  /// Refresh shows the scan's progress with the folder name, a live counter and Stop. Stop
+  /// keeps the previous data and says so; a complete refresh applies the live change.
+  func testRefreshShowsNamedProgressWithCounterAndStopKeepsData() throws {
+    launch("prototype-home-refresh")
+    row("Library").doubleClick()
+    text("focus-name", contains: "Library")
+    let total = app.staticTexts["scope-total"].value as? String
+    app.buttons["refresh"].click()
+    text("scan-phase", contains: "Refreshing “Library”…")
+    let items = app.staticTexts["scan-items"]
+    XCTAssertTrue(items.waitForExistence(timeout: 8))
+    let first = (items.value as? String) ?? items.label
+    Thread.sleep(forTimeInterval: 1.2)
+    let second = (items.value as? String) ?? items.label
+    print("REFRESH counter \(first) -> \(second)")
+    XCTAssertNotEqual(first, second, "the counter is live")
+    XCTAssertTrue(app.buttons["stop-scan"].isEnabled)
+    screenshot("refresh-progress")
+    app.buttons["stop-scan"].click()
+    text("outcome", contains: "Refresh of “Library” stopped. The previous data is unchanged.")
+    XCTAssertTrue(app.staticTexts["scan-phase"].waitForNonExistence(timeout: 8))
+    XCTAssertEqual(app.staticTexts["scope-total"].value as? String, total)
+    disclosure("Caches").click()
+    XCTAssertTrue(row("cache 01.db").waitForExistence(timeout: 8))
+    XCTAssertFalse(row("new cache.db").exists)
+    screenshot("refresh-stopped")
+    app.buttons["refresh"].click()
+    text(
+      "outcome", contains: "Refreshed “Library” in memory. Saved snapshot unchanged.", timeout: 20)
+    XCTAssertNotEqual(app.staticTexts["scope-total"].value as? String, total)
+    disclosure("Caches").click()
+    XCTAssertTrue(row("new cache.db").waitForExistence(timeout: 8))
+    screenshot("refresh-complete")
+  }
+  /// Frame sampling across repeated map clicks: the fixture-only `map-selection-gaps` probe
+  /// records every drawn map frame. No frame may lose the selection dim between the old
+  /// selection and the new one (the click flicker).
+  func testRepeatedMapClicksNeverDrawAFrameWithoutTheSelectionDim() throws {
+    launch("prototype-home", appearance: "dark")
+    let tiles = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "map-file-"))
+    XCTAssertTrue(tiles.firstMatch.waitForExistence(timeout: 8))
+    let probe = app.descendants(matching: .any)["map-selection-gaps"]
+    XCTAssertTrue(probe.waitForExistence(timeout: 8), "frame sampler")
+    let count = tiles.count
+    for i in 0..<40 {
+      tiles.element(boundBy: (i * 7) % count).click()
+      Thread.sleep(forTimeInterval: 0.15)
+    }
+    Thread.sleep(forTimeInterval: 0.5)
+    let values = Dictionary(
+      uniqueKeysWithValues: probe.label.split(separator: " ").compactMap { part in
+        let pair = part.split(separator: "=")
+        return pair.count == 2 ? (String(pair[0]), Int(pair[1]) ?? -1) : nil
+      })
+    print("FLICKER \(probe.label)")
+    XCTAssertGreaterThanOrEqual(values["selections"] ?? 0, 30)
+    XCTAssertEqual(values["gaps"], 0, "frames drawn without the selection dim")
+    screenshot("flicker-after-clicks")
   }
 }

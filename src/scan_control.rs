@@ -171,10 +171,15 @@ impl ScanControl {
     /// The CAS arbitrates Stop against the namespace operation. Once won, Stop
     /// is disabled even while that syscall is in flight; failure is not cancellation.
     pub(crate) fn commit(&self) -> io::Result<()> {
+        self.commit_from(ScanPhase::Saving)
+    }
+    /// The same arbitration from another cancellable phase. A refresh commits from
+    /// Scanning, before it applies its live read to the in-memory inventory.
+    pub(crate) fn commit_from(&self, phase: ScanPhase) -> io::Result<()> {
         self.check()?;
         self.phase
             .compare_exchange(
-                ScanPhase::Saving as u8,
+                phase as u8,
                 ScanPhase::Committing as u8,
                 Ordering::AcqRel,
                 Ordering::Acquire,

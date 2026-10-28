@@ -338,6 +338,31 @@ impl ExplorerSession {
             Ok(dispatch!(b, s => s.refresh_directory(h))?.into())
         })
     }
+    /// Refresh with the scan's progress and Stop. `BridgeError.Cancelled` means Stop won
+    /// before the update: the inventory and every view query stay valid and unchanged.
+    pub fn refresh_directory_controlled(
+        &self,
+        key: Arc<EntryKey>,
+        control: Arc<ScanControl>,
+    ) -> Result<UpdateRecord, BridgeError> {
+        self.with(|b| {
+            let h = match b.validate(&key) {
+                Ok(h) => h,
+                Err(error) => {
+                    control.begin()?;
+                    control.set(ScanPhase::Failed);
+                    return Err(error);
+                }
+            };
+            // The session lock is held for the whole call, so no query can observe the
+            // update before this revision change. A stopped or failed refresh changes no
+            // data, so the old frames, trees and hits stay valid.
+            let report = dispatch!(b, s => s.refresh_directory_controlled(h, &control))?;
+            self.revision.fetch_add(1, Ordering::AcqRel);
+            control.set(ScanPhase::Complete);
+            Ok(report.into())
+        })
+    }
 }
 fn confirmation_details<P>(c: &Confirmation<P>, action: ActionKind) -> ConfirmationDetails {
     ConfirmationDetails {

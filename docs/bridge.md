@@ -52,7 +52,8 @@ save/refresh is exposed. Open pins the snapshot without validating its source.
 
 `ExplorerSession` methods are `status()`, `children(parent:offset:limit:)`,
 `selection(key:)`, `layout(focus:request:)`, `liveMetadata(key:)`,
-`prepare(key:action:)`, `execute(action:)`, `refreshDirectory(key:)` (all throwing),
+`prepare(key:action:)`, `execute(action:)`, `refreshDirectory(key:)`,
+`refreshDirectoryControlled(key:control:)` (all throwing),
 and nonthrowing `isBusy()`, `activeCallCount()`, `selectionQueryCount()`. Records are defined in
 [records.rs](../src/bridge/records.rs). Byte arrays generate **Data**, u64 generates
 **UInt64**, and raw paths remain authoritative; display names alone are lossy.
@@ -125,6 +126,7 @@ Discover entries through bounded queries: `small-files/small-00` through
 | `presentation` | Balanced 4096-byte large file and 128 small children for native UI pagination |
 | `metadata-delay` | Presentation inventory; only large-file MemoryFileSystem metadata sleeps one second |
 | `prototype-home` | The design prototype's 236.9 GB home `/Users/ana`: its names (`CoreSimulator` is `CoreDevice`), hierarchy, sizes and extensions; directories own zero bytes |
+| `prototype-home-refresh` | `prototype-home`; each directory metadata request sleeps 300 ms and `Library/Caches/new cache.db` (2 GB) exists only live |
 | `visual-details` | Isolated nested groups and a long directory path; entry-only metadata differs from subtree bytes |
 | `ordinary`, `trash-outside` | Trash moves to `/.Trash/moved` |
 | `trash-inside` | Moves to `trash/moved` within scope |

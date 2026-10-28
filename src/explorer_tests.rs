@@ -942,7 +942,7 @@ fn diagram_flat_gradient_has_no_ancestor_ridges_and_aggregates_are_hatched() {
     assert_eq!(a.stats.surface_payload_bytes, 0);
     assert_eq!(b.stats.surface_payload_bytes, 0);
     let pixel = |x: usize, y: usize| &a.rgba()[(y * 101 + x) * 4..(y * 101 + x) * 4 + 3];
-    // Real raster, not just the color helper: only the first edge is darkened;
+    // Real raster, not just the color helper: the four edges are darkened;
     // the interior is a restrained monotonic 155-degree gradient, not a cushion.
     for y in 2..79 {
         for x in 2..99 {
@@ -952,6 +952,21 @@ fn diagram_flat_gradient_has_no_ancestor_ridges_and_aggregates_are_hatched() {
     }
     assert_eq!(pixel(1, 1), [105, 167, 119]);
     assert_eq!(pixel(99, 79), [69, 129, 83]);
+    // The design's 0.5-point inset at 45% black: one backing pixel at x0.55 on every edge.
+    for (edge, inside) in [
+        ((50, 0), (50, 1)),
+        ((0, 40), (1, 40)),
+        ((100, 40), (99, 40)),
+        ((50, 80), (50, 79)),
+    ] {
+        let (e, i) = (pixel(edge.0, edge.1), pixel(inside.0, inside.1));
+        for c in 0..3 {
+            assert!(
+                (e[c] as f64 - i[c] as f64 * 0.55).abs() <= 1.5,
+                "edge {edge:?}: {e:?} vs {i:?}"
+            );
+        }
+    }
     let aggregate = explorer(tree());
     let f = aggregate
         .diagram(aggregate.root_handle(), 8, 8, MapAppearance::Dark)
@@ -1041,11 +1056,19 @@ fn diagram_appearance_changes_only_hatch_and_seam_colors() {
                 let y0 = (tile.y - 0.5).ceil().max(0.0) as u32;
                 let x1 = ((tile.x + tile.width - 0.5).ceil() as u32).min(width);
                 let y1 = ((tile.y + tile.height - 0.5).ceil() as u32).min(height);
-                let seam = x1 - x0 > 3 && y1 - y0 > 3 && (x == x0 || y == y0);
-                let interior = (
-                    if x == x0 { x + 1 } else { x },
-                    if y == y0 { y + 1 } else { y },
-                );
+                let seam = x1 - x0 > 3
+                    && y1 - y0 > 3
+                    && (x == x0 || y == y0 || x + 1 == x1 || y + 1 == y1);
+                let step = |v: u32, low: u32, high: u32| {
+                    if v == low {
+                        v + 1
+                    } else if v + 1 == high {
+                        v - 1
+                    } else {
+                        v
+                    }
+                };
+                let interior = (step(x, x0, x1), step(y, y0, y1));
                 let next = (interior.1 * width + interior.0) as usize * 4;
                 for (appearance, frame) in &all {
                     let pixel = &frame.rgba()[at..at + 4];
@@ -1064,13 +1087,13 @@ fn diagram_appearance_changes_only_hatch_and_seam_colors() {
                         assert_eq!(pixel, &dark.rgba()[at..at + 4], "{appearance:?} interior");
                     } else {
                         // Light keeps the dark seam. Increase Contrast scales the same
-                        // gradient value by its own factor instead of 0.775.
-                        let ratio = appearance.seam_factor() / 0.775;
+                        // gradient value by its own factor instead of 0.55.
+                        let ratio = appearance.seam_factor() / 0.55;
                         for (&value, &old) in pixel[..3].iter().zip(&dark.rgba()[at..at + 3]) {
                             assert!((value as f64 - old as f64 * ratio).abs() <= 1.0);
                         }
                         let inside = &frame.rgba()[next..next + 3];
-                        if appearance.seam_factor() < 0.775 {
+                        if appearance.seam_factor() < 0.55 {
                             minimum = minimum.min(contrast(&pixel[..3], inside));
                             seams += 1;
                         }
@@ -1079,9 +1102,122 @@ fn diagram_appearance_changes_only_hatch_and_seam_colors() {
             }
         }
     }
-    assert_eq!(MapAppearance::Light.seam_factor(), 0.775);
-    assert_eq!(MapAppearance::Dark.seam_factor(), 0.775);
+    assert_eq!(MapAppearance::Light.seam_factor(), 0.55);
+    assert_eq!(MapAppearance::Dark.seam_factor(), 0.55);
     assert!(hatched > 0 && seams > 1_000);
     println!("Increase Contrast seam minimum contrast {minimum:.3}:1 over {seams} seam pixels");
     assert!(minimum >= 3.0, "seam contrast {minimum}");
+}
+
+#[test]
+fn diagram_paints_root_trash_whole_with_trash_stripes_until_focused() {
+    let mut map = tree();
+    map.nodes[0].raw = 0;
+    let trash = add(&mut map, 0, b".Trash", Kind::Dir, 0);
+    let clip = add(&mut map, trash, b"old clip.mov", Kind::File, 3_000);
+    add(&mut map, trash, b"old.pdf", Kind::File, 1_000);
+    let movies = add(&mut map, 0, b"Movies", Kind::Dir, 0);
+    add(&mut map, movies, b"new.mov", Kind::File, 6_000);
+    // Only a direct child of the inventory root is the Trash.
+    let nested = add(&mut map, movies, b".Trash", Kind::Dir, 0);
+    let kept = add(&mut map, nested, b"kept.mov", Kind::File, 2_000);
+    let e = explorer(map);
+    let (width, height) = (240u32, 160u32);
+    for appearance in [
+        MapAppearance::Light,
+        MapAppearance::Dark,
+        MapAppearance::LightIncreasedContrast,
+        MapAppearance::DarkIncreasedContrast,
+    ] {
+        let d = e
+            .diagram(e.root_handle(), width, height, appearance)
+            .unwrap();
+        // Bounded work: the root Trash is one tile; its children are never read or drawn.
+        assert!(d.layout.groups.iter().all(|g| g.directory.index() != trash));
+        assert!(d.layout.tiles.iter().all(|t| !matches!(
+            t.kind,
+            TileKind::Entry(k) if e.map.nodes[k.index() as usize].parent == trash
+        )));
+        assert_eq!(d.stats.aggregate_pixels, 0, "the Trash is not an aggregate");
+        let region = d.region(e.handle(trash)).unwrap();
+        let fill = appearance.trash();
+        let (mut striped, mut plain, mut kept_pixels) = (0, 0, 0);
+        let mut seam_minimum = f64::MAX;
+        for y in 0..height {
+            for x in 0..width {
+                let hit = d.hit(x, y).unwrap();
+                let at = (y * width + x) as usize * 4;
+                let pixel = &d.rgba()[at..at + 3];
+                if hit.key.index() == kept {
+                    kept_pixels += 1;
+                }
+                if hit.key.index() != trash {
+                    continue;
+                }
+                assert!(hit.actionable, "one hit region that selects the Trash");
+                assert_eq!(hit.rect, region);
+                let x0 = (region.x - 0.5).ceil() as u32;
+                let y0 = (region.y - 0.5).ceil() as u32;
+                let x1 = ((region.x + region.width - 0.5).ceil() as u32).min(width);
+                let y1 = ((region.y + region.height - 0.5).ceil() as u32).min(height);
+                let position = ((x as f64 + 0.5 - region.x) * 0.42261826174069944
+                    + (y as f64 + 0.5 - region.y) * 0.9063077870366499)
+                    / (region.width * 0.42261826174069944 + region.height * 0.9063077870366499);
+                let border = x == x0 || y == y0 || x + 1 == x1 || y + 1 == y1;
+                let diagonal = (x1 - x) as f64 + (y1 - y) as f64 - 1.0;
+                let seam = if border {
+                    appearance.seam_factor()
+                } else {
+                    1.0
+                };
+                assert_eq!(
+                    pixel,
+                    fill.color(position, diagonal, seam),
+                    "{appearance:?} {x},{y}"
+                );
+                if border && x > x0 + 1 && x + 2 < x1 && y == y0 {
+                    let inside = &d.rgba()[at + width as usize * 4..at + width as usize * 4 + 3];
+                    seam_minimum = seam_minimum.min(contrast(pixel, inside));
+                } else if !border {
+                    if fill.striped(diagonal) {
+                        striped += 1
+                    } else {
+                        plain += 1
+                    }
+                }
+            }
+        }
+        // Stripes cover 4 of every 9 points, so both bands are present in quantity.
+        assert!(
+            striped > 500 && plain > 500,
+            "{appearance:?} {striped} {plain}"
+        );
+        assert!(kept_pixels > 0, "a nested .Trash keeps type colors");
+        let band = |striped: bool| fill.color(0.5, if striped { 1.0 } else { 15.0 }, 1.0);
+        println!(
+            "TRASH {appearance:?} stripe/base {:.3}:1 seam minimum {seam_minimum:.3}:1",
+            contrast(&band(true), &band(false))
+        );
+        if matches!(
+            appearance,
+            MapAppearance::LightIncreasedContrast | MapAppearance::DarkIncreasedContrast
+        ) {
+            assert!(
+                seam_minimum >= 3.0,
+                "{appearance:?} Trash seam {seam_minimum}"
+            );
+        }
+        // Focused on the Trash, the normal map shows its files with type colors.
+        let inside = e
+            .diagram(e.handle(trash), width, height, appearance)
+            .unwrap();
+        let hit = inside.hit(width / 4, height / 2).unwrap();
+        assert!(hit.actionable && hit.key.index() == clip);
+        let at = ((height / 2) * width + width / 4) as usize * 4;
+        let pixel = &inside.rgba()[at..at + 3];
+        assert!(
+            pixel[2] > pixel[0] + 40,
+            "{appearance:?}: the clip keeps the video color, got {pixel:?}"
+        );
+    }
 }

@@ -64,7 +64,7 @@ bounded bitmap and one affected region. Only confirmed `removed`/`trashed` outco
 can produce a plan. Failures, partial removals and indeterminate outcomes retain
 honest diagnostics and any surviving selection, without a success ghost.
 Recovery retains the bounded row slice without its obsolete tree handle. Native callbacks reject input until the new view is ready.
-The model publishes the recovered selection, rows, and map together. A fixed-height scrollable footer prevents outcome text from resizing the map.
+The model publishes the recovered selection, rows, and map together. The outcome banner floats over the map, so outcome text never resizes it.
 A resize during recovery does not start its own view request. Recovery builds at the latest viewport.
 Actions and the Finder path stay unavailable until recovery validates or clears the old selection.
 An in-focus survivor gets a row slice around its row and a scroll request. An outside-focus survivor keeps only the summary selection.

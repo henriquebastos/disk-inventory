@@ -61,6 +61,18 @@ Cancellation returns `io::ErrorKind::Interrupted` containing typed `ScanCancelle
 not scan-error counters or `IncompleteSync`. The bridge maps only that typed error to
 `BridgeError.Cancelled`; other I/O errors retain their normal classifications.
 
+## Controlled refresh
+
+`OperationSession::refresh_directory_controlled` and the bridge
+`refresh_directory_controlled` reuse one control for an in-memory refresh of a directory.
+`items_examined` counts each directory metadata request and each directory record of the live
+read. Stop is checked before each request. `commit_from(Scanning)` is the same compare-exchange
+as `commit`, so a winning Stop applies nothing and ends Cancelled. After the commit the update
+completes; the core leaves Committed and the bridge Complete. A stopped refresh keeps the
+session revision, so existing frames and trees stay valid.
+"controlled_refresh_stop_keeps_views_and_completion_applies_live_changes" in
+[src/bridge/tests.rs](../src/bridge/tests.rs) checks both outcomes.
+
 ## Generated Swift seam
 
 ```swift

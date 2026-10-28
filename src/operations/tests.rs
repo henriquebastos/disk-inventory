@@ -1337,3 +1337,105 @@ fn conflicting_alias_baselines_keep_group_work_linear() {
         assert_consistent(&s);
     }
 }
+
+fn inventory_rows<F: FileSystem>(s: &OperationSession<F>) -> Vec<(Vec<u8>, u64, u64)> {
+    let mut rows = vec![];
+    let mut pending = vec![0u32];
+    while let Some(id) = pending.pop() {
+        let n = &s.explorer.map.nodes[id as usize];
+        rows.push((
+            s.explorer.map.relative_path(id as usize),
+            n.accounted,
+            n.subtree,
+        ));
+        pending.extend_from_slice(s.explorer.child_ids(id));
+    }
+    rows.sort();
+    rows
+}
+fn change_live_tree(fs: &mut MemoryFileSystem) {
+    fs.insert("/scope/a/new", meta(20, Kind::File, 70));
+    fs.insert("/scope/a/deeper", meta(21, Kind::Dir, 5));
+    fs.insert("/scope/a/deeper/inner", meta(22, Kind::File, 33));
+    fs.erase(Path::new("/scope/z/sibling"));
+}
+#[test]
+fn controlled_refresh_applies_the_same_update_and_counts_directory_records() {
+    let (mut plain, mut controlled) = (session(), session());
+    change_live_tree(&mut plain.filesystem);
+    change_live_tree(&mut controlled.filesystem);
+    let expected = plain.refresh_directory(handle(&plain, 0)).unwrap();
+    let control = ScanControl::default();
+    let report = controlled
+        .refresh_directory_controlled(handle(&controlled, 0), &control)
+        .unwrap();
+    assert_eq!(inventory_rows(&controlled), inventory_rows(&plain));
+    assert_eq!(report.issues, expected.issues);
+    assert_eq!(report.state, expected.state);
+    let progress = control.progress();
+    assert_eq!(progress.phase, ScanPhase::Committed);
+    assert!(!progress.cancellable);
+    // Four directory metadata requests (root, a, a/deeper, z) and six directory records
+    // (a, z; file, new, deeper; inner).
+    assert_eq!(progress.items_examined, 10);
+    assert!(!control.cancel(), "Stop after the commit point is rejected");
+    assert!(controlled.prefetched.is_none());
+    assert_consistent(&controlled);
+    // A reused control fails without starting a second refresh.
+    assert!(
+        controlled
+            .refresh_directory_controlled(handle(&controlled, 0), &control)
+            .is_err()
+    );
+    assert_eq!(control.progress().phase, ScanPhase::Committed);
+}
+#[test]
+fn stopped_controlled_refresh_leaves_the_inventory_unchanged() {
+    use std::sync::atomic::AtomicUsize;
+    let counted = Arc::new(AtomicUsize::new(0));
+    let control = ScanControl::default();
+    let count = counted.clone();
+    *control.hook.lock().unwrap() = Some(Box::new(move |_| {
+        count.fetch_add(1, Ordering::Relaxed);
+    }));
+    let mut s = session();
+    change_live_tree(&mut s.filesystem);
+    s.refresh_directory_controlled(handle(&s, 0), &control)
+        .unwrap();
+    let checks = counted.load(Ordering::Relaxed);
+    assert!(
+        checks >= 8,
+        "Stop is checked during the whole read, got {checks}"
+    );
+    // Stop at every check point: before the read, between directories, and at the commit.
+    for stop_at in 1..=checks {
+        let mut s = session();
+        change_live_tree(&mut s.filesystem);
+        let (before, state) = (inventory_rows(&s), s.state());
+        let control = ScanControl::default();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let hook_seen = seen.clone();
+        *control.hook.lock().unwrap() = Some(Box::new(move |c| {
+            if hook_seen.fetch_add(1, Ordering::Relaxed) + 1 == stop_at {
+                c.cancel();
+            }
+        }));
+        let error = s
+            .refresh_directory_controlled(handle(&s, 0), &control)
+            .unwrap_err();
+        assert!(
+            error
+                .get_ref()
+                .is_some_and(|e| e.is::<crate::scan_control::ScanCancelled>()),
+            "stop at {stop_at}: {error}"
+        );
+        assert_eq!(control.progress().phase, ScanPhase::Cancelled);
+        assert_eq!(inventory_rows(&s), before, "stop at {stop_at}");
+        assert_eq!(s.state(), state);
+        assert!(s.prefetched.is_none());
+        // The session stays usable: a later refresh applies the change.
+        s.refresh_directory(handle(&s, 0)).unwrap();
+        assert_ne!(inventory_rows(&s), before);
+        assert_consistent(&s);
+    }
+}

@@ -30,6 +30,9 @@ disables Reveal in Finder, because fixtures have no Finder URL.
 | Navigate | Open Selected Directory | Command-Down |
 | Navigate | Enclosing Directory | Command-Up |
 
+Stop Scan also stops a running Refresh Directory. Esc clears the selection; its rules are in
+[native-status.md](native-status.md).
+
 Reopen names the last folder. `title(in:)` gives the menu bar, the start screen and the
 header menu the same label. [native-lifecycle.md](native-lifecycle.md) gives the name
 rule. There is no command to open a snapshot file. Dividers separate the open, scan

@@ -107,6 +107,7 @@ fn timed(s: OperationSession<MemoryFileSystem>) -> OperationSession<TimedMemory>
         survivor_groups: s.survivor_groups,
         sort: s.sort,
         issues: s.issues,
+        prefetched: s.prefetched,
     }
 }
 fn measure<R>(

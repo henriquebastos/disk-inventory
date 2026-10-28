@@ -345,6 +345,46 @@ struct ContentsTree: NSViewRepresentable {
   }
 }
 
+/// Fixture-only frame sampler for UI acceptance. It records every drawn map frame and counts
+/// a gap when a frame shows no selection dim between a frame with the dim and a frame with
+/// the dim for the same newly selected item: the click flicker. Its accessibility label is
+/// "gaps=G selections=S draws=D".
+@MainActor final class SelectionDrawProbe: NSAccessibilityElement {
+  private(set) var gaps = 0
+  private(set) var selections = 0
+  private(set) var draws = 0
+  private var lastShown = false
+  private var lastSelected: EntryKey?
+  private var pendingGap: EntryKey?
+  override init() {
+    super.init()
+    setAccessibilityElement(true)
+    setAccessibilityRole(.staticText)
+    setAccessibilityIdentifier("map-selection-gaps")
+    setAccessibilityLabel("gaps=0 selections=0 draws=0")
+  }
+  func record(selected: EntryKey?, shown: Bool) {
+    draws += 1
+    let same = { (a: EntryKey?, b: EntryKey?) in
+      a.map { a in b.map { a.sameEntry(other: $0) } ?? false } ?? (b == nil)
+    }
+    if let selected, !same(selected, lastSelected) { selections += 1 }
+    if !same(selected, pendingGap) { pendingGap = nil }
+    if !shown, lastShown, selected != nil {
+      pendingGap = selected
+    } else if shown, pendingGap != nil {
+      gaps += 1
+      pendingGap = nil
+    }
+    lastShown = shown
+    lastSelected = selected
+    publish()
+  }
+  private func publish() {
+    setAccessibilityLabel("gaps=\(gaps) selections=\(selections) draws=\(draws)")
+  }
+}
+
 struct DiagramView: NSViewRepresentable {
   let model: ExplorerModel
   func makeNSView(context: Context) -> MapView { MapView() }
@@ -366,6 +406,11 @@ struct DiagramView: NSViewRepresentable {
     var area: NSTrackingArea?
     var drawCount = 0
     var lastDrawDuration: Duration = .zero
+    /// Black over the map outside the selection. The design uses 28%; at 12% every
+    /// unselected seam keeps at least 1.97:1 against its own tile (28%: 1.71:1).
+    static let selectionDim: CGFloat = 0.12
+    /// Fixture-only frame sampler; nil outside fixture mode.
+    var drawProbe: SelectionDrawProbe?
     override var isFlipped: Bool { true }
     override init(frame: NSRect) {
       super.init(frame: frame)
@@ -453,7 +498,7 @@ struct DiagramView: NSViewRepresentable {
         let shade = NSBezierPath(rect: bounds)
         shade.appendRect(rect(r))
         shade.windingRule = .evenOdd
-        NSColor.black.withAlphaComponent(0.28).setFill()
+        NSColor.black.withAlphaComponent(Self.selectionDim).setFill()
         shade.fill()
       }
       if let r = hoverRect, model?.motion.active != true {
@@ -480,6 +525,9 @@ struct DiagramView: NSViewRepresentable {
       }
       drawCount += 1
       lastDrawDuration = start.duration(to: .now)
+      drawProbe?.record(
+        selected: model?.selected?.key,
+        shown: selectionRect != nil && model?.motion.active != true)
     }
     func drawMotion(_ previous: DiagramPicture, plan: RemovalMotionPlan, fraction: Double) {
       let old = NSImage(
@@ -550,9 +598,18 @@ struct DiagramView: NSViewRepresentable {
       return commands.menu()
     }
     func updateTargets() {
+      if drawProbe == nil, model?.fixtureMode == true {
+        drawProbe = SelectionDrawProbe()
+        drawProbe?.setAccessibilityParent(self)
+      }
+      if let drawProbe, let window {
+        drawProbe.setAccessibilityFrame(
+          window.convertToScreen(convert(NSRect(x: 0, y: 0, width: 2, height: 2), to: nil)))
+      }
+      let probe: [NSAccessibilityElement] = drawProbe.map { [$0] } ?? []
       guard let model, let picture = model.picture, let window else {
         elements = []
-        setAccessibilityChildren([])
+        setAccessibilityChildren(probe)
         return
       }
       elements = picture.targets.map { hit in
@@ -576,7 +633,7 @@ struct DiagramView: NSViewRepresentable {
         e.setAccessibilityFrame(window.convertToScreen(convert(rect(hit.rect), to: nil)))
         return e
       }
-      setAccessibilityChildren(elements)
+      setAccessibilityChildren(elements + probe)
     }
     @MainActor final class Target: NSAccessibilityElement {
       let press: @MainActor @Sendable () -> Bool

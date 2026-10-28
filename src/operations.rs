@@ -8,6 +8,7 @@ use crate::{
     Kind,
     explorer::{EntryHandle, Explorer},
     invalid,
+    scan_control::{ScanControl, ScanPhase},
 };
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
@@ -198,6 +199,8 @@ pub struct OperationSession<F: FileSystem> {
     survivor_groups: HashSet<Identity>,
     sort: HashSet<u32>,
     issues: Vec<String>,
+    /// Live reads of a controlled refresh, present only while it applies them.
+    prefetched: Option<index::LiveSubtree>,
 }
 impl<F: FileSystem> OperationSession<F> {
     /// Builds the identity index once, without consulting any source path.
@@ -221,6 +224,7 @@ impl<F: FileSystem> OperationSession<F> {
             survivor_groups: HashSet::new(),
             sort: HashSet::new(),
             issues: Vec::new(),
+            prefetched: None,
         }
     }
     pub fn explorer(&self) -> &Explorer {
@@ -427,10 +431,42 @@ impl<F: FileSystem> OperationSession<F> {
     /// Recursively refresh only this directory. Failed enumerations retain old children.
     pub fn refresh_directory(&mut self, handle: EntryHandle) -> io::Result<UpdateReport> {
         let _busy = self.activity.begin();
+        let id = self.refresh_target_id(handle)?;
+        Ok(self.apply_refresh(id))
+    }
+    /// `refresh_directory` with progress and Stop. It reads the live subtree first and
+    /// counts each directory record in `items_examined`. Stop during that read returns
+    /// `ScanCancelled` and leaves the inventory unchanged. After the commit point the
+    /// in-memory update runs to completion from the read; Stop is then rejected.
+    pub fn refresh_directory_controlled(
+        &mut self,
+        handle: EntryHandle,
+        control: &ScanControl,
+    ) -> io::Result<UpdateReport> {
+        let _busy = self.activity.begin();
+        control.begin()?;
+        let result = (|| {
+            control.enter(ScanPhase::Scanning)?;
+            let id = self.refresh_target_id(handle)?;
+            let live = self.read_live_subtree(id, control)?;
+            control.commit_from(ScanPhase::Scanning)?;
+            self.prefetched = Some(live);
+            let report = self.apply_refresh(id);
+            self.prefetched = None;
+            control.published();
+            Ok(report)
+        })();
+        control.finish(&result);
+        result
+    }
+    fn refresh_target_id(&self, handle: EntryHandle) -> io::Result<u32> {
         let id = self.explorer.resolve(handle)?;
         if self.explorer.map.nodes[id as usize].kind != Kind::Dir {
             return Err(invalid("refresh requires a directory"));
         }
+        Ok(id)
+    }
+    fn apply_refresh(&mut self, id: u32) -> UpdateReport {
         self.begin();
         if let Err(e) = self.validate(&self.target(0)) {
             self.issue(e);
@@ -441,7 +477,7 @@ impl<F: FileSystem> OperationSession<F> {
                 self.refresh_own(parent);
             }
         }
-        Ok(self.finish())
+        self.finish()
     }
 }
 

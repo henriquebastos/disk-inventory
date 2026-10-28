@@ -65,6 +65,27 @@ impl FileObservation {
         }
     }
 }
+/// Live reads of one controlled refresh, made before its commit point. The in-memory update
+/// answers from them, so a Stop during the reads changes nothing. A request that the read did
+/// not make falls back to the filesystem, as an uncontrolled refresh does.
+#[derive(Default)]
+pub(super) struct LiveSubtree {
+    metadata: HashMap<PathBuf, Result<LiveMetadata, LiveError>>,
+    directories: HashMap<PathBuf, Result<Vec<DirectoryEntry>, LiveError>>,
+}
+/// An I/O error kept with its kind and message, so `refresh_target` sees the same error.
+#[derive(Clone)]
+pub(super) struct LiveError(io::ErrorKind, String);
+impl From<io::Error> for LiveError {
+    fn from(e: io::Error) -> Self {
+        Self(e.kind(), e.to_string())
+    }
+}
+impl From<LiveError> for io::Error {
+    fn from(e: LiveError) -> Self {
+        io::Error::new(e.0, e.1)
+    }
+}
 impl<F: FileSystem> OperationSession<F> {
     fn members(&mut self, key: Identity) -> Vec<u32> {
         self.identities.members(key, &self.explorer, &mut self.work)
@@ -361,6 +382,71 @@ impl<F: FileSystem> OperationSession<F> {
             && m.flags & crate::native::SF_FIRMLINK == 0
             && Some(m.identity) != self.filesystem.snapshot_identity()
     }
+    /// Reads the live subtree of a controlled refresh, as `refresh_target` will ask for it,
+    /// without changing the inventory. Stop is checked before every metadata request.
+    pub(super) fn read_live_subtree(
+        &mut self,
+        id: u32,
+        control: &ScanControl,
+    ) -> io::Result<LiveSubtree> {
+        let mut live = LiveSubtree::default();
+        let mut pending = vec![self.target(id).path];
+        let mut seen = HashSet::new();
+        while let Some(path) = pending.pop() {
+            control.check()?;
+            let m = self.filesystem.metadata(&path);
+            control.examined(1);
+            let directory = match &m {
+                Ok(m)
+                    if m.kind == Kind::Dir
+                        && self.eligible(&ScanMetadata::from(m))
+                        && seen.insert(m.identity) =>
+                {
+                    Some(Target {
+                        path: path.clone(),
+                        identity: m.identity,
+                        kind: m.kind,
+                    })
+                }
+                _ => None,
+            };
+            live.metadata
+                .insert(path.clone(), m.map_err(LiveError::from));
+            let Some(target) = directory else { continue };
+            control.check()?;
+            let entries = self.filesystem.read_directory(&target);
+            if let Ok(entries) = &entries {
+                control.examined(entries.len());
+                for e in entries {
+                    if e.metadata.kind == Kind::Dir
+                        && self.eligible(&e.metadata)
+                        && crate::valid_basename(&e.name)
+                    {
+                        pending.push(path.join(OsStr::from_bytes(&e.name)));
+                    }
+                }
+            }
+            live.directories
+                .insert(path, entries.map_err(LiveError::from));
+        }
+        Ok(live)
+    }
+    fn refresh_metadata(&mut self, path: &Path) -> io::Result<LiveMetadata> {
+        match self.prefetched.as_ref().and_then(|l| l.metadata.get(path)) {
+            Some(read) => read.clone().map_err(io::Error::from),
+            None => self.filesystem.metadata(path),
+        }
+    }
+    fn refresh_entries(&mut self, target: &Target) -> io::Result<Vec<DirectoryEntry>> {
+        match self
+            .prefetched
+            .as_mut()
+            .and_then(|l| l.directories.remove(&target.path))
+        {
+            Some(read) => read.map_err(io::Error::from),
+            None => self.filesystem.read_directory(target),
+        }
+    }
     pub(super) fn refresh_own(&mut self, id: u32) {
         match self.validate(&self.target(id)) {
             Ok(m) => self.set_metadata(id, &ScanMetadata::from(&m)),
@@ -372,7 +458,7 @@ impl<F: FileSystem> OperationSession<F> {
         let mut seen = HashSet::new();
         while let Some(id) = pending.pop() {
             let target = self.target(id);
-            let m = match self.filesystem.metadata(&target.path) {
+            let m = match self.refresh_metadata(&target.path) {
                 Ok(m) => ScanMetadata::from(&m),
                 Err(e) if e.kind() == io::ErrorKind::NotFound && id != 0 => {
                     self.remove_node(id);
@@ -417,7 +503,7 @@ impl<F: FileSystem> OperationSession<F> {
                 continue;
             }
             self.work.directories_read += 1;
-            let entries = match self.filesystem.read_directory(&target) {
+            let entries = match self.refresh_entries(&target) {
                 Ok(entries) => entries,
                 Err(e) => {
                     self.issue(e);

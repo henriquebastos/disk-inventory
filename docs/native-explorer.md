@@ -69,13 +69,11 @@ and shared entries remain reachable in the tree.
 
 The map displays an immutable Rust squarified, flat-gradient bitmap with stable saved-name
 extension colors. Placement, refinement, pixel ownership, bounds and tests are
-specified in [native-diagram.md](native-diagram.md). Hover identifies the pixel
-owner in a fixed-height footer independently of destructive selection. Click links
-selection between tree/map; no directory header covers file pixels. Unresolved
-aggregates explain grouped detail and offer directory navigation, never file removal.
-Unselected map regions are dimmed, with separate hover and selection outlines.
-Status and diagnostics sit below the map. It reports reduced/grouped detail instead
-of promising every file is visible.
+specified in [native-diagram.md](native-diagram.md). Click links selection between
+tree and map; no directory header covers file pixels. Unresolved aggregates explain grouped
+detail in the card and offer directory navigation, never file removal. The status bar,
+the outcome banner, the selection dim, Esc and refresh progress are specified in
+[native-status.md](native-status.md).
 
 There is no inspector pane. A compact card below the tree shows the selected
 name/path, recorded allocation (directory subtree or file accounted allocation),
@@ -85,6 +83,9 @@ Collapsing ancestors preserves the action target; clicking the card name reveals
 its row without zooming. Finder URLs use saved raw bytes, not the display string.
 Sharing or unknown-size caveats appear when needed. Storage uses decimal KB through EB and the system locale, with at most one decimal place.
 [NativeNumberFormat.swift](../native/Explorer/NativeNumberFormat.swift) reuses Foundation formatters and scales exact UInt64 values through Decimal.
+[NativeNumberFormatTests.swift](../native/ExplorerModelTests/NativeNumberFormatTests.swift):
+"testDecimalStorageUsesLocaleAndPreservesUnsignedRange" checks units, grouping, zero and UInt64.max in en_US and pt_BR.
+"testVisibleTreeSizeUsesInjectedLocaleWithoutChangingAccounting" checks size cells against exact counts.
 Counts use locale grouping. Confirmations omit sizes instead of implying reclaimable space. Partial,
 incomplete and changed indicators remain visible. Recorded usage is
 not guaranteed reclaimable space; detailed errors stay behind a disclosure.
@@ -108,11 +109,12 @@ separate native alert sheet. Its keys, pins and protections are specified in
 [native-commands.md](native-commands.md).
 
 Outcomes distinguish successful, failed, partial and indeterminate results, including
-inside/outside/unknown Trash scope. Issues remain in an expandable session log.
+inside/outside/unknown Trash scope, in the outcome banner. Issues remain in its session log.
 Only current views/status are requested after core reconciliation; the snapshot is
 not reopened, rescanned or rewritten. Invalid focus recovers to a known live ancestor. Successful removal uses bounded
 result motion; failed/partial/uncertain outcomes never animate whole-target success.
-Refresh Directory always refreshes the focused subtree in memory, not the selection.
+Refresh Directory always refreshes the focused subtree in memory, not the selection,
+with the scan's progress and Stop.
 
 ## 1d Executable evidence
 
@@ -141,7 +143,7 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
   assertions await asynchronous row publication, not just input delivery.
 - "testLongDirectoryPathAndSimpleConfirmationAtMinimumWindow": direct double-click
   from an unselected row, full long target and fixed controls at minimum window size.
-- "testLocalizedStorageInTreeSelectionFooterAndConfirmation": en_US and pt_BR storage presentation.
+- "testLocalizedStorageInTreeSelectionAndConfirmation": en_US and pt_BR storage presentation.
 - "testResultMotionStylesTravelPoofAndReduceMotionFade": asserts travel, poof and fade
   through the fixture-only `motion-style` probe. A probe pass does not verify rendered motion.
 

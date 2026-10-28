@@ -5,13 +5,16 @@ import Observation
   private(set) var progress: ScanProgress?
   private(set) var polling = false
   private(set) var samples = 0
+  /// The focused folder name while a refresh runs; nil for a scan of a new folder.
+  private(set) var refreshing: String?
   private var control: ScanControl?
   private var pollTask: Task<Void, Never>?
   private var version = 0
 
-  func begin(_ control: ScanControl) {
+  func begin(_ control: ScanControl, refreshing: String? = nil) {
     stopPolling(cancelScan: true)
     self.control = control
+    self.refreshing = refreshing
     progress = control.progress()
     polling = true
     let generation = version
@@ -37,9 +40,20 @@ import Observation
     polling = false
     control = nil
     progress = nil
+    refreshing = nil
   }
   var label: String {
     guard let progress else { return "Preparing view…" }
+    if let refreshing {
+      switch progress.phase {
+      case .ready, .scanning: return "Refreshing “\(refreshing)”…"
+      case .stopping: return "Stopping…"
+      case .cancelled: return "Refresh stopped"
+      case .failed, .publishedFailure: return "Refresh failed"
+      case .accounting, .saving, .committing, .committed, .preparingView, .complete:
+        return "Updating “\(refreshing)”…"
+      }
+    }
     switch progress.phase {
     case .ready, .scanning: return "Examining items…"
     case .accounting: return "Accounting for shared storage…"

@@ -37,8 +37,8 @@ pub struct DiagramHit {
     pub rect: Rect,
     pub bytes: u64,
 }
-/// System appearance of a raster. It changes only the aggregate hatch and the file seam;
-/// the type palette, the gradient, the geometry and the owners stay the same.
+/// System appearance of a raster. It changes only the aggregate hatch, the Trash fill and the
+/// tile seam; the type palette, the gradient, the geometry and the owners stay the same.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapAppearance {
     Light,
@@ -47,12 +47,33 @@ pub enum MapAppearance {
     DarkIncreasedContrast,
 }
 impl MapAppearance {
-    /// Multiplier for the top and left file seam. Increase Contrast keeps at least 3:1
-    /// against the next interior pixel of the same tile at every gradient position.
+    /// Multiplier for the one-pixel seam on all four edges of a file or Trash tile. 0.55 is
+    /// the design's `inset 0 0 0 0.5px rgba(0,0,0,.45)` on a 2x backing grid. Increase
+    /// Contrast keeps at least 3:1 against the next interior pixel of the same tile at every
+    /// gradient position.
     pub fn seam_factor(self) -> f64 {
         match self {
-            Self::Light | Self::Dark => 0.775,
+            Self::Light | Self::Dark => 0.55,
             Self::LightIncreasedContrast | Self::DarkIncreasedContrast => 0.33,
+        }
+    }
+    /// The design's TRASH fill for the root Trash. Dark uses the design values; light uses a
+    /// light base with black stripes. Increase Contrast uses 30% stripes. Its dark base is
+    /// lighter, because no dark seam reaches 3:1 against the design's dark base.
+    pub fn trash(self) -> TrashFill {
+        let (base, stripe) = match self {
+            Self::Dark => ([68, 72, 78], [255, 255, 255]),
+            Self::DarkIncreasedContrast => ([132, 136, 142], [255, 255, 255]),
+            Self::Light | Self::LightIncreasedContrast => ([185, 190, 198], [0, 0, 0]),
+        };
+        let stripe_alpha = match self {
+            Self::Light | Self::Dark => 0.09,
+            Self::LightIncreasedContrast | Self::DarkIncreasedContrast => 0.30,
+        };
+        TrashFill {
+            base,
+            stripe,
+            stripe_alpha,
         }
     }
     /// Two sRGB stripes of the aggregate hatch.
@@ -63,6 +84,43 @@ impl MapAppearance {
             Self::DarkIncreasedContrast => [[96, 96, 100], [28, 28, 30]],
             Self::LightIncreasedContrast => [[232, 232, 236], [150, 150, 156]],
         }
+    }
+}
+/// `repeating-linear-gradient(-45deg, STRIPE 0 4px, transparent 4px 9px)` over
+/// `linear-gradient(155deg, rgba(255,255,255,.08), rgba(0,0,0,.12))` over `base`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrashFill {
+    pub base: [u8; 3],
+    pub stripe: [u8; 3],
+    pub stripe_alpha: f64,
+}
+impl TrashFill {
+    /// `position` runs along the 155-degree gradient. `diagonal` is the backing-pixel sum
+    /// of the distances to the right and the bottom edge; the stripe widths assume a 2x
+    /// backing grid (4 and 9 points). A seam pixel (`seam` < 1) darkens the darker band, so
+    /// the seam line has no stripes and keeps its contrast against both bands.
+    pub fn color(self, position: f64, diagonal: f64, seam: f64) -> [u8; 3] {
+        let position = position.clamp(0.0, 1.0);
+        // Premultiplied interpolation between 8% white and 12% black.
+        let alpha = 0.08 * (1.0 - position) + 0.12 * position;
+        let white = 255.0 * 0.08 * (1.0 - position);
+        let striped = if seam < 1.0 {
+            self.stripe[0] < self.base[0]
+        } else {
+            self.striped(diagonal)
+        };
+        std::array::from_fn(|c| {
+            let mut value = self.base[c] as f64 * (1.0 - alpha) + white;
+            if striped {
+                value =
+                    value * (1.0 - self.stripe_alpha) + self.stripe[c] as f64 * self.stripe_alpha;
+            }
+            (value * seam).round() as u8
+        })
+    }
+    /// Stripes cover 4 of every 9 points along the -45-degree direction.
+    pub fn striped(self, diagonal: f64) -> bool {
+        (diagonal * std::f64::consts::FRAC_1_SQRT_2 / 2.0).rem_euclid(9.0) < 4.0
     }
 }
 impl Explorer {
@@ -80,7 +138,7 @@ impl Explorer {
             return Err(invalid("diagram requires 1..=4000000 pixels"));
         }
         let start = Instant::now();
-        let layout = self.layout_with_limits(
+        let layout = self.layout_with_trash(
             focus,
             LayoutOptions {
                 viewport: Rect {
@@ -96,6 +154,7 @@ impl Explorer {
             MAX_REGIONS,
             u32::MAX,
             true,
+            true,
         )?;
         let layout_micros = start.elapsed().as_micros() as u64;
         let start = Instant::now();
@@ -104,6 +163,7 @@ impl Explorer {
         let mut aggregate_pixels = 0;
         let seam = appearance.seam_factor();
         let [hatch_light, hatch_dark] = appearance.hatch();
+        let trash_fill = appearance.trash();
         for (i, tile) in layout.tiles.iter().enumerate() {
             let file = match tile.kind {
                 TileKind::Entry(key) if self.map.nodes[key.index() as usize].kind != Kind::Dir => {
@@ -111,6 +171,10 @@ impl Explorer {
                 }
                 _ => None,
             };
+            // The root Trash is one actionable region that selects the Trash directory.
+            let trash =
+                matches!(tile.kind, TileKind::Entry(key) if self.is_root_trash(key.index()));
+            let actionable = file.is_some() || trash;
             let color = file.map(|key| type_color(self.map.basename(key.index() as usize)));
             let r = tile.rect;
             // CSS 155deg direction, normalized by the rectangle's projected span.
@@ -119,17 +183,22 @@ impl Explorer {
             let y0 = (r.y - 0.5).ceil().max(0.0) as usize;
             let x1 = ((r.x + r.width - 0.5).ceil().max(0.0) as usize).min(width as usize);
             let y1 = ((r.y + r.height - 0.5).ceil().max(0.0) as usize).min(height as usize);
-            if file.is_none() {
+            if !actionable {
                 aggregate_pixels += (x1 - x0) * (y1 - y0);
             }
+            let seamed = x1 - x0 > 3 && y1 - y0 > 3;
             for y in y0..y1 {
                 for x in x0..x1 {
+                    let position = ((x as f64 + 0.5 - r.x) * GRADIENT_X
+                        + (y as f64 + 0.5 - r.y) * GRADIENT_Y)
+                        / gradient_span;
+                    let border = seamed && (x == x0 || y == y0 || x + 1 == x1 || y + 1 == y1);
+                    let edge = if border { seam } else { 1.0 };
                     let rgb = if let Some(color) = color {
-                        let position = ((x as f64 + 0.5 - r.x) * GRADIENT_X
-                            + (y as f64 + 0.5 - r.y) * GRADIENT_Y)
-                            / gradient_span;
-                        let border = x1 - x0 > 3 && y1 - y0 > 3 && (x == x0 || y == y0);
-                        gradient_color(color, position, if border { seam } else { 1.0 })
+                        gradient_color(color, position, edge)
+                    } else if trash {
+                        let diagonal = (x1 - x) as f64 + (y1 - y) as f64 - 1.0;
+                        trash_fill.color(position, diagonal, edge)
                     } else if (x + y) % 4 < 2 {
                         // Aggregates are visibly distinct and never become file action targets.
                         hatch_light
@@ -138,7 +207,7 @@ impl Explorer {
                     };
                     let at = y * width as usize + x;
                     debug_assert_eq!(owners[at], 0, "overlapping diagram pixels");
-                    owners[at] = (i + 1) as u32 | if file.is_none() { 1 << 31 } else { 0 };
+                    owners[at] = (i + 1) as u32 | if actionable { 0 } else { 1 << 31 };
                     rgba[at * 4..at * 4 + 3].copy_from_slice(&rgb);
                     rgba[at * 4 + 3] = 255;
                 }
@@ -172,8 +241,8 @@ impl Explorer {
 // Restrained top-left highlight to bottom-right shade, without inherited depth ridges.
 const GRADIENT_X: f64 = 0.42261826174069944; // sin(155deg)
 const GRADIENT_Y: f64 = 0.9063077870366499; // -cos(155deg)
-/// `seam` is 1.0 inside a tile. On the top and left edge it is the appearance's seam factor,
-/// which approximates the prototype's half-pixel black inset on the backing grid.
+/// `seam` is 1.0 inside a tile. On each of the four edges it is the appearance's seam
+/// factor, the prototype's half-point black inset on the backing grid.
 fn gradient_color(color: [u8; 3], position: f64, seam: f64) -> [u8; 3] {
     let position = position.clamp(0.0, 1.0);
     let highlight = 0.14 * (1.0 - position / 0.55).max(0.0);

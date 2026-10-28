@@ -10,12 +10,13 @@ color and the tests that check it.
 | Element | Owner | Light and dark | Increase Contrast |
 |---|---|---|---|
 | File tile base colors and gradient | Rust `type_color`, `gradient_color` in [diagram.rs](../src/diagram.rs) | Same | Same |
-| Top and left file seam | Rust `MapAppearance::seam_factor` | Gradient value × 0.775 | Gradient value × 0.33 |
+| Tile seam, all four edges | Rust `MapAppearance::seam_factor` | Value × 0.55 (design inset) | Value × 0.33 |
+| Root Trash fill | Rust `MapAppearance::trash` (design TRASH) | Dark base `[68,72,78]`, white 9% stripes; light base `[185,190,198]`, black 9% stripes | Dark base `[132,136,142]`, white 30% stripes; light as light, black 30% stripes |
 | Aggregate hatch | Rust `MapAppearance::hatch` (sRGB) | Light `[206,206,210]` and `[184,184,189]`, dark `[59,59,62]` and `[38,38,40]` | Light `[232,232,236]` and `[150,150,156]`, dark `[96,96,100]` and `[28,28,30]` |
 | Tree swatch of a file | Rust base color through `OutlineRow.map_rgb` | Same | Same |
 | Tree swatch of a directory | Swift `NSColor.systemGray` | System | System |
 | Map surround, motion hole | Swift `windowBackgroundColor` | System | System |
-| Dim, selection ring | Swift, black and white | Same | Same |
+| Dim (12% black), selection ring | Swift, black and white | Same | Same |
 | Hover outline | Swift | White, 1 point, 70% opacity | 2 points, opaque: label color (black) in light, white in dark |
 | Tree background | AppKit `.inset` table style | Opaque content color | System |
 | Header and card | SwiftUI `.bar` material | System | System |
@@ -24,8 +25,20 @@ color and the tests that check it.
 The palette, the gradient, the geometry and the pixel owners do not change with the
 appearance. Increase Contrast seam contrast is measured against its own tile: each seam pixel
 against the next interior pixel of the same tile, at every gradient position. The minimum is
-3.02:1. A seam next to a different tile is not a contrast criterion. The light-contrast hatch
-stripes measure 2.41:1, the dark-contrast stripes 2.71:1.
+3.02:1 in Rust and 3.23:1 on screen. A seam next to a different tile is not a contrast
+criterion. The light-contrast hatch stripes measure 2.41:1, the dark-contrast stripes 2.71:1.
+
+The Trash seam darkens the darker stripe band, so it has no stripes. No dark seam reaches 3:1
+against the design's dark Trash base (black caps at 2.16:1), so dark Increase Contrast uses a
+lighter base. Its seam measures at least 4.03:1, the light-contrast Trash seam 3.78:1. Trash
+stripe against base: light 1.20:1, dark 1.29:1, light contrast 1.95:1, dark contrast 1.58:1.
+Black stripes on the lighter dark-contrast base would give 1.80:1 but a 2.26:1 seam.
+
+Dark `prototype-home` against the design render 1a-browse.png, with the screenshot converted
+to sRGB: tile interiors per kind differ by at most 0.6 levels per channel, before and after the
+four-edge seam. The whole map measured 96.2, 137.9, 128.6 with the top/left seam at × 0.775 and
+measures 94.7, 135.4, 126.0 now; the render is 95.0, 136.1, 126.4. The tolerance is 1.5 levels
+per channel, because the render is 1x with smoothed seams and our map is 2x and 9% smaller.
 
 Text uses the primary label color. The secondary label color measures 3.95:1 on the light
 window, below the 4.5:1 text minimum, so font size and weight carry the hierarchy.
@@ -57,8 +70,10 @@ appearance of the displayed map picture.
 Rust, in [src/explorer_tests.rs](../src/explorer_tests.rs):
 "diagram_appearance_changes_only_hatch_and_seam_colors" renders every palette type, nested
 aggregates and long thin tiles in all four variants. Owners, hits and interiors match. Hatch
-pixels are exact. Seams scale by the variant factor. The test prints the Increase Contrast seam
-minimum and requires 3.0:1. In [src/bridge/tests.rs](../src/bridge/tests.rs),
+pixels are exact. Seams on all four edges scale by the variant factor. The test prints the
+Increase Contrast seam minimum and requires 3.0:1.
+"diagram_paints_root_trash_whole_with_trash_stripes_until_focused" checks the Trash fill, its
+seams and its stripe contrast in all four variants. In [src/bridge/tests.rs](../src/bridge/tests.rs),
 "diagram_appearance_is_forwarded_and_swatch_colors_are_unchanged" checks the generated
 `diagram` parameter, the hatch, unchanged interiors and unchanged `map_rgb` values.
 
@@ -80,12 +95,18 @@ real runner's screenshots:
   selection, hover and both alert sheets.
 - "testMapHatchFollowsAppearance": light stripes on a light window, dark stripes on a dark
   window, stronger stripes with a contrast value.
-- "testIncreasedContrastDarkensMapSeams": at least 3:1 with a contrast value, below 2:1 without.
+- "testIncreasedContrastDarkensMapSeams": at least 3:1 with a contrast value, 1.8 to 3:1 without.
+- "testMapTilesHaveTheDesignSeamOnAllFourSides": each edge of the largest tiles, all four values.
+- "testRootTrashShowsTrashStripesAndSelectsTheTrashUntilFocused": TRASH stripes in all four
+  values, one region that selects `.Trash`, and type colors after a Trash focus.
+- "testPrototypeHomeDarkMapMatchesTheDesignBrightness": CSS-gradient interiors and a 0.55 edge
+  ratio.
 - "testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast": black in light
   contrast, white in dark contrast, 70% white without contrast.
 - "testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch".
 - "testMapTileBaseColorMatchesTreeSwatchOnScreen": the sRGB map shows the swatch color exactly.
-- "testCaptionAndSecondaryTextMeetFourAndAHalfToOne": card, footer and start-screen text.
+- "testCaptionAndSecondaryTextMeetFourAndAHalfToOne": card, status bar, grouped-note and
+  start-screen text.
 - "testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows" runs in all four values.
 
 Untested: the system chrome under real Increase Contrast, and a live system appearance change

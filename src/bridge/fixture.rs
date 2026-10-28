@@ -298,6 +298,7 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         "ordinary",
         "presentation",
         "prototype-home",
+        "prototype-home-refresh",
         "visual-details",
         "metadata-delay",
         "trash-inside",
@@ -330,7 +331,7 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         )?
     } else if scenario == "visual-details" {
         visual_details_map()?
-    } else if scenario == "prototype-home" {
+    } else if matches!(scenario, "prototype-home" | "prototype-home-refresh") {
         prototype_home_map()?
     } else if matches!(
         scenario,
@@ -354,6 +355,20 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
     }
     let root = Path::new("/Workspace");
     fs.trash_behavior = TrashBehavior::MoveTo(PathBuf::from("/.Trash/moved"));
+    if scenario == "prototype-home-refresh" {
+        // A refresh reads every directory for 300 ms, so its progress and Stop are visible,
+        // and it finds one new live file that the saved inventory does not have.
+        for id in 0..map.nodes.len() {
+            if map.nodes[id].kind == Kind::Dir {
+                fs.metadata_delays
+                    .insert(map.path(id), std::time::Duration::from_millis(300));
+            }
+        }
+        fs.insert(
+            "/Users/ana/Library/Caches/new cache.db",
+            metadata(900_000, Kind::File, 2_000_000_000),
+        );
+    }
     match scenario {
         "metadata-delay" => {
             fs.metadata_delays

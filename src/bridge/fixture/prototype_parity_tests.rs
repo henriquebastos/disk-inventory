@@ -213,12 +213,12 @@ fn squarify_matches_prototype_layout_at_render_and_portrait_viewports() {
     let print = std::env::var_os("DI_PARITY_PRINT").is_some();
     let path = |id: usize| format!("ana/{}", String::from_utf8_lossy(&map.relative_path(id)));
     // 939x750 is the map of the designer render 1a-browse.png (1380x850 window). 640x900 is
-    // portrait. 1702x1251 is the app map in backing pixels in the UI test window.
+    // portrait. 1702x1443 is the app map in backing pixels in the UI test window.
     // `strict`: every compared file must match.
     for (width, height, strict) in [
         (939u32, 750u32, true),
         (640, 900, true),
-        (1702, 1251, true),
+        (1702, 1443, true),
         (200, 150, false),
         (60, 40, false),
     ] {

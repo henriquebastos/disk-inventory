@@ -11,6 +11,7 @@ import SwiftUI
 final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var window: NSWindow?
   private var model: ExplorerModel?
+  private var escapeMonitor: Any?
   let menu = ExplorerMenuState()
   func applicationDidFinishLaunching(_ notification: Notification) {
     let testing = ProcessInfo.processInfo.environment["DI_MODEL_TEST"] == "1"
@@ -47,6 +48,25 @@ final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
     self.window = window
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
+    escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      // AppKit calls local monitors on the main thread.
+      nonisolated(unsafe) let event = event
+      let handled = MainActor.assumeIsolated { self?.clearSelection(on: event) == true }
+      return handled ? nil : event
+    }
+  }
+  /// Esc clears the selection while the tree, the map or the window has the keyboard focus.
+  /// The map never takes the focus, so a click on it leaves the focus where it was. An
+  /// attached confirmation sheet keeps its own Esc (Cancel), and text keeps its own keys.
+  func clearSelection(on event: NSEvent) -> Bool {
+    guard event.keyCode == 53, let window, event.window === window, window.attachedSheet == nil,
+      event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+      let model, model.canClearSelection
+    else { return false }
+    let responder = window.firstResponder
+    if !(responder is NSTableView), responder is NSText || responder is NSControl { return false }
+    model.clearSelection()
+    return true
   }
   func windowDidBecomeKey(_ notification: Notification) { menu.explorerWindowIsKey = true }
   func windowDidResignKey(_ notification: Notification) { menu.explorerWindowIsKey = false }
@@ -62,6 +82,21 @@ struct MapAppearanceProbe: View {
     Color.clear.frame(width: 1, height: 1).accessibilityElement()
       .accessibilityIdentifier("map-appearance")
       .accessibilityLabel(model.picture?.appearance.fixtureName ?? "none")
+  }
+}
+
+/// Fixture-only accessibility probe naming the hovered map block. The status bar shows only
+/// the selected path, so UI tests read the hover here.
+struct MapHoverProbe: View {
+  let model: ExplorerModel
+  var body: some View {
+    Color.clear.frame(width: 1, height: 1).accessibilityElement()
+      .accessibilityIdentifier("map-hover")
+      .accessibilityLabel(
+        model.hover.map {
+          ($0.actionable ? "" : "Grouped in ")
+            + ($0.relativePath.isEmpty ? entryName($0.entry) : displayPath($0.relativePath))
+        } ?? "none")
   }
 }
 
@@ -97,9 +132,11 @@ struct ExplorerView: View {
                 HStack(spacing: 0) {
                   MotionProbe(motion: model.motion)
                   MapAppearanceProbe(model: model)
+                  MapHoverProbe(model: model)
                 }
               }
             }
+            .overlay(alignment: .top) { if model.bannerVisible { banner } }
             Divider()
             footer
           }.frame(minWidth: 350)
@@ -285,7 +322,12 @@ struct ExplorerView: View {
             "root-protected")
         }
       } else if let text = model.aggregateText {
-        Text(text)
+        Text(text).accessibilityIdentifier("aggregate-text")
+        if let p = model.picture, p.bitmap.aggregatePixels > 0 || model.rasterReduced {
+          Text(
+            "Some map detail is grouped or reduced at this scale; zoom or expand the tree to see more."
+          ).font(.caption).accessibilityIdentifier("grouped-note")
+        }
         Button("Show Directory Contents") { if let key = model.aggregate { model.focus(key) } }
       } else {
         Text("Nothing selected").font(.headline)
@@ -298,46 +340,49 @@ struct ExplorerView: View {
     }.font(.callout).frame(maxWidth: .infinity, minHeight: 122, alignment: .leading)
       .padding(14).background(.bar)
   }
+  /// The status bar shows only the complete path of the selected item, and nothing when no
+  /// item is selected.
   var footer: some View {
-    // Outcome and diagnostic publication must not resize the map during result motion.
-    ScrollView {
-      VStack(alignment: .leading, spacing: 5) {
-        if model.error != nil {
-          HStack {
-            Text("Could not complete the request.").foregroundStyle(.red).accessibilityIdentifier(
-              "error")
-            Button("Dismiss") { model.error = nil }
-          }
-        }
-        if let outcome = model.outcome {
-          Text(outcome).textSelection(.enabled).accessibilityIdentifier("outcome")
-        }
-        if model.error != nil || !model.issues.isEmpty {
-          DisclosureGroup("Details") {
-            ScrollView {
-              if let error = model.error {
-                Text(error).textSelection(.enabled).accessibilityIdentifier("error-details")
-              }
-              Text(model.issues.joined(separator: "\n")).textSelection(.enabled).frame(
-                maxWidth: .infinity, alignment: .leading)
-            }.frame(maxHeight: 100)
-          }.accessibilityIdentifier("issues")
-        }
-        Text(
-          model.hover.map {
-            ($0.actionable ? "" : "Grouped in ")
-              + ($0.relativePath.isEmpty ? entryName($0.entry) : displayPath($0.relativePath))
-              + " · "
-              + model.numbers.storage($0.bytes)
-          } ?? "Recorded disk usage · Shared space is counted once · Deleting may free less space"
-        )
-        .lineLimit(1).frame(height: 18).accessibilityIdentifier("hover-name")
-        if let p = model.picture, p.bitmap.aggregatePixels > 0 || model.rasterReduced {
-          Text(
-            "Some map detail is grouped or reduced at this scale; zoom or expand the tree to see more."
-          )
-        }
-      }.frame(maxWidth: .infinity, alignment: .leading)
-    }.frame(height: 100).font(.caption).padding(12)
+    Text(model.selected == nil ? "" : model.selectedDisplayPath ?? "")
+      .font(.system(.caption, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+      .textSelection(.enabled).help(model.selectedDisplayPath ?? "")
+      .accessibilityIdentifier("status-path")
+      .frame(maxWidth: .infinity, minHeight: 28, maxHeight: 28, alignment: .leading)
+      .padding(.horizontal, 12)
+  }
+  /// Errors, operation outcomes and issues, over the top of the map. It hit-tests only its own
+  /// frame and stays until Dismiss, a replacing outcome or a new folder.
+  var banner: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      if model.error != nil {
+        Text("Could not complete the request.").font(.callout.weight(.semibold))
+          .foregroundStyle(.red).accessibilityIdentifier("error")
+      }
+      if let outcome = model.outcome {
+        Text(outcome).font(.callout).textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("outcome")
+      }
+      if model.error != nil || !model.issues.isEmpty {
+        DisclosureGroup("Details") {
+          ScrollView {
+            if let error = model.error {
+              Text(error).textSelection(.enabled).accessibilityIdentifier("error-details")
+            }
+            Text(model.issues.joined(separator: "\n")).textSelection(.enabled).frame(
+              maxWidth: .infinity, alignment: .leading)
+          }.frame(maxHeight: 100)
+        }.font(.caption).accessibilityIdentifier("issues")
+      }
+      HStack {
+        Spacer()
+        Button("Dismiss") { model.dismissBanner() }.accessibilityIdentifier("dismiss-banner")
+      }.controlSize(.small)
+    }
+    .padding(.horizontal, 14).padding(.vertical, 12).frame(maxWidth: 440, alignment: .leading)
+    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5))
+    .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+    .padding(.top, 20).padding(.horizontal, 20)
+    .accessibilityElement(children: .contain).accessibilityIdentifier("outcome-banner")
   }
 }

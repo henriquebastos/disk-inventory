@@ -734,7 +734,11 @@ fn diagram_appearance_is_forwarded_and_swatch_colors_are_unchanged() {
                     let stripe = if (x + y) % 4 < 2 { light } else { darker };
                     assert_eq!(pixel, stripe, "{appearance:?} hatch");
                     hatched += 1;
-                } else if x as f64 > hit.rect.x + 1.0 && y as f64 > hit.rect.y + 1.0 {
+                } else if x as f64 > hit.rect.x + 1.0
+                    && y as f64 > hit.rect.y + 1.0
+                    && x as f64 + 2.0 < hit.rect.x + hit.rect.width
+                    && y as f64 + 2.0 < hit.rect.y + hit.rect.height
+                {
                     // File interiors, and so the swatch base colors, do not change.
                     assert_eq!(pixel, &dark_image.rgba[at..at + 3], "{appearance:?}");
                     interior += 1;
@@ -744,4 +748,55 @@ fn diagram_appearance_is_forwarded_and_swatch_colors_are_unchanged() {
         assert!(hatched > 0 && interior > 10_000, "{appearance:?}");
     }
     assert_eq!(swatches(&tree), before);
+}
+
+#[test]
+fn controlled_refresh_stop_keeps_views_and_completion_applies_live_changes() {
+    let s = session("prototype-home-refresh");
+    let root = s.status().unwrap().root.key;
+    let library = find(&s, b"Library");
+    let caches = s
+        .children(library, 0, 16)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.basename == b"Caches")
+        .unwrap();
+    let before = s.children(caches.key.clone(), 0, 64).unwrap().total;
+    assert_eq!(before, 40);
+    let total = s.status().unwrap().root.subtree_bytes;
+    let frame = s
+        .clone()
+        .diagram(root.clone(), 200, 150, MapAppearance::Dark)
+        .unwrap();
+    let tree = s.clone().tree(root.clone()).unwrap();
+    // Stop before the read: Cancelled, no data change, and the old views stay valid.
+    let stopped = ScanControl::new();
+    assert!(stopped.cancel());
+    assert!(matches!(
+        s.refresh_directory_controlled(caches.key.clone(), stopped.clone()),
+        Err(BridgeError::Cancelled)
+    ));
+    assert_eq!(stopped.progress().phase, ScanPhase::Cancelled);
+    assert_eq!(s.children(caches.key.clone(), 0, 64).unwrap().total, before);
+    assert_eq!(s.status().unwrap().root.subtree_bytes, total);
+    assert!(!s.status().unwrap().dirty);
+    assert!(frame.hit(10, 10).unwrap().is_some());
+    assert!(tree.rows(0, 8).is_ok());
+    // A complete refresh reads the live directory (300 ms fixture latency), applies the new
+    // file and invalidates the old views.
+    let control = ScanControl::new();
+    let report = s
+        .refresh_directory_controlled(caches.key.clone(), control.clone())
+        .unwrap();
+    assert!(report.issues.is_empty());
+    let progress = control.progress();
+    assert_eq!(progress.phase, ScanPhase::Complete);
+    assert_eq!(progress.items_examined, 1 + 41);
+    assert_eq!(s.children(caches.key.clone(), 0, 64).unwrap().total, 41);
+    assert_eq!(
+        s.status().unwrap().root.subtree_bytes,
+        total + 2_000_000_000
+    );
+    assert!(frame.hit(10, 10).is_err());
 }
