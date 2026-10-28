@@ -1123,6 +1123,58 @@ import XCTest
       app.terminate()
     }
   }
+  /// `file-type-colors`: each tile's sampled pixels have the hue of its kind, or are neutral
+  /// for the gray controls. The old table drew every colored file here gray.
+  func checkFileTypes(_ appearance: String, _ scene: String, _ kinds: [(String, String)]) throws {
+    let pixels = try windowPixels(srgb: true)
+    let window = app.windows.firstMatch.frame
+    for (name, kind) in kinds {
+      let tile = app.buttons["map-file-\(name)"]
+      guard tile.exists else {
+        XCTFail("\(appearance) \(scene): no map tile for \(name)")
+        continue
+      }
+      let f = tile.frame
+      let result = kindShares(pixels, map: f.insetBy(dx: 3, dy: 3))
+      let share = kind == "gray" ? result.neutral : result.shares[kind] ?? 0
+      print(
+        "FILE TYPE \(appearance) \(scene) \(name) \(kind) share=\(String(format: "%.3f", share))"
+          + " frame=\(Int(f.minX - window.minX)),\(Int(f.minY - window.minY)),\(Int(f.width)),\(Int(f.height))"
+      )
+      XCTAssertGreaterThanOrEqual(share, 0.9, "\(appearance) \(scene): \(name) must be \(kind)")
+    }
+  }
+  func testNewExtensionsAndContextFoldersReplaceGrayTilesWithTypeColors() throws {
+    continueAfterFailure = true
+    let expected = [
+      ("7c91d04e", "archive"), ("pack-1f2e.pack", "archive"), ("pack-1f2e.idx", "archive"),
+      ("libcore.dylib", "code"), ("index.ts", "code"), ("5C1D27", "cache"),
+      ("9f86d081", "cache"), ("cd34ef", "cache"), ("1a2b3c", "cache"),
+      ("events.jsonl", "data"), ("table.csv", "data"), ("clip.webm", "video"),
+      ("voice.opus", "audio"), ("sketch.psd", "image"), ("tool.whl", "archive"),
+      // Gray controls: a document, `objects` outside `.git`, no extension, a numbered file.
+      ("report.pdf", "gray"), ("b4e0aa", "gray"), ("notes", "gray"), ("segment.1", "gray"),
+    ]
+    for appearance in ["light", "dark"] {
+      launch("file-type-colors", appearance: appearance)
+      XCTAssertTrue(app.buttons["map-file-7c91d04e"].waitForExistence(timeout: 8))
+      offMap()
+      screenshot("file-types-\(appearance)-home")
+      try checkFileTypes(appearance, "home", expected)
+      // A focus inside Git object storage keeps the archive color for loose objects.
+      for folder in ["Projects", "atlas", ".git", "objects"] {
+        row(folder).doubleClick()
+        text("focus-name", contains: folder)
+      }
+      XCTAssertTrue(app.buttons["map-file-7c91d04e"].waitForExistence(timeout: 8))
+      offMap()
+      screenshot("file-types-\(appearance)-objects")
+      try checkFileTypes(
+        appearance, "objects",
+        [("7c91d04e", "archive"), ("pack-1f2e.pack", "archive"), ("pack-1f2e.idx", "archive")])
+      app.terminate()
+    }
+  }
   func testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch() throws {
     continueAfterFailure = true
     for appearance in Self.appearances {

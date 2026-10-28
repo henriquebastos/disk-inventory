@@ -108,6 +108,8 @@ impl ExplorerTree {
         self.with(|e, t| {
             let offset = usize::try_from(offset).map_err(|_| stale())?;
             let p = t.rows(e, offset, limit as usize)?;
+            // Sibling rows share a parent, so its folder context is computed once per run.
+            let mut context = None;
             Ok(OutlineSlice {
                 offset: offset as u64,
                 total: p.total as u64,
@@ -116,7 +118,16 @@ impl ExplorerTree {
                     .into_iter()
                     .map(|r| OutlineRow {
                         map_rgb: (r.entry.kind != crate::Kind::Dir).then(|| {
-                            let [red, green, blue] = crate::diagram::type_color(r.entry.basename);
+                            let parent = r.entry.parent.map_or(0, |p| p.index());
+                            let folder = match context {
+                                Some((id, folder)) if id == parent => folder,
+                                _ => {
+                                    let folder = e.folder_context(parent);
+                                    context = Some((parent, folder));
+                                    folder
+                                }
+                            };
+                            let [red, green, blue] = folder.file_color(r.entry.basename);
                             u32::from_be_bytes([0, red, green, blue])
                         }),
                         entry: r.entry.into(),

@@ -67,8 +67,8 @@ mutation recovery discard history. Breadcrumbs retain at most 64 ancestors; deep
 paths truncate older ancestors, not the inventory root label. Tiny, zero-attribution
 and shared entries remain reachable in the tree.
 
-The map displays an immutable Rust squarified, flat-gradient bitmap with stable saved-name
-extension colors. Placement, refinement, pixel ownership, bounds and tests are
+The map displays an immutable Rust squarified, flat-gradient bitmap with saved-name
+type colors. Placement, refinement, pixel ownership, bounds and tests are
 specified in [native-diagram.md](native-diagram.md). Click links selection between
 tree and map; no directory header covers file pixels. The card of an unresolved aggregate
 shows only its size and offers directory navigation, never file removal. The status bar,

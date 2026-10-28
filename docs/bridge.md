@@ -128,6 +128,7 @@ Discover entries through bounded queries: `small-files/small-00` through
 | `prototype-home` | The design prototype's 236.9 GB home `/Users/ana`: its names (`CoreSimulator` is `CoreDevice`), hierarchy, sizes and extensions; directories own zero bytes |
 | `prototype-home-refresh` | `prototype-home`; each directory metadata request sleeps 300 ms and `Library/Caches/new cache.db` (2 GB) exists only live |
 | `prototype-home-nested-trash` | `prototype-home` plus `Projects/.Trash` with four videos (4 GB), added after the prototype's entries |
+| `file-type-colors` | `/Users/ana` with newly listed extensions, files without an extension in Git object storage and cache folders, and gray controls |
 | `visual-details` | Isolated nested groups and a long directory path; entry-only metadata differs from subtree bytes |
 | `ordinary`, `trash-outside` | Trash moves to `/.Trash/moved` |
 | `trash-inside` | Moves to `trash/moved` within scope |
@@ -184,7 +185,7 @@ namespace races, non-macOS and Intel linking remain untested here.
 and `reveal`, plus read-only `visible_row` (Swift `visibleRow`) for a selected
 key's optional position without opening collapsed ancestors.
 Each `OutlineRow` includes optional `map_rgb` (Swift `mapRgb`), packed as `0xRRGGBB`.
-Files use the map's base type color. Directories have no color value.
+Files use the map's base type color, folder rule included. Directories have no color value.
 "outline_swatch_colors_match_map_file_tiles_and_directories_have_none" in
 [src/bridge/tests.rs](../src/bridge/tests.rs) checks this additive field.
 The saved `DMAPBEN1` format and default-feature builds remain unchanged.

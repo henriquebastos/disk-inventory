@@ -6,6 +6,7 @@ uniffi::setup_scaffolding!();
 pub mod diagram;
 pub mod explorer;
 pub mod export;
+mod file_type;
 pub mod inventory;
 pub mod layout;
 pub mod native;

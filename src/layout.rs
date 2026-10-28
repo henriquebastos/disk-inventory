@@ -2,6 +2,7 @@
 use crate::{
     Kind,
     explorer::{EntryHandle, Explorer},
+    file_type::FolderContext,
     invalid,
 };
 use std::{cmp::Ordering, collections::BinaryHeap, io};
@@ -80,6 +81,8 @@ pub struct Tile {
     pub bytes: u64,
     pub depth: u32,
     pub parent: Option<EntryHandle>,
+    /// Folder context of the directory that contains this entry; for the focus, its own.
+    pub(crate) context: FolderContext,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Group {
@@ -109,6 +112,8 @@ pub struct Layout {
 struct Pending {
     tile: Tile,
     id: u32,
+    /// Folder context of directory `id`, computed once when it is reached.
+    context: FolderContext,
 }
 impl PartialEq for Pending {
     fn eq(&self, other: &Self) -> bool {
@@ -208,6 +213,8 @@ impl Explorer {
         if total_bytes == 0 {
             return Ok(result);
         }
+        // A focus inside a context folder starts in that context: one walk over its ancestors.
+        let context = self.folder_context(id);
         let mut pending = BinaryHeap::from([Pending {
             id,
             tile: Tile {
@@ -216,9 +223,11 @@ impl Explorer {
                 bytes: total_bytes,
                 depth: 0,
                 parent: None,
+                context,
             },
+            context,
         }]);
-        while let Some(Pending { id, tile }) = pending.pop() {
+        while let Some(Pending { id, tile, context }) = pending.pop() {
             result.work.entries_examined += 1;
             // Retaining the parent as a group costs one slot, so every refinement
             // consumes budget even along single-child directory chains.
@@ -257,6 +266,7 @@ impl Explorer {
                     bytes,
                     depth: tile.depth + 1,
                     parent: Some(self.handle(id)),
+                    context,
                 });
                 remaining -= bytes;
             }
@@ -274,6 +284,7 @@ impl Explorer {
                     bytes: remaining,
                     depth: tile.depth + 1,
                     parent: Some(self.handle(id)),
+                    context,
                 });
             }
             // Rounded endpoints can collapse or escape a subdivision. Keep the
@@ -298,6 +309,7 @@ impl Explorer {
                         pending.push(Pending {
                             id: handle.index(),
                             tile: part,
+                            context: context.enter(self.map.basename(handle.index() as usize)),
                         })
                     }
                     _ => result.tiles.push(part),

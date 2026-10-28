@@ -1245,3 +1245,112 @@ fn diagram_paints_every_trash_whole_with_trash_stripes_until_focused() {
         }
     }
 }
+
+/// The kind base color nearest to the drawn pixels of `file`: the gradient passes through its
+/// base color, so the closest pixel to each palette color decides.
+fn drawn_base(e: &Explorer, d: &crate::diagram::Diagram, file: u32) -> [u8; 3] {
+    let palette = [
+        [81, 153, 98],
+        [79, 138, 198],
+        [171, 109, 166],
+        [173, 124, 47],
+        [133, 122, 196],
+        [0, 153, 160],
+        [190, 110, 82],
+        [138, 140, 52],
+        [127, 135, 147],
+    ];
+    let region = d.region(e.handle(file)).unwrap();
+    let mut closest = [u8::MAX; 9];
+    for y in region.y.ceil() as u32 + 1..(region.y + region.height) as u32 - 1 {
+        for x in region.x.ceil() as u32 + 1..(region.x + region.width) as u32 - 1 {
+            assert_eq!(d.hit(x, y).unwrap().key.index(), file);
+            let at = (y * d.width + x) as usize * 4;
+            for (kind, base) in palette.iter().enumerate() {
+                let distance = (0..3)
+                    .map(|c| d.rgba()[at + c].abs_diff(base[c]))
+                    .max()
+                    .unwrap();
+                closest[kind] = closest[kind].min(distance);
+            }
+        }
+    }
+    let kind = (0..9).min_by_key(|&kind| closest[kind]).unwrap();
+    assert!(closest[kind] <= 2, "file {file}: {closest:?}");
+    palette[kind]
+}
+
+#[test]
+fn diagram_colors_files_by_extension_and_folder_context_also_inside_a_focused_context() {
+    let (archive, cache, code, data, gray) = (
+        [173, 124, 47],
+        [190, 110, 82],
+        [0, 153, 160],
+        [138, 140, 52],
+        [127, 135, 147],
+    );
+    let mut map = tree();
+    map.root = "/Users/ana".into();
+    map.nodes[0].raw = 0;
+    let repo = add(&mut map, 0, b"repo", Kind::Dir, 0);
+    let git = add(&mut map, repo, b".git", Kind::Dir, 0);
+    let objects = add(&mut map, git, b"objects", Kind::Dir, 0);
+    let loose = add(&mut map, objects, b"3a", Kind::Dir, 0);
+    let object = add(&mut map, loose, b"7c91d0", Kind::File, 6_000);
+    let pack = add(&mut map, objects, b"pack-1f.pack", Kind::File, 5_000);
+    let index = add(&mut map, objects, b"pack-1f.idx", Kind::File, 4_000);
+    let library = add(&mut map, 0, b"Library", Kind::Dir, 0);
+    let caches = add(&mut map, library, b"Caches", Kind::Dir, 0);
+    let viewer = add(&mut map, caches, b"com.example.viewer", Kind::Dir, 0);
+    let cached = add(&mut map, viewer, b"5C1D\xff", Kind::File, 5_000);
+    let numbered = add(&mut map, viewer, b"data.1", Kind::File, 4_000);
+    let projects = add(&mut map, 0, b"Projects", Kind::Dir, 0);
+    let lookalike = add(&mut map, projects, b"objects", Kind::Dir, 0);
+    let plain = add(&mut map, lookalike, b"b4e0aa", Kind::File, 5_000);
+    let library_file = add(&mut map, projects, b"libcore.dylib", Kind::File, 4_000);
+    let events = add(&mut map, projects, b"events.JSONL", Kind::File, 4_000);
+    let report = add(&mut map, projects, b"report.pdf", Kind::File, 4_000);
+    let segment = add(&mut map, 0, b"segment.1", Kind::File, 4_000);
+    let e = explorer(map);
+    let expected = [
+        (object, archive),
+        (pack, archive),
+        (index, archive),
+        (cached, cache),
+        (numbered, cache),
+        (plain, gray),
+        (library_file, code),
+        (events, data),
+        (report, gray),
+        (segment, gray),
+    ];
+    for appearance in [MapAppearance::Dark, MapAppearance::Light] {
+        let d = e.diagram(e.root_handle(), 600, 400, appearance).unwrap();
+        for (file, color) in expected {
+            assert_eq!(
+                drawn_base(&e, &d, file),
+                color,
+                "{appearance:?} root, file {file}"
+            );
+        }
+        // A focus inside a context folder starts in that context.
+        for (focus, files) in [
+            (
+                objects,
+                &[(object, archive), (pack, archive), (index, archive)][..],
+            ),
+            (loose, &[(object, archive)]),
+            (viewer, &[(cached, cache), (numbered, cache)]),
+            (lookalike, &[(plain, gray)]),
+        ] {
+            let d = e.diagram(e.handle(focus), 300, 200, appearance).unwrap();
+            for &(file, color) in files {
+                assert_eq!(
+                    drawn_base(&e, &d, file),
+                    color,
+                    "{appearance:?} focus {focus}"
+                );
+            }
+        }
+    }
+}

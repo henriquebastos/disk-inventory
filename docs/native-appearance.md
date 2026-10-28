@@ -9,7 +9,7 @@ color and the tests that check it.
 
 | Element | Owner | Light and dark | Increase Contrast |
 |---|---|---|---|
-| File tile base colors and gradient | Rust `type_color`, `gradient_color` in [diagram.rs](../src/diagram.rs) | Same | Same |
+| File tile base colors and gradient | Rust `FolderContext::file_color` in [file_type.rs](../src/file_type.rs), `gradient_color` in [diagram.rs](../src/diagram.rs) | Same | Same |
 | Tile seam, all four edges | Rust `MapAppearance::seam_factor` | Value × 0.55 (design inset) | Value × 0.33 |
 | Root Trash fill | Rust `MapAppearance::trash` (design TRASH) | Dark base `[68,72,78]`, white 9% stripes; light base `[185,190,198]`, black 9% stripes | Dark base `[132,136,142]`, white 30% stripes; light as light, black 30% stripes |
 | Aggregate hatch | Rust `MapAppearance::hatch` (sRGB) | Light `[206,206,210]` and `[184,184,189]`, dark `[59,59,62]` and `[38,38,40]` | Light `[232,232,236]` and `[150,150,156]`, dark `[96,96,100]` and `[28,28,30]` |
@@ -43,6 +43,30 @@ per channel, because the render is 1x with smoothed seams and our map is 2x and 
 Text uses the primary label color. The secondary label color measures 3.95:1 on the light
 window, below the 4.5:1 text minimum, so font size and weight carry the hierarchy.
 
+## File type colors
+
+[file_type.rs](../src/file_type.rs) owns the kinds and the rule. The palette is the
+prototype's: blue video, green images, pink audio, gold archives, purple apps, cyan code, orange
+caches, olive data, and one muted gray for documents and unknown files. A fixed table maps
+240 common extensions to these kinds; there is no new kind, because documents already have the
+prototype's muted kind and every other common extension fits a colored kind. The extension is
+the bytes after the last `.` within the last 12 basename bytes, ASCII case-insensitive, so it has
+at most 11 bytes (`swiftmodule`, `sparseimage`, `sqlite-wal`). Numeric extensions are not listed.
+
+The folder rule colors a file whose extension is missing, unknown or numeric by its nearest
+context folder; a known extension keeps its own color, gray documents included. Names are exact,
+case-sensitive byte matches, and a context covers every descendant:
+
+- Archive: `objects` whose parent is `.git` or `lfs` (Git object storage).
+- Cache: `Caches`, `Cache`, `.cache`, `_cacache` and `.pnpm-store`; `store` whose parent is
+  `pnpm`; `blobs` whose parent starts with `models--` or `datasets--`, or that has a
+  `huggingface` ancestor.
+
+Layout computes a directory's context once, from its name and its parent's context, when it
+reaches the directory. A focus starts from one walk over its saved ancestors and the saved root
+path, so a focus inside a context folder keeps the color. Tree swatches use the same rule. No
+lookup allocates or reads metadata.
+
 ## Appearance changes
 
 `DiagramPicture` asks Rust for a frame in one `MapAppearance` and tags the image with the
@@ -66,6 +90,17 @@ outline, not the system chrome. The fixture-only `map-appearance` accessibility 
 appearance of the displayed map picture.
 
 ## Executable evidence
+
+Rust, in [src/file_type/tests.rs](../src/file_type/tests.rs):
+"extension_table_is_sorted_lowercase_and_fits_the_name_tail",
+"known_extensions_map_to_each_kind_case_insensitively_within_the_name_tail",
+"folder_rule_colors_files_without_a_known_extension_by_context" (with look-alike folders that
+stay gray) and "focus_context_from_saved_ancestors_and_root_path_equals_entering_from_the_root".
+In [src/explorer_tests.rs](../src/explorer_tests.rs),
+"diagram_colors_files_by_extension_and_folder_context_also_inside_a_focused_context" reads the
+drawn pixels. In [src/bridge/tests.rs](../src/bridge/tests.rs),
+"file_type_colors_fixture_colors_new_extensions_and_context_folders_in_map_and_tree" checks
+map tiles and tree swatches of the `file-type-colors` fixture.
 
 Rust, in [src/explorer_tests.rs](../src/explorer_tests.rs):
 "diagram_appearance_changes_only_hatch_and_seam_colors" renders every palette type, nested
@@ -103,6 +138,9 @@ real runner's screenshots:
   striped at the `Projects` focus and selects that `.Trash`; focused, it shows video colors.
 - "testPrototypeHomeDarkMapMatchesTheDesignBrightness": CSS-gradient interiors and a 0.55 edge
   ratio.
+- "testNewExtensionsAndContextFoldersReplaceGrayTilesWithTypeColors": in `file-type-colors`, light
+  and dark, each tile has its kind's hue and the controls stay gray, also with the focus on
+  `.git/objects`.
 - "testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast": black in light
   contrast, white in dark contrast, 70% white without contrast.
 - "testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch".

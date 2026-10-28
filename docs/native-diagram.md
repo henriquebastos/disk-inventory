@@ -42,12 +42,8 @@ remain in the tree, with no artificial map area.
 Each actually covered pixel has one owner. A high owner bit marks aggregate pixels
 non-actionable. Hit lookup is O(1), followed by saved-record/path construction;
 selection-region lookup scans bounded frame regions. Geometry, not a header overlay,
-owns file pixels. Type colors inspect at most twelve saved basename bytes (including `.swiftmodule`),
-allocating nothing and reading neither content nor filesystem metadata. The palette
-uses precomputed clipped sRGB equivalents of the design's OKLCH colors: blue video,
-green images, pink audio, gold archives, purple apps, cyan code, orange caches,
-olive data and muted documents/unknowns. Classification is ASCII case-insensitive
-by extension, not content or package inspection. A 155-degree linear gradient runs
+owns file pixels. File colors come from saved names only: the extension table and the
+folder rule in [native-appearance.md](native-appearance.md). A 155-degree linear gradient runs
 from 14% white through the base at 55% to 16% black, independent of ancestor depth.
 Each file tile has a one-backing-pixel seam on all four edges, the design's 0.5-point inset
 at 45% black. Gray diagonal hatching marks non-actionable aggregates. Each directory named exactly `.Trash`

@@ -856,3 +856,70 @@ fn prototype_home_nested_trash_draws_projects_trash_whole_until_focused() {
                 .starts_with(b"Projects/.Trash/Old render ")
     );
 }
+
+#[test]
+fn file_type_colors_fixture_colors_new_extensions_and_context_folders_in_map_and_tree() {
+    let s = session("file-type-colors");
+    let (archive, cache, code, data) = (0xad7c2f, 0xbe6e52, 0x0099a0, 0x8a8c34);
+    let (video, audio, image, gray) = (0x4f8ac6, 0xab6da6, 0x519962, 0x7f8793);
+    let expected: [(&str, u32); 19] = [
+        ("7c91d04e", archive),
+        ("pack-1f2e.pack", archive),
+        ("pack-1f2e.idx", archive),
+        ("b4e0aa", gray),
+        ("libcore.dylib", code),
+        ("index.ts", code),
+        ("5C1D27", cache),
+        ("9f86d081", cache),
+        ("cd34ef", cache),
+        ("1a2b3c", cache),
+        ("events.jsonl", data),
+        ("table.csv", data),
+        ("clip.webm", video),
+        ("voice.opus", audio),
+        ("sketch.psd", image),
+        ("tool.whl", archive),
+        ("report.pdf", gray),
+        ("notes", gray),
+        ("segment.1", gray),
+    ];
+    let root = s.status().unwrap().root.key;
+    assert_eq!(s.status().unwrap().root_path, b"/Users/ana");
+    let tree = s.clone().tree(root.clone()).unwrap();
+    let frame = s
+        .clone()
+        .diagram(root, 1000, 760, MapAppearance::Dark)
+        .unwrap();
+    let image_bytes = frame.bitmap();
+    let targets = frame.targets().unwrap();
+    assert_eq!(targets.len(), expected.len(), "every file is a map target");
+    let palette: Vec<u32> = expected.iter().map(|e| e.1).collect();
+    for target in targets {
+        let name = target.entry.display_name.as_str();
+        assert!(!name.to_lowercase().contains("simulat"));
+        let color = expected.iter().find(|e| e.0 == name).unwrap().1;
+        // The tile's gradient passes through its base color: the nearest palette color.
+        let r = target.rect;
+        let nearest = |base: u32| {
+            let base = base.to_be_bytes();
+            let mut closest = u8::MAX;
+            for y in r.y.ceil() as u32 + 1..(r.y + r.height) as u32 - 1 {
+                for x in r.x.ceil() as u32 + 1..(r.x + r.width) as u32 - 1 {
+                    let at = (y * image_bytes.width + x) as usize * 4;
+                    let pixel = &image_bytes.rgba[at..at + 3];
+                    let distance = (0..3).map(|c| pixel[c].abs_diff(base[c + 1])).max();
+                    closest = closest.min(distance.unwrap());
+                }
+            }
+            closest
+        };
+        let drawn = *palette.iter().min_by_key(|&&base| nearest(base)).unwrap();
+        assert_eq!(drawn, color, "{name} map tile");
+        assert!(nearest(color) <= 2, "{name}");
+        // The tree swatch is the same base color, also deep inside a context folder.
+        let row = tree.reveal(target.entry.key.clone()).unwrap();
+        let rows = tree.rows(row, 1).unwrap().rows;
+        assert_eq!(rows[0].entry.display_name, name);
+        assert_eq!(rows[0].map_rgb, Some(color), "{name} tree swatch");
+    }
+}

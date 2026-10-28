@@ -175,7 +175,10 @@ impl Explorer {
             let trash = tile.depth > 0
                 && matches!(tile.kind, TileKind::Entry(key) if self.is_trash(key.index()));
             let actionable = file.is_some() || trash;
-            let color = file.map(|key| type_color(self.map.basename(key.index() as usize)));
+            let color = file.map(|key| {
+                tile.context
+                    .file_color(self.map.basename(key.index() as usize))
+            });
             let r = tile.rect;
             // CSS 155deg direction, normalized by the rectangle's projected span.
             let gradient_span = r.width * GRADIENT_X + r.height * GRADIENT_Y;
@@ -252,47 +255,6 @@ fn gradient_color(color: [u8; 3], position: f64, seam: f64) -> [u8; 3] {
         (value * seam).round() as u8
     })
 }
-/// Base file-tile color before the gradient; tree swatches reuse it through the bridge.
-pub(crate) fn type_color(name: &[u8]) -> [u8; 3] {
-    // Only known ASCII extensions matter; inspect at most twelve saved name bytes, without allocation.
-    let tail = &name[name.len().saturating_sub(12)..];
-    let ext = tail
-        .iter()
-        .rposition(|&b| b == b'.')
-        .map(|at| &tail[at + 1..])
-        .unwrap_or_default();
-    // Prototype OKLCH L=.62 C=.11 hues, converted once to clipped 8-bit sRGB;
-    // documents/unknown use C=.02 H=260. No runtime color-space conversion.
-    let types: &[(&[&[u8]], [u8; 3])] = &[
-        (&[b"png", b"jpg", b"jpeg", b"gif", b"heic"], [81, 153, 98]),
-        (&[b"mp4", b"mov", b"mkv", b"avi"], [79, 138, 198]),
-        (&[b"mp3", b"wav", b"flac", b"m4a"], [171, 109, 166]),
-        (&[b"zip", b"gz", b"dmg"], [173, 124, 47]),
-        (&[b"app"], [133, 122, 196]),
-        (
-            &[
-                b"rs",
-                b"swift",
-                b"c",
-                b"h",
-                b"m",
-                b"js",
-                b"py",
-                b"o",
-                b"swiftmodule",
-            ],
-            [0, 153, 160],
-        ),
-        (&[b"db", b"cache"], [190, 110, 82]),
-        (&[b"bin", b"sqlite"], [138, 140, 52]),
-    ];
-    types
-        .iter()
-        .find(|(extensions, _)| extensions.iter().any(|e| ext.eq_ignore_ascii_case(e)))
-        .map(|(_, color)| *color)
-        .unwrap_or([127, 135, 147])
-}
-
 impl Diagram {
     pub fn rgba(&self) -> &[u8] {
         &self.rgba
@@ -336,8 +298,10 @@ impl Diagram {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_type::FolderContext;
     #[test]
     fn type_palette_matches_prototype_and_flat_gradient_is_monotonic() {
+        let type_color = |name: &[u8]| FolderContext::default().file_color(name);
         for (name, color) in [
             (b"a.png".as_slice(), [81, 153, 98]),
             (b"a.mov", [79, 138, 198]),

@@ -299,6 +299,88 @@ fn prototype_home(nested_trash: bool) -> Result<Map, BridgeError> {
     Ok(h.map)
 }
 
+/// `file-type-colors`: files whose extension the prototype table lacked, and files without an
+/// extension in Git object storage and cache folders, beside gray controls (a document, a
+/// numbered file, a file without an extension and an `objects` folder outside `.git`).
+fn file_type_colors_map() -> Result<Map, BridgeError> {
+    let mut h = PrototypeHome {
+        map: Map {
+            root: PathBuf::from("/Users/ana"),
+            nodes: vec![],
+            names: vec![],
+            counters: Counters::default(),
+            error_samples: vec![],
+        },
+        seed: 11,
+        inode: 5000,
+    };
+    h.add(0, "", Kind::Dir, 0)?;
+    for (folders, name, gigabytes) in [
+        (
+            &["Projects", "atlas", ".git", "objects", "3a"][..],
+            "7c91d04e",
+            3.0,
+        ),
+        (
+            &["Projects", "atlas", ".git", "objects", "pack"],
+            "pack-1f2e.pack",
+            4.0,
+        ),
+        (
+            &["Projects", "atlas", ".git", "objects", "pack"],
+            "pack-1f2e.idx",
+            1.2,
+        ),
+        (&["Projects", "atlas", "objects"], "b4e0aa", 1.5),
+        (&["Projects", "atlas", "build"], "libcore.dylib", 2.0),
+        (&["Projects", "atlas", "src"], "index.ts", 1.0),
+        (&["Library", "Caches", "com.example.viewer"], "5C1D27", 2.5),
+        (
+            &[
+                ".cache",
+                "huggingface",
+                "hub",
+                "models--org--model",
+                "blobs",
+            ],
+            "9f86d081",
+            3.5,
+        ),
+        (
+            &[".npm", "_cacache", "content-v2", "sha512", "ab"],
+            "cd34ef",
+            1.4,
+        ),
+        (
+            &[".local", "share", "pnpm", "store", "v3", "files", "00"],
+            "1a2b3c",
+            1.6,
+        ),
+        (&["Data"], "events.jsonl", 3.0),
+        (&["Data"], "table.csv", 1.0),
+        (&["Media"], "clip.webm", 2.2),
+        (&["Media"], "voice.opus", 1.3),
+        (&["Media"], "sketch.psd", 1.1),
+        (&["Downloads"], "tool.whl", 1.0),
+        (&["Documents"], "report.pdf", 1.8),
+        (&["Documents"], "notes", 0.9),
+        (&["Documents"], "segment.1", 0.8),
+    ] {
+        let mut parent = 0;
+        for folder in folders {
+            parent = match h.map.nodes.iter().enumerate().position(|(id, node)| {
+                id != 0 && node.parent == parent && h.map.basename(id) == folder.as_bytes()
+            }) {
+                Some(id) => id as u32,
+                None => h.dir(parent, folder)?,
+            };
+        }
+        h.file(parent, name, gigabytes)?;
+    }
+    h.map.aggregate()?;
+    Ok(h.map)
+}
+
 pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSystem>, BridgeError> {
     if ![
         "dix",
@@ -309,6 +391,7 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         "prototype-home",
         "prototype-home-refresh",
         "prototype-home-nested-trash",
+        "file-type-colors",
         "visual-details",
         "metadata-delay",
         "trash-inside",
@@ -345,6 +428,8 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         prototype_home_map()?
     } else if scenario == "prototype-home-nested-trash" {
         prototype_home(true)?
+    } else if scenario == "file-type-colors" {
+        file_type_colors_map()?
     } else if matches!(
         scenario,
         "presentation"

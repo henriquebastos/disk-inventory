@@ -71,7 +71,7 @@ fn prototype_home_extensions_get_the_prototype_kind_colors() {
             .unwrap();
         seen[kind] += 1;
         assert_eq!(
-            crate::diagram::type_color(name.as_bytes()),
+            crate::file_type::FolderContext::default().file_color(name.as_bytes()),
             kinds[kind].1,
             "{name}"
         );
