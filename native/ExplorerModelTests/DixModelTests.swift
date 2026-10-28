@@ -452,7 +452,7 @@ import XCTest
     try await wait { model.aggregate != nil }
     XCTAssertNil(model.selected)
     XCTAssertFalse(model.canAct)
-    XCTAssertTrue(model.aggregateText!.contains(model.numbers.storage(total)))
+    XCTAssertEqual(model.aggregateText, model.numbers.storage(total))
     XCTAssertNil(model.prepare(.permanentlyDelete))
     XCTAssertNil(model.pending)
   }

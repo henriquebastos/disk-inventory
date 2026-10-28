@@ -241,13 +241,11 @@ struct ExplorerView: View {
           badge("Partial", id: "partial").help(
             "\(model.numbers.count(r.status.counters.errors)) scan errors")
         }
-        if r.status.stale { badge("Incomplete", id: "stale").help("Some sizes are unknown") }
-        if r.status.dirty {
-          badge("Not saved", id: "dirty").help("Live changes differ from the saved snapshot")
-        }
+        if r.status.stale { badge("Incomplete", id: "stale") }
+        if r.status.dirty { badge("Not saved", id: "dirty") }
       }
       VStack(alignment: .trailing, spacing: 2) {
-        Text(model.numbers.storage(r.status.root.subtreeBytes) + " recorded").font(
+        Text(model.numbers.storage(r.status.root.subtreeBytes)).font(
           .callout.weight(.semibold)
         )
         .monospacedDigit().accessibilityIdentifier("scope-total")
@@ -261,7 +259,7 @@ struct ExplorerView: View {
       }
       .disabled(!ExplorerCommand.refreshDirectory.isEnabled(in: model))
       .accessibilityIdentifier("refresh").help(
-        "Rescan the focused directory and descendants in memory; the saved snapshot is unchanged."
+        "Rescan the focused directory and descendants."
       )
     }.padding(.horizontal, 12).padding(.vertical, 10).background(.bar)
   }
@@ -284,19 +282,9 @@ struct ExplorerView: View {
           .font(.callout.weight(.semibold)).monospacedDigit().accessibilityIdentifier(
             "selected-usage")
         }
-        HStack {
-          Text(
-            entry.kind == .directory
-              ? "\(model.numbers.count(entry.childCount)) direct items · Recorded allocation"
-              : "Recorded allocation")
-          if entry.kind == .file && entry.accountedBytes < entry.allocatedBytes {
-            Text(
-              model.records?.status.stale == true
-                ? "Shared or unknown size" : "Shared space counted elsewhere"
-            )
-            .accessibilityIdentifier("sharing-note")
-          }
-        }.font(.caption).lineLimit(2)
+        if entry.kind == .directory {
+          Text("\(model.numbers.count(entry.childCount)) direct items").font(.caption)
+        }
         Text(model.selectedDisplayPath ?? "Loading path…")
           .font(.system(.caption, design: .monospaced))
           .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
@@ -321,11 +309,6 @@ struct ExplorerView: View {
         }
       } else if let text = model.aggregateText {
         Text(text).accessibilityIdentifier("aggregate-text")
-        if let p = model.picture, p.bitmap.aggregatePixels > 0 || model.rasterReduced {
-          Text(
-            "Some map detail is grouped or reduced at this scale; zoom or expand the tree to see more."
-          ).font(.caption).accessibilityIdentifier("grouped-note")
-        }
         Button("Show Directory Contents") { if let key = model.aggregate { model.focus(key) } }
       } else {
         Text("Nothing selected").font(.headline)

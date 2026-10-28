@@ -447,7 +447,8 @@ import XCTest
     try await wait { !model.working }
     XCTAssertNotNil(try entry("new-sibling", in: model))
     XCTAssertTrue(model.records?.status.dirty == true)
-    XCTAssertTrue(model.outcome?.contains("in memory") == true)
+    XCTAssertEqual(
+      model.outcome, "Refreshed “\(model.records!.breadcrumbName(model.records!.focus))”.")
     XCTAssertEqual(try Data(contentsOf: storage.url(for: record)), bytes)
     XCTAssertEqual(model.scanDate, record.scannedAt)
     model.shutdown()
@@ -501,7 +502,7 @@ import XCTest
     try await wait { model.pending != nil }
     model.execute()
     try await wait { model.motion.active }
-    XCTAssertTrue(model.outcome?.contains("Permanently deleted") == true)
+    XCTAssertEqual(model.outcome, "Deleted.")
     XCTAssertTrue(model.motion.previous?.frame === old)
     XCTAssertTrue(model.working)
     model.point(0, 0, click: true)

@@ -165,7 +165,6 @@ struct PendingConfirmation: Identifiable {
   var restoredScrollRow = 0
   var scrollSerial = 0
   var viewport = CGSize(width: 650, height: 520)
-  var rasterReduced = false
   let fixtureMode: Bool
   /// Fixture mode marks only the window title; the content matches production.
   var windowTitle: String { fixtureMode ? "Disk Inventory — SIMULATED" : "Disk Inventory" }
@@ -771,8 +770,7 @@ struct PendingConfirmation: Identifiable {
     selectionRawPath = nil
     selectionPath = nil
     aggregate = key
-    aggregateText =
-      "\(numbers.storage(bytes)) in grouped directory allocation. Open the directory for more detail."
+    aggregateText = numbers.storage(bytes)
   }
 
   func focus(_ key: EntryKey) {
@@ -869,7 +867,6 @@ struct PendingConfirmation: Identifiable {
   func resize(_ proposed: CGSize) {
     guard proposed.width.isFinite, proposed.height.isFinite, proposed.width > 0, proposed.height > 0
     else { return }
-    rasterReduced = proposed.width * proposed.height > 4_000_000
     let scale = min(1, sqrt(4_000_000 / (proposed.width * proposed.height)))
     let size = CGSize(
       width: min(4_000_000, max(1, floor(proposed.width * scale))),
@@ -972,7 +969,7 @@ struct PendingConfirmation: Identifiable {
         }.value
         guard generation == sessionVersion else { return }
         switch result.mutation {
-        case .removed: outcome = "Permanently deleted. No Undo is available."
+        case .removed: outcome = "Deleted."
         case .trashed: outcome = "Moved to Trash."
         case .failed(let message):
           outcome = "Failed. The operation could not be completed."
@@ -983,15 +980,6 @@ struct PendingConfirmation: Identifiable {
         case .indeterminate(let message):
           outcome = "Indeterminate — verify before retrying."
           issues.append(message)
-        }
-        if let scope = result.scope {
-          switch scope {
-          case .inside:
-            outcome! += " Trash is inside this inventory: allocation moved, not reclaimed."
-          case .outside:
-            outcome! += " Trash is outside this inventory; disk space is not necessarily reclaimed."
-          case .unknown: outcome! += " Trash destination scope is unknown."
-          }
         }
         retainIssues(result.update)
         // Failed/partial/uncertain removals retain the actual survivor selection, never a success ghost.
@@ -1111,7 +1099,7 @@ struct PendingConfirmation: Identifiable {
         }.value
         guard generation == sessionVersion else { return }
         retainIssues(update)
-        outcome = "Refreshed “\(name)” in memory. Saved snapshot unchanged."
+        outcome = "Refreshed “\(name)”."
         await recoverView(s)
       } catch BridgeError.Cancelled {
         if generation == sessionVersion {

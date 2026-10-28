@@ -187,7 +187,7 @@ import XCTest
     let builds = model.diagramBuilds
     model.refresh()
     try await wait({ !model.working && !model.loading }, seconds: 20)
-    XCTAssertEqual(model.outcome, "Refreshed “Library” in memory. Saved snapshot unchanged.")
+    XCTAssertEqual(model.outcome, "Refreshed “Library”.")
     XCTAssertEqual(model.records?.focus.subtreeBytes, total + 2_000_000_000)
     XCTAssertEqual(model.diagramBuilds, builds + 1)
     XCTAssertNil(model.scan.progress)

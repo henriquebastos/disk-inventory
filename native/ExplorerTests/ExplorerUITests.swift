@@ -1,4 +1,5 @@
 import AppKit
+import Vision
 import XCTest
 
 @MainActor final class ExplorerUITests: XCTestCase {
@@ -42,6 +43,11 @@ import XCTest
       print("UI_STATE id=\(id) actual=\(String(describing: element.value))")
     }
     XCTAssertEqual(result, .completed, "\(id) must contain \(value)")
+  }
+  /// Waits for the outcome banner, then requires exactly `expected`: no added sentence.
+  func outcome(is expected: String, timeout: TimeInterval = 8) {
+    text("outcome", contains: expected, timeout: timeout)
+    XCTAssertEqual(app.staticTexts["outcome"].value as? String, expected)
   }
   /// Waits until the status bar names `value`, the hovered map block. "none" waits until the
   /// status bar is empty: the pointer is off the map.
@@ -125,7 +131,7 @@ import XCTest
     XCTAssertTrue(row("large-file").exists)
     prepare("delete", target: "large-file")
     app.buttons["confirm-action"].click()
-    text("outcome", contains: "Permanently deleted")
+    outcome(is: "Deleted.")
     XCTAssertFalse(row("large-file").exists)
     XCTAssertTrue(app.staticTexts["dirty"].exists)
     app.buttons["inspect-root"].click()
@@ -145,7 +151,7 @@ import XCTest
     text("confirmation-title", contains: "Move “large-file” to the Trash?")
     screenshot("trash-confirmation-default-action")
     app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
-    text("outcome", contains: "Moved to Trash")
+    outcome(is: "Moved to Trash.")
     XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
   }
   func testPermanentConfirmationHasNoDefaultAndEscapeCancels() {
@@ -168,7 +174,7 @@ import XCTest
     // A second preparation after Esc must present a new alert.
     prepare("delete", target: "large-file")
     app.buttons["confirm-action"].click()
-    text("outcome", contains: "Permanently deleted")
+    outcome(is: "Deleted.")
     XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
   }
   func testTrashInsideAndOutside() {
@@ -178,9 +184,9 @@ import XCTest
       prepare("trash", target: "large-file")
       screenshot("\(scenario)-confirmation")
       app.buttons["confirm-action"].click()
-      text(
-        "outcome",
-        contains: scenario == "trash-inside" ? "inside this inventory" : "outside this inventory")
+      // The banner names the outcome only; the inventory totals show where the space went.
+      outcome(is: "Moved to Trash.")
+      XCTAssertFalse(anyText(containing: "this inventory").exists, scenario)
       XCTAssertFalse(row("large-file").exists)
       let after = app.staticTexts["scope-total"].value as? String
       if scenario == "trash-inside" {
@@ -199,7 +205,7 @@ import XCTest
   func testFailuresPartialUnknownAndSavedOnlySelection() {
     for (scenario, target, action, expected) in [
       ("trash-failure", "large-file", "trash", "Failed"),
-      ("trash-unknown", "large-file", "trash", "unknown"),
+      ("trash-unknown", "large-file", "trash", "Moved to Trash."),
       ("trash-missing", "large-file", "trash", "Indeterminate"),
       ("permission-failure", "large-file", "delete", "Failed"),
       ("partial-deletion", "small-files", "delete", "Partial"),
@@ -208,6 +214,20 @@ import XCTest
       prepare(action, target: target)
       app.buttons["confirm-action"].click()
       text("outcome", contains: expected)
+      if scenario == "trash-unknown" {
+        // The unknown Trash scope is a core issue in Details, not a banner sentence.
+        outcome(is: expected)
+        XCTAssertTrue(app.staticTexts["stale"].waitForExistence(timeout: 8))
+        // Only the chevron toggles Details. It sits below the start of the outcome text; the
+        // accessibility frame of the control starts at the banner edge.
+        let details = app.disclosureTriangles["issues"]
+        let chevron = app.staticTexts["outcome"].frame.minX + 4.5 - details.frame.minX
+        details.coordinate(withNormalizedOffset: .zero)
+          .withOffset(CGVector(dx: chevron, dy: details.frame.height / 2)).click()
+        XCTAssertTrue(
+          anyText(containing: "Trash destination scope is unknown").waitForExistence(timeout: 8))
+        screenshot("trash-unknown-issue-details")
+      }
       if scenario == "partial-deletion" {
         XCTAssertTrue(row("small-files").exists)
         XCTAssertTrue(app.staticTexts["stale"].exists)
@@ -235,7 +255,13 @@ import XCTest
     XCTAssertTrue(app.staticTexts["stale"].waitForExistence(timeout: 8))
     XCTAssertTrue(row("unknown-a").exists)
     row("unknown-a").click()
-    text("sharing-note", contains: "Shared or unknown")
+    text("selected-name", contains: "unknown-a")
+    text("selected-path", contains: "unknown-a")
+    // The card has no sharing note; the Incomplete badge marks the unknown sizes.
+    XCTAssertFalse(app.staticTexts["sharing-note"].exists)
+    for note in ["Shared or unknown size", "Shared space counted elsewhere"] {
+      XCTAssertFalse(anyText(containing: note).exists, note)
+    }
     screenshot("unknown-allocation")
   }
   func testImmediateSavedOnlySelection() {
@@ -736,7 +762,7 @@ import XCTest
       // Frame extraction aligns the screen recording with this wall-clock mark.
       print("MOTION_CONFIRM \(scenario) \(style) \(Date().timeIntervalSince1970)")
       app.buttons["confirm-action"].click()
-      text("outcome", contains: action == "trash" ? "Moved to Trash" : "Permanently deleted")
+      text("outcome", contains: action == "trash" ? "Moved to Trash." : "Deleted.")
       XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
       XCTAssertTrue(app.staticTexts["dirty"].waitForExistence(timeout: 8))
       let ran = NSPredicate(format: "label BEGINSWITH %@", style + " ")
@@ -1199,21 +1225,21 @@ import XCTest
         XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(appearance) \(name)")
       }
       check("empty-card hint", staticText("Click to select"), try windowPixels())
-      row("large-file").click()
-      text("selected-path", contains: "large-file")
+      row("small-files").click()
+      text("selected-path", contains: "small-files")
       leaveMap()
       let selection = try windowPixels()
-      check("card caption", staticText("Recorded allocation"), selection)
+      check("card caption", anyText(containing: " direct items"), selection)
       check("card path", app.staticTexts["selected-path"], selection)
       // The status bar names the hovered block.
       app.buttons["map-file-large-file"].hover()
       hovered("/Workspace/large-file")
       check("status path", app.staticTexts["status-path"], try windowPixels())
-      // The grouped-detail note moved from the footer to the card of a grouped block.
+      // The card of a grouped block shows its size.
       try clickHatch()
-      XCTAssertTrue(app.staticTexts["grouped-note"].waitForExistence(timeout: 8), appearance)
+      XCTAssertTrue(app.staticTexts["aggregate-text"].waitForExistence(timeout: 8), appearance)
       leaveMap()
-      check("card grouped note", app.staticTexts["grouped-note"], try windowPixels())
+      check("card grouped size", app.staticTexts["aggregate-text"], try windowPixels())
       screenshot("text-contrast-\(appearance)")
       app.terminate()
       launchStartScreen(storage: storage, appearance: appearance)
@@ -1726,8 +1752,7 @@ import XCTest
     XCTAssertFalse(row("new cache.db").exists)
     screenshot("refresh-stopped")
     app.buttons["refresh"].click()
-    text(
-      "outcome", contains: "Refreshed “Library” in memory. Saved snapshot unchanged.", timeout: 20)
+    outcome(is: "Refreshed “Library”.", timeout: 20)
     XCTAssertNotEqual(app.staticTexts["scope-total"].value as? String, total)
     disclosure("Caches").click()
     XCTAssertTrue(row("new cache.db").waitForExistence(timeout: 8))
@@ -1757,5 +1782,101 @@ import XCTest
     XCTAssertGreaterThanOrEqual(values["selections"] ?? 0, 30)
     XCTAssertEqual(values["gaps"], 0, "frames drawn without the selection dim")
     screenshot("flicker-after-clicks")
+  }
+  /// The header shows the scope size alone, the card shows only the item count of a directory
+  /// and the size of a grouped block: no accounting notes.
+  func testHeaderAndCardShowOnlySizesAndCountsWithoutAccountingNotes() throws {
+    continueAfterFailure = true
+    launch()
+    let size = "^[0-9][0-9.,]* (bytes|KB|MB|GB|TB|PB)$"
+    let total = (app.staticTexts["scope-total"].value as? String) ?? ""
+    XCTAssertNotNil(total.range(of: size, options: .regularExpression), "header total \(total)")
+    let hatch = try XCTUnwrap(try hatchPoint())
+    row("large-file").click()
+    text("selected-path", contains: "/Workspace/large-file")
+    XCTAssertFalse(anyText(containing: "Recorded allocation").exists, "file card")
+    XCTAssertFalse(app.staticTexts["sharing-note"].exists)
+    screenshot("card-file")
+    // A hard link whose allocation is counted at its other name has no sharing note.
+    row("hardlink-b").click()
+    text("selected-path", contains: "/Workspace/hardlink-b")
+    XCTAssertFalse(app.staticTexts["sharing-note"].exists, "hard link card")
+    XCTAssertFalse(anyText(containing: "Shared space counted elsewhere").exists)
+    row("small-files").click()
+    text("selected-path", contains: "/Workspace/small-files")
+    let count = anyText(containing: " direct items")
+    XCTAssertTrue(count.waitForExistence(timeout: 8))
+    let caption = (count.value as? String) ?? count.label
+    XCTAssertNotNil(
+      caption.range(of: "^[0-9][0-9,]* direct items$", options: .regularExpression), caption)
+    screenshot("card-directory")
+    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    XCTAssertTrue(app.staticTexts["selected-path"].waitForNonExistence(timeout: 8))
+    hatch.click()
+    let grouped = app.staticTexts["aggregate-text"]
+    XCTAssertTrue(grouped.waitForExistence(timeout: 8))
+    let groupedSize = (grouped.value as? String) ?? grouped.label
+    XCTAssertNotNil(
+      groupedSize.range(of: size, options: .regularExpression), "grouped card \(groupedSize)")
+    XCTAssertFalse(app.staticTexts["grouped-note"].exists)
+    XCTAssertFalse(anyText(containing: "grouped directory allocation").exists)
+    XCTAssertTrue(app.buttons["Show Directory Contents"].exists)
+    screenshot("card-grouped")
+  }
+  /// Help tags: the Incomplete and Not saved badges stay and have no help tag; Refresh says what
+  /// it does, without a snapshot note. In trials macOS often showed no further help tag in a
+  /// window after one hover check, or after a confirmed delete or Trash. So each check has its
+  /// own launch, and the badges come from a refresh.
+  func testRefreshHelpTagHasNoSnapshotNoteAndBadgesHaveNoHelpTags() throws {
+    continueAfterFailure = true
+    for (badge, name) in [("stale", "Incomplete"), ("dirty", "Not saved")] {
+      launch("unknown-allocation")
+      app.buttons["refresh"].click()
+      XCTAssertTrue(app.staticTexts[badge].waitForExistence(timeout: 8))
+      text(badge, contains: name)
+      XCTAssertFalse(showsHelpTag(app.staticTexts[badge]), "\(name) badge")
+      screenshot("badge-\(badge)-without-help-tag")
+      app.terminate()
+    }
+    launch()
+    let refreshHelp = try helpTagText(app.buttons["refresh"])
+    print("HELP refresh \(refreshHelp)")
+    XCTAssertTrue(refreshHelp.contains("Rescan the focused directory"), refreshHelp)
+    for part in ["memory", "snapshot"] { XCTAssertFalse(refreshHelp.contains(part), refreshHelp) }
+  }
+  /// Hovers `element` up to three times and reports whether a help tag appears. In trials
+  /// macOS sometimes skipped a help tag, mostly after clicks, so each try first rests the
+  /// pointer on two points of the tree.
+  func showsHelpTag(_ element: XCUIElement) -> Bool {
+    let tag = app.helpTags.firstMatch
+    for _ in 0..<3 {
+      for offset in [0.3, 0.6] {
+        app.outlines["entry-tree"].coordinate(
+          withNormalizedOffset: CGVector(dx: offset, dy: offset)
+        ).hover()
+        Thread.sleep(forTimeInterval: 1)
+      }
+      element.hover()
+      if tag.waitForExistence(timeout: 4) { return true }
+    }
+    return false
+  }
+  /// Hovers `element` and reads its help tag with on-device text recognition: the help tag
+  /// exposes no text to accessibility.
+  func helpTagText(_ element: XCUIElement) throws -> String {
+    let tag = app.helpTags.firstMatch
+    XCTAssertTrue(showsHelpTag(element), "help tag")
+    Thread.sleep(forTimeInterval: 0.5)
+    let shot = tag.screenshot()
+    let attachment = XCTAttachment(screenshot: shot)
+    attachment.name = "help-tag"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    let image = try XCTUnwrap(shot.image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    try VNImageRequestHandler(cgImage: image).perform([request])
+    return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+      .joined(separator: " ")
   }
 }

@@ -107,8 +107,8 @@ real runner's screenshots:
   contrast, white in dark contrast, 70% white without contrast.
 - "testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch".
 - "testMapTileBaseColorMatchesTreeSwatchOnScreen": the sRGB map shows the swatch color exactly.
-- "testCaptionAndSecondaryTextMeetFourAndAHalfToOne": card, status bar, grouped-note and
-  start-screen text.
+- "testCaptionAndSecondaryTextMeetFourAndAHalfToOne": card count, path and grouped size,
+  status bar and start-screen text.
 - "testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows" runs in all four values.
 
 Untested: the system chrome under real Increase Contrast, and a live system appearance change

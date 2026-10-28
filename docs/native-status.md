@@ -30,8 +30,8 @@ The former footer messages moved:
 | Operation and refresh outcomes | Outcome banner |
 | Details: error text and core issues | Outcome banner, Details disclosure |
 | Hovered path and size | Status bar, the path only |
-| "Recorded disk usage · Shared space is counted once · Deleting may free less space" | Removed. The card says "Shared space counted elsewhere" for a shared file. The confirmations have no space sentence. |
-| "Some map detail is grouped or reduced at this scale…" | The card of a selected grouped block |
+| "Recorded disk usage · Shared space is counted once · Deleting may free less space" | Removed. The card, the header and the confirmations have no space or accounting sentence. |
+| "Some map detail is grouped or reduced at this scale…" | Removed. The card of a grouped block shows its size. |
 
 ## Outcome banner
 
@@ -39,6 +39,12 @@ The banner floats over the top of the map, at most 440 points wide. It shows the
 (`error`), the outcome text (`outcome`) and a Details disclosure with the error text and the
 session issue log (`issues`). The banner hit-tests only its own frame, so the rest of the map
 takes clicks. It does not resize the map, also during result motion.
+
+A success says only what happened: "Deleted.", "Moved to Trash." or "Refreshed “Library”.". It
+names no Trash scope and no saved-snapshot state; the totals and the Not saved badge show
+those. An unknown Trash scope is a core issue in Details. Failed, partial and indeterminate
+results keep their own text. Of the header badges, only Partial has a help tag (the scan error
+count); Incomplete and Not saved have none.
 
 The banner stays until Dismiss, until a new outcome replaces the old one, or until a new folder
 opens. Dismiss clears the error and the outcome and marks the current issues as seen. The issue
@@ -94,7 +100,7 @@ a scan, and applies the read to the in-memory inventory. Stop before the commit 
 `BridgeError.Cancelled` and changes nothing. The banner then says "Refresh of “Library” stopped.
 The previous data is unchanged." The map, the tree and their frames stay valid; no rebuild runs.
 After the commit Stop is rejected, the update completes, and the banner says "Refreshed
-“Library” in memory. Saved snapshot unchanged." The details are in
+“Library”.". The details are in
 [operations.md](operations.md) and [scan-control.md](scan-control.md).
 
 Refresh covers the focused subtree, in memory only. Navigation never scans.
@@ -116,6 +122,12 @@ real runner:
   after Esc, and the sheet's Esc priority.
 - "testRefreshShowsNamedProgressWithCounterAndStopKeepsData": the named phase, a rising
   counter, Stop with unchanged data, then a complete refresh with the new file.
+- "testHeaderAndCardShowOnlySizesAndCountsWithoutAccountingNotes": the header size alone; file,
+  hard-link, directory and grouped cards without accounting or sharing notes.
+- "testRefreshHelpTagHasNoSnapshotNoteAndBadgesHaveNoHelpTags": the Incomplete and Not saved
+  badges have no help tag; the Refresh help tag, read by on-device text recognition, is
+  "Rescan the focused directory and descendants." Help tags appear unreliably after the first
+  one in a window, so each check has its own launch.
 
 Model tests in [FeedbackModelTests.swift](../native/ExplorerModelTests/FeedbackModelTests.swift):
 "testStatusTextNamesTheHoveredBlockWhileAnotherItemIsSelected" (the selection, the picture and

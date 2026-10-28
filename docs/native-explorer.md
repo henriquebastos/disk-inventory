@@ -70,25 +70,25 @@ and shared entries remain reachable in the tree.
 The map displays an immutable Rust squarified, flat-gradient bitmap with stable saved-name
 extension colors. Placement, refinement, pixel ownership, bounds and tests are
 specified in [native-diagram.md](native-diagram.md). Click links selection between
-tree and map; no directory header covers file pixels. Unresolved aggregates explain grouped
-detail in the card and offer directory navigation, never file removal. The status bar,
+tree and map; no directory header covers file pixels. The card of an unresolved aggregate
+shows only its size and offers directory navigation, never file removal. The status bar,
 the outcome banner, the selection dim, Esc and refresh progress are specified in
 [native-status.md](native-status.md).
 
 There is no inspector pane. A compact card below the tree shows the selected
-name/path, recorded allocation (directory subtree or file accounted allocation),
-direct-child count when applicable, and Reveal in Finder, Move to Trash… and Delete… actions
+name/path, its size (directory subtree or file accounted allocation),
+the direct-item count of a directory, and Reveal in Finder, Move to Trash… and Delete… actions
 with the same enable rules as the menu bar.
 Collapsing ancestors preserves the action target; clicking the card name reveals
 its row without zooming. Finder URLs use saved raw bytes, not the display string.
-Sharing or unknown-size caveats appear when needed. Storage uses decimal KB through EB and the system locale, with at most one decimal place.
+The card has no accounting or sharing note. Storage uses decimal KB through EB and the system locale, with at most one decimal place.
 [NativeNumberFormat.swift](../native/Explorer/NativeNumberFormat.swift) reuses Foundation formatters and scales exact UInt64 values through Decimal.
 [NativeNumberFormatTests.swift](../native/ExplorerModelTests/NativeNumberFormatTests.swift):
 "testDecimalStorageUsesLocaleAndPreservesUnsignedRange" checks units, grouping, zero and UInt64.max in en_US and pt_BR.
 "testVisibleTreeSizeUsesInjectedLocaleWithoutChangingAccounting" checks size cells against exact counts.
-Counts use locale grouping. Confirmations omit sizes instead of implying reclaimable space. Partial,
-incomplete and changed indicators remain visible. Recorded usage is
-not guaranteed reclaimable space; detailed errors stay behind a disclosure.
+Counts use locale grouping. Confirmations omit sizes instead of implying reclaimable space. The
+header shows the scope size alone; its Partial, Incomplete and Not saved badges stay. Detailed
+errors stay behind a disclosure.
 
 ## 1c Asynchronous ownership and operations
 
@@ -108,8 +108,8 @@ Trash and permanent deletion prepare off-main and keep the PreparedAction for a
 separate native alert sheet. Its keys, pins and protections are specified in
 [native-commands.md](native-commands.md).
 
-Outcomes distinguish successful, failed, partial and indeterminate results, including
-inside/outside/unknown Trash scope, in the outcome banner. Issues remain in its session log.
+The outcome banner distinguishes success, failed, partial and indeterminate results; its
+texts are in [native-status.md](native-status.md). Issues remain in its session log.
 Only current views/status are requested after core reconciliation; the snapshot is
 not reopened, rescanned or rewritten. Invalid focus recovers to a known live ancestor. Successful removal uses bounded
 result motion; failed/partial/uncertain outcomes never animate whole-target success.
@@ -126,11 +126,12 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
   position while the selected directory remains above the visible viewport.
 - "testConfirmationCancelDeleteAndStaleHandleRecovery": cancellation, confirmed
   deletion, disappeared target, dirty inventory and root protection.
-- "testTrashInsideAndOutside": real prepared Trash, changed views and scope totals.
+- "testTrashInsideAndOutside": real prepared Trash, the plain outcome, changed views and totals.
 - "testFailuresPartialUnknownAndSavedOnlySelection": failed/indeterminate/partial outcomes,
-  survivors, incomplete state and selection despite unavailable live metadata.
+  the unknown Trash scope in Details, survivors, incomplete state and selection despite
+  unavailable live metadata.
 - "testChangedTargetAndUnknownAllocation": stale target preparation and unknown
-  allocations after explicit refresh.
+  allocations after explicit refresh, with no sharing note.
 - "testImmediateSavedOnlySelection": later selection during the
   latency scenario; XCUITest timing includes automation waits, not paint latency.
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.
