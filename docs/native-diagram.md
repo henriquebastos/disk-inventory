@@ -20,6 +20,16 @@ and final-edge closure to prevent drift across large sibling prefixes at nonzero
 origins. Legacy per-child floating-length arithmetic and limits remain unchanged;
 row scoring/orientation is shared, not a second placement algorithm.
 
+The placement equals the design prototype's `layout()`: the same rows, worst-ratio test,
+orientation, largest-first order and no padding.
+"squarify_matches_prototype_layout_at_render_and_portrait_viewports" in
+[prototype_parity_tests.rs](../src/bridge/fixture/prototype_parity_tests.rs) ports its `sq()`
+and `place()` and lays out the `prototype-home` fixture. At 939×750 (the design render),
+640×900 and 1702×1251, all 514 drawn files match within 1 px. Not compared: files that the
+prototype omits (hatched directories under 3 px, files under 0.5 px²) and files inside our
+aggregates. A rollup is one sibling with the summed weight, so at 200×150 and 60×40 later
+siblings can move.
+
 Both views use the same priority-driven bounded refinement machinery, preserving
 zero-area semantics. Directory accounting and unresolved descendants remain aggregates.
 

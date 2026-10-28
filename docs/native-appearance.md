@@ -16,7 +16,7 @@ color and the tests that check it.
 | Tree swatch of a directory | Swift `NSColor.systemGray` | System | System |
 | Map surround, motion hole | Swift `windowBackgroundColor` | System | System |
 | Dim, selection ring | Swift, black and white | Same | Same |
-| Hover outline | Swift, white | 1 point, 70% opacity | 2 points, opaque |
+| Hover outline | Swift | White, 1 point, 70% opacity | 2 points, opaque: label color (black) in light, white in dark |
 | Tree background | AppKit `.inset` table style | Opaque content color | System |
 | Header and card | SwiftUI `.bar` material | System | System |
 | Text | SwiftUI primary label color | System | System |
@@ -81,7 +81,8 @@ real runner's screenshots:
 - "testMapHatchFollowsAppearance": light stripes on a light window, dark stripes on a dark
   window, stronger stripes with a contrast value.
 - "testIncreasedContrastDarkensMapSeams": at least 3:1 with a contrast value, below 2:1 without.
-- "testIncreasedContrastHoverStrokeIsOpaqueAndTwoPointsWide".
+- "testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast": black in light
+  contrast, white in dark contrast, 70% white without contrast.
 - "testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch".
 - "testMapTileBaseColorMatchesTreeSwatchOnScreen": the sRGB map shows the swatch color exactly.
 - "testCaptionAndSecondaryTextMeetFourAndAHalfToOne": card, footer and start-screen text.

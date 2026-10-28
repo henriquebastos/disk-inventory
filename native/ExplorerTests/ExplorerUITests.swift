@@ -902,27 +902,140 @@ import XCTest
       app.terminate()
     }
   }
-  func testIncreasedContrastHoverStrokeIsOpaqueAndTwoPointsWide() throws {
+  /// Increase Contrast: an opaque 2-point hover outline, black (the label color) in light and
+  /// white in dark. Without Increase Contrast: the 1-point white outline at 70% opacity.
+  func testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast() throws {
     continueAfterFailure = true
-    for appearance in ["light-contrast", "dark-contrast"] {
+    for appearance in Self.appearances {
       launch(appearance: appearance)
       let tile = app.buttons["map-file-large-file"]
       XCTAssertTrue(tile.waitForExistence(timeout: 8))
       tile.hover()
       text("hover-name", contains: "large-file")
+      screenshot("hover-stroke-\(appearance)")
       let p = try windowPixels()
-      // Four backing pixels from the left and the top edge: the first three are fully covered.
+      // Backing pixels from the left and the top edge. With 2 points (4 backing pixels), the
+      // first three are fully covered and the sixth is inside the tile.
       let left = Int(((tile.frame.minX - p.origin.x) * p.scale).rounded(.up))
       let top = Int(((tile.frame.minY - p.origin.y) * p.scale).rounded(.up))
       let midX = p.x(tile.frame.midX)
       let midY = p.y(tile.frame.midY)
       let edge =
         (0..<3).map { p.rgb(left + $0, midY) } + (0..<3).map { p.rgb(midX, top + $0) }
-      print("HOVER \(appearance) edge=\(edge)")
-      for pixel in edge {
-        XCTAssertGreaterThanOrEqual(pixel.min()!, 250, "\(appearance): opaque white \(pixel)")
+      let inside = [p.rgb(left + 5, midY), p.rgb(midX, top + 5)]
+      print("HOVER \(appearance) edge=\(edge) inside=\(inside)")
+      for (pixel, interior) in zip([edge[0], edge[3]], inside) {
+        switch appearance {
+        case "light-contrast":
+          XCTAssertLessThanOrEqual(pixel.max()!, 10, "\(appearance): opaque black \(pixel)")
+        case "dark-contrast":
+          XCTAssertGreaterThanOrEqual(pixel.min()!, 250, "\(appearance): opaque white \(pixel)")
+        default:
+          // White at 70% over the tile: lighter than the tile, but not opaque white.
+          XCTAssertGreaterThan(pixel.min()!, interior.max()!, "\(appearance): white outline")
+          XCTAssertLessThan(pixel.min()!, 250, "\(appearance): 70% opacity \(pixel)")
+        }
       }
-      screenshot("hover-stroke-\(appearance)")
+      if appearance.hasSuffix("contrast") {
+        for pixel in edge {
+          XCTAssertLessThanOrEqual(
+            zip(pixel, edge[0]).map { abs($0 - $1) }.max()!, 3, "\(appearance): solid 2 points")
+        }
+        for pixel in inside {
+          XCTAssertGreaterThan(
+            zip(pixel, edge[0]).map { abs($0 - $1) }.max()!, 40, "\(appearance): 2 points wide")
+        }
+      }
+      app.terminate()
+    }
+  }
+  /// Map pixels by type color: for each colored kind of the prototype palette, the share of
+  /// sampled map pixels whose hue is nearest to that kind. Gray pixels count as neutral.
+  func kindShares(_ p: WindowPixels, map frame: CGRect) -> (
+    shares: [String: Double], neutral: Double
+  ) {
+    let kinds: [(String, [Int])] = [
+      ("video", [79, 138, 198]), ("image", [81, 153, 98]), ("audio", [171, 109, 166]),
+      ("archive", [173, 124, 47]), ("app", [133, 122, 196]), ("code", [0, 153, 160]),
+      ("cache", [190, 110, 82]), ("data", [138, 140, 52]),
+    ]
+    // The tint, the shade and the seam mix with white or black, which keeps the HSV hue.
+    func hue(_ c: [Int]) -> (hue: Double, saturation: Double) {
+      let (r, g, b) = (Double(c[0]), Double(c[1]), Double(c[2]))
+      let high = max(r, g, b)
+      let span = high - min(r, g, b)
+      guard span > 0 else { return (0, 0) }
+      let h: Double =
+        high == r ? (g - b) / span : high == g ? 2 + (b - r) / span : 4 + (r - g) / span
+      return ((h * 60 + 360).truncatingRemainder(dividingBy: 360), span / high)
+    }
+    let kindHues = kinds.map { ($0.0, hue($0.1).hue) }
+    var counts: [String: Int] = [:]
+    var (neutral, total) = (0, 0)
+    for y in stride(from: p.y(frame.minY) + 2, to: p.y(frame.maxY) - 2, by: 3) {
+      for x in stride(from: p.x(frame.minX) + 2, to: p.x(frame.maxX) - 2, by: 3) {
+        total += 1
+        let pixel = hue(p.rgb(x, y))
+        guard pixel.saturation > 0.25 else {
+          neutral += 1
+          continue
+        }
+        var nearest = (kind: "", distance: 360.0)
+        for (kind, kindHue) in kindHues {
+          let d = abs(kindHue - pixel.hue)
+          if min(d, 360 - d) < nearest.distance { nearest = (kind, min(d, 360 - d)) }
+        }
+        counts[nearest.kind, default: 0] += 1
+      }
+    }
+    return (
+      counts.mapValues { Double($0) / Double(total) }, Double(neutral) / Double(max(total, 1))
+    )
+  }
+  /// `prototype-home` rebuilds the prototype's data with real extensions, so the map shows
+  /// every colored kind of the palette. `presentation` stays unchanged: files without an
+  /// extension draw a gray map.
+  func testPrototypeHomeMapShowsEveryKindColorAndPresentationStaysGray() throws {
+    continueAfterFailure = true
+    for (scenario, appearance) in [
+      ("prototype-home", "dark"), ("prototype-home", "light"), ("presentation", "dark"),
+      ("presentation", "light"),
+    ] {
+      launch(scenario, appearance: appearance)
+      let probe = app.descendants(matching: .any)["map-appearance"]
+      guard probe.waitForExistence(timeout: 8) else {
+        XCTFail("\(scenario) \(appearance): no map")
+        app.terminate()
+        continue
+      }
+      XCTAssertEqual(probe.label, appearance)
+      let largest = scenario == "presentation" ? "large-file" : "Interview raw.mov"
+      XCTAssertTrue(app.buttons["map-file-\(largest)"].waitForExistence(timeout: 8))
+      row(scenario == "presentation" ? "zero-byte" : "Documents").hover()
+      text("hover-name", contains: "Recorded disk usage")
+      screenshot("\(scenario)-\(appearance)")
+      // The map view is not an accessibility element. Its padded area starts at the probe,
+      // right of the tree, and ends above the footer; 20 points inside that area is map.
+      let left = app.outlines["entry-tree"].frame.maxX + 20
+      let top = probe.frame.minY + 20
+      let map = CGRect(
+        x: left, y: top, width: app.windows.firstMatch.frame.maxX - 20 - left,
+        height: app.staticTexts["hover-name"].frame.minY - 20 - top)
+      let result = kindShares(try windowPixels(), map: map)
+      let report = result.shares.sorted { $0.key < $1.key }
+        .map { "\($0.key)=\(String(format: "%.3f", $0.value))" }.joined(separator: " ")
+      print(
+        "KINDS \(scenario) \(appearance) map=\(map) neutral=\(String(format: "%.3f", result.neutral)) \(report)"
+      )
+      let shown = result.shares.filter { $0.value >= 0.005 }.keys.sorted()
+      if scenario == "prototype-home" {
+        XCTAssertEqual(
+          shown, ["app", "archive", "audio", "cache", "code", "data", "image", "video"],
+          "\(appearance): every colored kind covers at least 0.5% of the map")
+        XCTAssertGreaterThanOrEqual(result.neutral, 0.005, "\(appearance): gray documents")
+      } else {
+        XCTAssertEqual(shown, [], "\(appearance): presentation files have no extension")
+      }
       app.terminate()
     }
   }

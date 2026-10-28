@@ -138,6 +138,158 @@ fn visual_details_map() -> Result<Map, BridgeError> {
     Ok(map)
 }
 
+/// Builder for `prototype-home`: the data tree of the specialist prototype
+/// (`Explorer Window.dc.html`, `data()`), ported step by step. Directories own zero bytes.
+struct PrototypeHome {
+    map: Map,
+    /// The prototype's Park-Miller generator: `s = s * 16807 % 2147483647`, seed 11.
+    seed: u64,
+    inode: u64,
+}
+impl PrototypeHome {
+    fn add(&mut self, parent: u32, name: &str, kind: Kind, bytes: u64) -> Result<u32, BridgeError> {
+        self.inode += 1;
+        Ok(self.map.add(
+            parent,
+            name.as_bytes(),
+            Entry {
+                kind,
+                dev: 1,
+                ino: self.inode,
+                flags: 0,
+                links: 1,
+                allocation: Some(bytes),
+                mount: 0,
+            },
+        )?)
+    }
+    fn dir(&mut self, parent: u32, name: &str) -> Result<u32, BridgeError> {
+        self.add(parent, name, Kind::Dir, 0)
+    }
+    /// The prototype's `F(name, parent, kind, gb)`.
+    fn file(&mut self, parent: u32, name: &str, gigabytes: f64) -> Result<(), BridgeError> {
+        self.add(parent, name, Kind::File, round_half_up(gigabytes * 1e9))?;
+        Ok(())
+    }
+    /// The prototype's `gen(parent, kind, count, total, base)`. Weights are `r()^2.4 + 0.015`
+    /// in generator order; each size is `round(w / sum * total * 1e9)`, so the sum can differ
+    /// from `total` by a few bytes, as in the prototype.
+    fn generate(
+        &mut self,
+        parent: u32,
+        extensions: &[&str],
+        count: usize,
+        total_gigabytes: f64,
+        base: &str,
+    ) -> Result<(), BridgeError> {
+        let weights: Vec<f64> = (0..count)
+            .map(|_| {
+                self.seed = self.seed * 16807 % 2_147_483_647;
+                (self.seed as f64 / 2_147_483_647.0).powf(2.4) + 0.015
+            })
+            .collect();
+        let sum = weights.iter().fold(0.0, |a, b| a + b);
+        for (i, weight) in weights.iter().enumerate() {
+            let name = format!("{base} {:02}.{}", i + 1, extensions[i % extensions.len()]);
+            let bytes = round_half_up(weight / sum * total_gigabytes * 1e9);
+            self.add(parent, &name, Kind::File, bytes)?;
+        }
+        Ok(())
+    }
+}
+/// JavaScript `Math.round` for non-negative values: halves round up.
+fn round_half_up(value: f64) -> u64 {
+    let floor = value.floor();
+    (if value - floor >= 0.5 {
+        floor + 1.0
+    } else {
+        floor
+    }) as u64
+}
+// The prototype's `EXT` table: file kinds by extension, used in this order.
+const VIDEO: &[&str] = &["mov", "mp4"];
+const IMAGE: &[&str] = &["heic", "jpg", "png"];
+const AUDIO: &[&str] = &["m4a", "wav"];
+const ARCHIVE: &[&str] = &["zip", "dmg"];
+const CODE: &[&str] = &["o", "swiftmodule", "js"];
+const CACHE: &[&str] = &["db", "cache"];
+const DATA: &[&str] = &["sqlite", "bin"];
+const DOC: &[&str] = &["pdf", "pages", "txt"];
+/// The prototype's 236.9 GB home folder `/Users/ana`. Calls follow the prototype's order,
+/// because each `generate` call advances the shared generator. One folder differs:
+/// `Developer/CoreDevice` is the prototype's `CoreSimulator`, because visible text may say
+/// "simulated" only in the fixture window title.
+pub(super) fn prototype_home_map() -> Result<Map, BridgeError> {
+    let mut h = PrototypeHome {
+        map: Map {
+            root: PathBuf::from("/Users/ana"),
+            nodes: vec![],
+            names: vec![],
+            counters: Counters::default(),
+            error_samples: vec![],
+        },
+        seed: 11,
+        inode: 3000,
+    };
+    h.add(0, "", Kind::Dir, 0)?;
+    let library = h.dir(0, "Library")?;
+    let developer = h.dir(library, "Developer")?;
+    let xcode = h.dir(developer, "Xcode")?;
+    let derived = h.dir(xcode, "DerivedData")?;
+    for (name, total) in [
+        ("Atlas-bqzk", 18.0),
+        ("Website-hrtd", 12.0),
+        ("Playground-ajwe", 7.0),
+        ("Widgets-cmno", 4.2),
+    ] {
+        let project = h.dir(derived, name)?;
+        h.generate(project, CODE, 14, total, "Build")?;
+    }
+    let archives = h.dir(xcode, "Archives")?;
+    h.generate(archives, ARCHIVE, 6, 5.8, "Atlas")?;
+    let devices = h.dir(developer, "CoreDevice")?;
+    h.generate(devices, DATA, 18, 13.1, "Device")?;
+    let support = h.dir(library, "Application Support")?;
+    h.generate(support, DATA, 30, 22.4, "store")?;
+    let caches = h.dir(library, "Caches")?;
+    h.generate(caches, CACHE, 40, 17.6, "cache")?;
+    let containers = h.dir(library, "Containers")?;
+    h.generate(containers, DATA, 20, 8.9, "container")?;
+    let movies = h.dir(0, "Movies")?;
+    let trip = h.dir(movies, "Trip 2025.fcpbundle")?;
+    h.generate(trip, VIDEO, 22, 31.4, "Clip")?;
+    h.file(movies, "Interview raw.mov", 14.2)?;
+    h.generate(movies, VIDEO, 8, 5.6, "Screen Recording")?;
+    let downloads = h.dir(0, "Downloads")?;
+    h.file(downloads, "Install macOS.app", 13.4)?;
+    h.file(downloads, "dataset-2026.zip", 8.7)?;
+    h.generate(downloads, ARCHIVE, 10, 3.1, "download")?;
+    h.generate(downloads, IMAGE, 12, 2.2, "IMG")?;
+    h.generate(downloads, DOC, 15, 1.4, "Invoice")?;
+    let pictures = h.dir(0, "Pictures")?;
+    let photos = h.dir(pictures, "Photos Library.photoslibrary")?;
+    h.generate(photos, IMAGE, 70, 21.8, "IMG")?;
+    let projects = h.dir(0, "Projects")?;
+    let atlas = h.dir(projects, "atlas")?;
+    let modules = h.dir(atlas, "node_modules")?;
+    h.generate(modules, CODE, 60, 5.9, "module")?;
+    h.generate(atlas, CODE, 30, 3.2, "src")?;
+    h.generate(projects, IMAGE, 8, 3.6, "Render")?;
+    let website = h.dir(projects, "website")?;
+    h.generate(website, CODE, 25, 2.4, "page")?;
+    let music = h.dir(0, "Music")?;
+    h.generate(music, AUDIO, 30, 4.8, "Track")?;
+    let trash = h.dir(0, ".Trash")?;
+    h.generate(trash, VIDEO, 3, 1.4, "Old clip")?;
+    h.generate(trash, DOC, 8, 0.9, "old")?;
+    let documents = h.dir(0, "Documents")?;
+    h.generate(documents, DOC, 40, 3.9, "Doc")?;
+    h.file(documents, "notes.txt", 0.000004)?;
+    h.file(documents, "empty.log", 0.0)?;
+    h.map.aggregate()?;
+    Ok(h.map)
+}
+
 pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSystem>, BridgeError> {
     if ![
         "dix",
@@ -145,6 +297,7 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         "dix-deep",
         "ordinary",
         "presentation",
+        "prototype-home",
         "visual-details",
         "metadata-delay",
         "trash-inside",
@@ -177,6 +330,8 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         )?
     } else if scenario == "visual-details" {
         visual_details_map()?
+    } else if scenario == "prototype-home" {
+        prototype_home_map()?
     } else if matches!(
         scenario,
         "presentation"
@@ -233,6 +388,9 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
     }
     Ok(OperationSession::new(Explorer::from_map(map)?, fs))
 }
+
+#[cfg(test)]
+mod prototype_parity_tests;
 
 fn dix_map(count: u32, deep: bool) -> Result<Map, BridgeError> {
     let mut map = Map {

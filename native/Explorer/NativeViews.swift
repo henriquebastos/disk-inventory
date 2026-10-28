@@ -457,9 +457,10 @@ struct DiagramView: NSViewRepresentable {
         shade.fill()
       }
       if let r = hoverRect, model?.motion.active != true {
-        if model?.picture?.appearance.increasedContrast == true {
-          // Increase Contrast: an opaque 2-point outline inside the block.
-          NSColor.white.setStroke()
+        if let appearance = model?.picture?.appearance, appearance.increasedContrast {
+          // Increase Contrast: an opaque 2-point outline inside the block. Light uses the
+          // label color (black), which stands out on the light hatch; dark uses white.
+          (appearance.dark ? NSColor.white : NSColor.labelColor.withAlphaComponent(1)).setStroke()
           let path = NSBezierPath(rect: rect(r).insetBy(dx: 1, dy: 1))
           path.lineWidth = 2
           path.stroke()

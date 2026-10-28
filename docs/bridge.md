@@ -124,6 +124,7 @@ Discover entries through bounded queries: `small-files/small-00` through
 |---|---|
 | `presentation` | Balanced 4096-byte large file and 128 small children for native UI pagination |
 | `metadata-delay` | Presentation inventory; only large-file MemoryFileSystem metadata sleeps one second |
+| `prototype-home` | The design prototype's 236.9 GB home `/Users/ana`: its names (`CoreSimulator` is `CoreDevice`), hierarchy, sizes and extensions; directories own zero bytes |
 | `visual-details` | Isolated nested groups and a long directory path; entry-only metadata differs from subtree bytes |
 | `ordinary`, `trash-outside` | Trash moves to `/.Trash/moved` |
 | `trash-inside` | Moves to `trash/moved` within scope |
@@ -155,6 +156,18 @@ Discover entries through bounded queries: `small-files/small-00` through
 - "native_snapshot_open_never_requires_the_recorded_source": partial offline snapshot.
 - "update_issue_transfer_has_an_explicit_bound": diagnostic truncation count.
 - "invalid_bridge_requests_return_typed_errors_without_source_calls": input validation.
+
+[prototype_parity_tests.rs](../src/bridge/fixture/prototype_parity_tests.rs) checks
+`prototype-home`. The fixture ports the prototype's seed-11 Park-Miller generator
+(`s * 16807 % 2147483647`, weights `r^2.4 + 0.015`, JavaScript rounding) in call order.
+
+- "prototype_home_fixture_rebuilds_the_prototype_tree_exactly": 542 entries, 516 files,
+  236,900,003,996 bytes, and a path-and-size checksum equal to the prototype's own `data()`.
+- "prototype_home_extensions_get_the_prototype_kind_colors": every file gets its kind color.
+
+The UI test "testPrototypeHomeMapShowsEveryKindColorAndPresentationStaysGray" in
+[ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift) measures all eight
+colored kinds on the `prototype-home` map, and a gray `presentation` map, in light and dark.
 
 The Swift smoke exercises these generated conversions and operation flows, plus
 one explicitly owned one-file create followed by unavailable-source open. It
