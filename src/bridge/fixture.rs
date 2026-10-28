@@ -220,6 +220,11 @@ const DOC: &[&str] = &["pdf", "pages", "txt"];
 /// `Developer/CoreDevice` is the prototype's `CoreSimulator`, because visible text may say
 /// "simulated" only in the fixture window title.
 pub(super) fn prototype_home_map() -> Result<Map, BridgeError> {
+    prototype_home(false)
+}
+/// `nested_trash` adds `Projects/.Trash` after every prototype entry, so the prototype's files
+/// keep their sizes and the parity test needs no change.
+fn prototype_home(nested_trash: bool) -> Result<Map, BridgeError> {
     let mut h = PrototypeHome {
         map: Map {
             root: PathBuf::from("/Users/ana"),
@@ -286,6 +291,10 @@ pub(super) fn prototype_home_map() -> Result<Map, BridgeError> {
     h.generate(documents, DOC, 40, 3.9, "Doc")?;
     h.file(documents, "notes.txt", 0.000004)?;
     h.file(documents, "empty.log", 0.0)?;
+    if nested_trash {
+        let nested = h.dir(projects, ".Trash")?;
+        h.generate(nested, VIDEO, 4, 4.0, "Old render")?;
+    }
     h.map.aggregate()?;
     Ok(h.map)
 }
@@ -299,6 +308,7 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         "presentation",
         "prototype-home",
         "prototype-home-refresh",
+        "prototype-home-nested-trash",
         "visual-details",
         "metadata-delay",
         "trash-inside",
@@ -333,6 +343,8 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         visual_details_map()?
     } else if matches!(scenario, "prototype-home" | "prototype-home-refresh") {
         prototype_home_map()?
+    } else if scenario == "prototype-home-nested-trash" {
+        prototype_home(true)?
     } else if matches!(
         scenario,
         "presentation"

@@ -3,7 +3,7 @@ import XCTest
 
 @testable import DiskInventory
 
-/// Dogfood feedback: the root Trash region, Esc, the outcome banner, refresh progress and Stop,
+/// Dogfood feedback: the status bar hover, the Trash region, Esc, the outcome banner, refresh progress and Stop,
 /// and the selection region that caused the click flicker.
 @MainActor final class FeedbackModelTests: XCTestCase {
   func wait(
@@ -43,6 +43,38 @@ import XCTest
     XCTAssertEqual(model.selectedRegion?.x, hit.rect.x)
     XCTAssertEqual(model.selectedRegion?.height, hit.rect.height)
     XCTAssertEqual(model.selected?.displayName, "large-file")
+  }
+
+  func testStatusTextNamesTheHoveredBlockWhileAnotherItemIsSelected() async throws {
+    let model = try await load("prototype-home")
+    let session = try XCTUnwrap(model.session)
+    model.select(try row(model, "Movies").entry)
+    try await wait { model.selectedDisplayPath == "/Users/ana/Movies" }
+    XCTAssertEqual(model.statusText, "", "no hover: the status bar is empty")
+    let frame = try XCTUnwrap(model.picture?.frame)
+    let (builds, picture) = (model.diagramBuilds, model.picture)
+    let queries = session.selectionQueryCount()
+    let trash = try XCTUnwrap(try frame.region(key: try row(model, ".Trash").entry.key))
+    model.point(UInt32(trash.x + trash.width / 2), UInt32(trash.y + trash.height / 2))
+    try await wait { model.hover?.entry.displayName == ".Trash" }
+    XCTAssertEqual(model.statusText, "/Users/ana/.Trash")
+    let target = try XCTUnwrap(model.picture?.targets.first { $0.entry.kind == .file })
+    model.point(UInt32(target.rect.x + 2), UInt32(target.rect.y + 2))
+    try await wait { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
+    XCTAssertEqual(model.statusText, "/Users/ana/" + displayPath(target.relativePath))
+    // The selection, its path, the picture and the session stay: a hover is not a selection.
+    XCTAssertEqual(model.selected?.displayName, "Movies")
+    XCTAssertEqual(model.selectedDisplayPath, "/Users/ana/Movies")
+    XCTAssertEqual(model.diagramBuilds, builds)
+    XCTAssertTrue(model.picture?.frame === picture?.frame)
+    XCTAssertEqual(session.selectionQueryCount(), queries, "no selection query on hover")
+    // A grouped block names its folder.
+    model.hover = DiagramSelection(
+      entry: target.entry, relativePath: Data("Library".utf8), actionable: false,
+      rect: target.rect, bytes: 1)
+    XCTAssertEqual(model.statusText, "Grouped in /Users/ana/Library")
+    model.clearHover()
+    XCTAssertEqual(model.statusText, "", "pointer off the map")
   }
 
   func testTrashRegionSelectsTheTrashDirectory() async throws {

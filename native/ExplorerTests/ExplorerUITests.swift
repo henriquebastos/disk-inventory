@@ -43,15 +43,18 @@ import XCTest
     }
     XCTAssertEqual(result, .completed, "\(id) must contain \(value)")
   }
-  /// Waits until the fixture-only `map-hover` probe names `value` ("none" without a hover).
-  /// The status bar shows only the selected path, so the hover has no visible text.
+  /// Waits until the status bar names `value`, the hovered map block. "none" waits until the
+  /// status bar is empty: the pointer is off the map.
   func hovered(_ value: String, timeout: TimeInterval = 8) {
-    let probe = app.descendants(matching: .any)["map-hover"]
-    XCTAssertTrue(probe.waitForExistence(timeout: timeout))
-    let predicate = NSPredicate(format: "label CONTAINS %@", value)
-    let result = XCTWaiter.wait(
-      for: [XCTNSPredicateExpectation(predicate: predicate, object: probe)], timeout: timeout)
-    XCTAssertEqual(result, .completed, "hover must name \(value), got \(probe.label)")
+    let deadline = Date().addingTimeInterval(timeout)
+    var shown = statusPath()
+    while !(value == "none" ? shown.isEmpty : shown.contains(value)), Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.05)
+      shown = statusPath()
+    }
+    XCTAssertTrue(
+      value == "none" ? shown.isEmpty : shown.contains(value),
+      "the status bar must name \(value), got \(shown)")
   }
   func screenshot(_ name: String) {
     let attachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
@@ -304,10 +307,11 @@ import XCTest
       XCTAssertLessThan(
         app.staticTexts["confirmation-scope"].frame.maxY,
         app.staticTexts["confirmation-path"].frame.minY + 1)
-      text(
-        "confirmation-warning",
-        contains: action == "trash" ? "Trash may not free space until emptied." : "cannot be undone"
-      )
+      if action == "trash" {
+        XCTAssertFalse(anyText(containing: "free space").exists, "no space disclaimer")
+      } else {
+        text("confirmation-warning", contains: "cannot be undone")
+      }
       XCTAssertFalse(
         app.staticTexts.matching(
           NSPredicate(
@@ -408,12 +412,12 @@ import XCTest
         app.staticTexts.matching(NSPredicate(format: "value == %@ OR label == %@", amount, amount))
           .count,
         2)
+      // The selection lives in the card; the status bar names only the hovered block.
+      XCTAssertEqual(statusPath(), "", "the pointer is on the tree")
       let tile = app.buttons["map-file-large-file"]
       XCTAssertTrue(tile.waitForExistence(timeout: 8))
       tile.hover()
-      hovered("large-file")
-      // The status bar shows the selected path, not a localized amount.
-      text("status-path", contains: "/Workspace/large-file")
+      hovered("/Workspace/large-file")
       prepare("delete", target: "large-file")
       text("confirmation-path", contains: "large-file")
       text("confirmation-warning", contains: "cannot be undone")
@@ -804,15 +808,10 @@ import XCTest
     row("zero-byte").hover()
     hovered("none")
   }
-  /// Moves the pointer to the tree. Without the hover probe (an older product) it waits a
-  /// fixed second, so a measurement still runs and fails on the measured property.
+  /// Moves the pointer to the tree, so that no hover outline covers the map.
   func offMap() {
     app.outlines["entry-tree"].hover()
-    if app.descendants(matching: .any)["map-hover"].waitForExistence(timeout: 2) {
-      hovered("none")
-    } else {
-      Thread.sleep(forTimeInterval: 1)
-    }
+    hovered("none")
   }
   /// Gray levels of the aggregate hatch right of `minX`: neutral diagonal stripes, two pixels
   /// wide with a period of four, as Rust draws them on the backing grid.
@@ -839,7 +838,9 @@ import XCTest
   func statusBarTop() -> CGFloat { app.windows.firstMatch.frame.maxY - 29 }
   /// Clicks the middle of an area of aggregate hatch on the map, which selects the grouped
   /// directory allocation.
-  func clickHatch() throws {
+  func clickHatch() throws { try hatchPoint()?.click() }
+  /// The middle of an area of aggregate hatch on the map.
+  func hatchPoint() throws -> XCUICoordinate? {
     let p = try windowPixels()
     let minX = app.outlines["entry-tree"].frame.maxX
     let levels = hatchLevels(p, minX: minX)
@@ -854,15 +855,14 @@ import XCTest
       for x in stride(from: max(0, p.x(minX)) + 8, to: p.image.pixelsWide - 8, by: 2)
       where (-6...6).allSatisfy({ d in hatch(x + d, y) && hatch(x, y + d) }) {
         let window = app.windows.firstMatch
-        window.coordinate(withNormalizedOffset: .zero).withOffset(
+        return window.coordinate(withNormalizedOffset: .zero).withOffset(
           CGVector(
             dx: CGFloat(x) / p.scale + p.origin.x - window.frame.minX,
-            dy: CGFloat(y) / p.scale + p.origin.y - window.frame.minY)
-        ).click()
-        return
+            dy: CGFloat(y) / p.scale + p.origin.y - window.frame.minY))
       }
     }
-    XCTFail("no hatch area to click")
+    XCTFail("no hatch area")
+    return nil
   }
   func testAppearanceVariantsRenderMapChromeAndSheets() {
     for appearance in Self.appearances {
@@ -875,6 +875,7 @@ import XCTest
       row("large-file").click()
       text("selected-name", contains: "large-file")
       text("selected-path", contains: "large-file")
+      leaveMap()
       screenshot("\(appearance)-selection")
       let tile = app.buttons["map-file-large-file"]
       XCTAssertTrue(tile.waitForExistence(timeout: 8))
@@ -1175,6 +1176,12 @@ import XCTest
       NSPredicate(format: "value BEGINSWITH %@ OR label BEGINSWITH %@", prefix, prefix)
     ).firstMatch
   }
+  /// Any text in the app, a sheet included, that contains `part`.
+  func anyText(containing part: String) -> XCUIElement {
+    app.staticTexts.matching(
+      NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", part, part)
+    ).firstMatch
+  }
   func testCaptionAndSecondaryTextMeetFourAndAHalfToOne() throws {
     continueAfterFailure = true
     let storage = try lastFolderMetadata(rootName: "/Workspace")
@@ -1198,7 +1205,10 @@ import XCTest
       let selection = try windowPixels()
       check("card caption", staticText("Recorded allocation"), selection)
       check("card path", app.staticTexts["selected-path"], selection)
-      check("status path", app.staticTexts["status-path"], selection)
+      // The status bar names the hovered block.
+      app.buttons["map-file-large-file"].hover()
+      hovered("/Workspace/large-file")
+      check("status path", app.staticTexts["status-path"], try windowPixels())
       // The grouped-detail note moved from the footer to the card of a grouped block.
       try clickHatch()
       XCTAssertTrue(app.staticTexts["grouped-note"].waitForExistence(timeout: 8), appearance)
@@ -1311,8 +1321,8 @@ import XCTest
     }
     return (count, deep, mean(plain), mean(striped))
   }
-  /// The root `.Trash` is one striped region with the design's TRASH fill that selects the
-  /// Trash directory. Focused, the Trash shows its files with type colors.
+  /// The `.Trash` at the root is one striped region with the design's TRASH fill that selects
+  /// the Trash directory. Focused, the Trash shows its files with type colors.
   func testRootTrashShowsTrashStripesAndSelectsTheTrashUntilFocused() throws {
     continueAfterFailure = true
     for appearance in Self.appearances {
@@ -1356,6 +1366,49 @@ import XCTest
       XCTAssertEqual(inside.deep.count, 0, "\(appearance): focused Trash has no striped region")
       XCTAssertGreaterThan(video, 0.3, "\(appearance): focused Trash shows video colors")
       screenshot("trash-\(appearance)-focused")
+      app.terminate()
+    }
+  }
+  /// A `.Trash` at any depth is one striped block at its parent's level. The block selects
+  /// that `.Trash`, and on hover the status bar names its path. Focused, the `.Trash` shows its
+  /// files in type colors.
+  func testNestedTrashIsStripedAtItsParentLevelAndColoredWhenFocused() throws {
+    continueAfterFailure = true
+    for appearance in ["dark", "light"] {
+      launch("prototype-home-nested-trash", appearance: appearance)
+      row("Projects").doubleClick()
+      text("focus-name", contains: "Projects")
+      let renders = app.buttons.matching(
+        NSPredicate(format: "identifier BEGINSWITH %@", "map-file-Render "))
+      XCTAssertTrue(renders.firstMatch.waitForExistence(timeout: 8), "\(appearance): Projects map")
+      offMap()
+      screenshot("nested-trash-\(appearance)-projects")
+      let trash = trashPixels(try windowPixels(srgb: true), map: mapArea(), appearance: appearance)
+      print("NESTED TRASH \(appearance) pixels=\(trash.count) deep=\(trash.deep.count)")
+      guard trash.count > 500, trash.deep.count > 20 else {
+        XCTFail("\(appearance): no Trash stripes for Projects/.Trash")
+        app.terminate()
+        continue
+      }
+      let middle = trash.deep[trash.deep.count / 2]
+      click(middle)
+      text("selected-name", contains: ".Trash")
+      text("selected-path", contains: "/Users/ana/Projects/.Trash")
+      hovered("/Users/ana/Projects/.Trash")
+      XCTAssertEqual(statusPath(), "/Users/ana/Projects/.Trash", appearance)
+      XCTAssertFalse(app.buttons["map-file-Old render 01.mov"].exists, "children are not drawn")
+      screenshot("nested-trash-\(appearance)-selected")
+      click(middle, double: true)
+      text("focus-name", contains: ".Trash")
+      XCTAssertTrue(app.buttons["map-file-Old render 01.mov"].waitForExistence(timeout: 8))
+      offMap()
+      let pixels = try windowPixels(srgb: true)
+      let inside = trashPixels(pixels, map: mapArea(), appearance: appearance)
+      let video = kindShares(pixels, map: mapArea()).shares["video"] ?? 0
+      print("NESTED TRASH \(appearance) focused deep=\(inside.deep.count) video=\(video)")
+      XCTAssertEqual(inside.deep.count, 0, "\(appearance): focused .Trash has no striped region")
+      XCTAssertGreaterThan(video, 0.3, "\(appearance): focused .Trash shows video colors")
+      screenshot("nested-trash-\(appearance)-focused")
       app.terminate()
     }
   }
@@ -1573,34 +1626,37 @@ import XCTest
     XCTAssertTrue(row("large-file").exists)
     screenshot("esc-after-map")
   }
-  /// The status bar shows only the complete path of the selected item. Hover text, the old
-  /// default text and outcomes are gone from it; outcomes use the banner over the map.
-  func testStatusBarShowsOnlyTheSelectedItemPath() throws {
+  /// The status bar names the map block under the pointer, also while another item is
+  /// selected: its complete path, or "Grouped in" and the folder path for a grouped block. With
+  /// the pointer off the map it is empty; the selection lives in the card. Outcomes use the
+  /// banner over the map.
+  func testStatusBarShowsTheHoveredBlockAlsoWhileAnItemIsSelected() throws {
     launch()
     let tile = app.buttons["map-file-large-file"]
     XCTAssertTrue(tile.waitForExistence(timeout: 8))
     XCTAssertEqual(statusPath(), "")
-    XCTAssertEqual(
-      app.staticTexts.matching(
-        NSPredicate(
-          format: "value CONTAINS %@ OR label CONTAINS %@", "Recorded disk usage",
-          "Recorded disk usage")
-      ).count, 0)
+    XCTAssertFalse(anyText(containing: "Recorded disk usage").exists)
+    // Find the grouped block before the selection dims the map.
+    let hatch = try XCTUnwrap(try hatchPoint())
+    row("small-files").click()
+    text("selected-path", contains: "/Workspace/small-files")
+    XCTAssertEqual(statusPath(), "", "a selection alone leaves the status bar empty")
+    screenshot("status-bar-selected-off-map")
     tile.hover()
-    hovered("large-file")
-    XCTAssertEqual(statusPath(), "", "no hover text")
-    row("large-file").click()
-    text("status-path", contains: "/Workspace/large-file")
+    hovered("/Workspace/large-file")
     XCTAssertEqual(statusPath(), "/Workspace/large-file")
+    text("selected-name", contains: "small-files")
+    text("selected-path", contains: "/Workspace/small-files")
     XCTAssertGreaterThanOrEqual(app.staticTexts["status-path"].frame.minY, statusBarTop() - 1)
-    screenshot("status-bar-selected")
-    // Deletion keeps the less-space warning in its confirmation.
-    prepare("delete", target: "zero-byte")
-    text("confirmation-warning", contains: "Deleting may free less space than shown.")
-    app.buttons["cancel-action"].click()
-    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
+    screenshot("status-bar-hover-while-selected")
+    hatch.hover()
+    hovered("Grouped in /Workspace")
+    text("selected-name", contains: "small-files")
+    screenshot("status-bar-hover-grouped")
+    row("zero-byte").hover()
+    hovered("none")
+    XCTAssertEqual(statusPath(), "", "pointer off the map")
     prepare("trash", target: "large-file")
-    text("confirmation-warning", contains: "Trash may not free space until emptied.")
     app.buttons["confirm-action"].click()
     text("outcome", contains: "Moved to Trash")
     let outcome = app.staticTexts["outcome"]
@@ -1610,7 +1666,38 @@ import XCTest
     screenshot("status-bar-outcome-banner")
     app.buttons["dismiss-banner"].click()
     XCTAssertTrue(outcome.waitForNonExistence(timeout: 8))
-    screenshot("status-bar-after-dismiss")
+  }
+  /// Both confirmation sheets name what they remove and how, without a space disclaimer. Only
+  /// Delete says that it cannot be undone.
+  func testConfirmationSheetsKeepSafetyTextWithoutSpaceDisclaimers() {
+    launch()
+    for (target, scope) in [("large-file", "File"), ("small-files", "Directory and its contents")] {
+      for action in ["trash", "delete"] {
+        prepare(action, target: target)
+        text("confirmation-scope", contains: scope)
+        text("confirmation-path", contains: "/Workspace/\(target)")
+        for sentence in [
+          "Trash may not free space until emptied.", "Deleting may free less space than shown.",
+        ] {
+          XCTAssertFalse(anyText(containing: sentence).exists, "\(action) \(target): \(sentence)")
+        }
+        if action == "trash" {
+          text("confirmation-title", contains: "Move “\(target)” to the Trash?")
+          XCTAssertEqual(app.buttons["confirm-action"].title, "Move to Trash")
+          XCTAssertFalse(anyText(containing: "cannot be undone").exists, "Trash can be undone")
+        } else {
+          text("confirmation-title", contains: "Delete “\(target)” immediately?")
+          XCTAssertEqual(app.buttons["confirm-action"].title, "Delete Immediately")
+          text("confirmation-warning", contains: "This cannot be undone.")
+          if scope != "File" {
+            text("confirmation-warning", contains: "An error may leave some contents undeleted.")
+          }
+        }
+        screenshot("sheet-\(action)-\(target)")
+        app.buttons["cancel-action"].click()
+        XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
+      }
+    }
   }
   /// Refresh shows the scan's progress with the folder name, a live counter and Stop. Stop
   /// keeps the previous data and says so; a complete refresh applies the live change.

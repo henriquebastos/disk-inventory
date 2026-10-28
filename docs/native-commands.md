@@ -81,7 +81,9 @@ a separate confirmation: an NSAlert sheet
 ([ConfirmationAlert.swift](../native/Explorer/ConfirmationAlert.swift)). SwiftUI drew
 destructive buttons gray. The title names the item (`Move “NAME” to the Trash?`,
 `Delete “NAME” immediately?`). Long names shorten in the middle. A box shows the
-scope and the full path, and it scrolls when the path is long.
+scope and the full path, and it scrolls when the path is long. Only the Delete alert has
+informative text: "This cannot be undone.", plus "An error may leave some contents undeleted."
+for a directory. Neither alert has a sentence about freed space.
 
 The buttons stack: the action on top, Cancel below. Esc cancels, and Cancel is never
 the default. Return confirms only Trash. Delete Immediately is red. Under the alert,
@@ -130,6 +132,10 @@ no permanent-delete Undo.
 - "testTrashConfirmationReturnConfirmsWithCancelBelowAction": Return trashes.
 - "testPermanentConfirmationHasNoDefaultAndEscapeCancels": Return does nothing, Esc
   cancels, then deletion succeeds.
+- "testConfirmationSheetsKeepSafetyTextWithoutSpaceDisclaimers": for a file and a directory,
+  both alerts show the scope and the path and no space sentence. Trash names the Trash in the
+  title and the button. Delete says "This cannot be undone." and, for a directory, the error
+  sentence.
 
 "testConfirmationPresentationNamesItemAndAssignsAlertRoles" in
 [RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift)

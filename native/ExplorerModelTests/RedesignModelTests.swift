@@ -528,7 +528,7 @@ import XCTest
         if action == .trash {
           XCTAssertEqual(pending.title, "Move “\(name)” to the Trash?")
           XCTAssertEqual(pending.actionTitle, "Move to Trash")
-          XCTAssertEqual(pending.warning, "Trash may not free space until emptied.")
+          XCTAssertNil(pending.warning, "no space disclaimer")
           // Return confirms the Trash; the system does not draw it red.
           XCTAssertTrue(pending.actionIsDefault)
           XCTAssertFalse(pending.actionIsDestructive)
@@ -538,8 +538,8 @@ import XCTest
           XCTAssertEqual(
             pending.warning,
             scope == "File"
-              ? "This cannot be undone. Deleting may free less space than shown."
-              : "This cannot be undone. Deleting may free less space than shown. An error may leave some contents undeleted."
+              ? "This cannot be undone."
+              : "This cannot be undone. An error may leave some contents undeleted."
           )
           // No default button: Return must not delete, and Cancel is never the default.
           XCTAssertFalse(pending.actionIsDefault)

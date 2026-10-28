@@ -127,6 +127,7 @@ Discover entries through bounded queries: `small-files/small-00` through
 | `metadata-delay` | Presentation inventory; only large-file MemoryFileSystem metadata sleeps one second |
 | `prototype-home` | The design prototype's 236.9 GB home `/Users/ana`: its names (`CoreSimulator` is `CoreDevice`), hierarchy, sizes and extensions; directories own zero bytes |
 | `prototype-home-refresh` | `prototype-home`; each directory metadata request sleeps 300 ms and `Library/Caches/new cache.db` (2 GB) exists only live |
+| `prototype-home-nested-trash` | `prototype-home` plus `Projects/.Trash` with four videos (4 GB), added after the prototype's entries |
 | `visual-details` | Isolated nested groups and a long directory path; entry-only metadata differs from subtree bytes |
 | `ordinary`, `trash-outside` | Trash moves to `/.Trash/moved` |
 | `trash-inside` | Moves to `trash/moved` within scope |

@@ -37,12 +37,12 @@ struct PendingConfirmation: Identifiable {
     return permanent ? "Delete “\(shown)” immediately?" : "Move “\(shown)” to the Trash?"
   }
   var scope: String { directory ? "Directory and its contents" : "File" }
-  var warning: String {
-    guard permanent else { return "Trash may not free space until emptied." }
-    // Shared or cloned storage stays allocated, so deletion can free less than recorded.
+  /// The Trash sheet has no warning: its title and its button name the Trash.
+  var warning: String? {
+    guard permanent else { return nil }
     return directory
-      ? "This cannot be undone. Deleting may free less space than shown. An error may leave some contents undeleted."
-      : "This cannot be undone. Deleting may free less space than shown."
+      ? "This cannot be undone. An error may leave some contents undeleted."
+      : "This cannot be undone."
   }
   var actionTitle: String { permanent ? "Delete Immediately" : "Move to Trash" }
   /// Return confirms a Trash. Permanent deletion has no default button.
@@ -812,12 +812,24 @@ struct PendingConfirmation: Identifiable {
   func back() { focusParent() }
   func revealSelection() { if let selected { reveal(selected) } }
   var selectedDisplayPath: String? {
-    guard let relative = selectionRawPath, var root = records?.status.rootPath else { return nil }
+    guard let relative = selectionRawPath else { return nil }
+    return completeDisplayPath(relative)
+  }
+  /// The saved root path joined with a saved relative path, from the inventory only.
+  func completeDisplayPath(_ relative: Data) -> String? {
+    guard var root = records?.status.rootPath else { return nil }
     if !relative.isEmpty {
       if root.last != 47 { root.append(47) }
       root.append(relative)
     }
     return displayPath(root)
+  }
+  /// The status bar: the complete path of the map block under the pointer, also while another
+  /// item is selected. A grouped block names its folder. Empty when the pointer is off the map.
+  /// The path comes from the hover hit, so a hover reads no filesystem metadata.
+  var statusText: String {
+    guard let hover, let path = completeDisplayPath(hover.relativePath) else { return "" }
+    return hover.actionable ? path : "Grouped in " + path
   }
   var selectedURL: URL? {
     guard !fixtureMode, recoveryToken == nil, !loading, !working, !replacingSession,

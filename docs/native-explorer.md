@@ -137,7 +137,7 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
 - "testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows": the drawn size text and
   name share a vertical center within 1 point on a selected and an unselected row.
 - "testDirectoryConfirmationsKeepOnlyTargetScopeAndWarnings": both action scopes,
-  named title, scope, warnings, cancellation; no entry-only sizes/hex.
+  named title, scope, the Delete warning, no Trash space sentence; no entry-only sizes/hex.
 - "testDenseMapHoverClickRevealAndTinyDirectoryZoom": independent hover, linked
   descendant reveal without zoom, disclosure and 4/8 KiB zoom visibility. Collapse
   assertions await asynchronous row publication, not just input delivery.

@@ -26,7 +26,7 @@ orientation, largest-first order and no padding.
 and `place()` and lays out the `prototype-home` fixture. At 939×750 (the design render),
 640×900 and 1702×1443 (the app map), all 503 compared files match within 1 px. Not compared:
 files that the prototype omits (hatched directories under 3 px, files under 0.5 px²) and files
-inside our aggregates or the root Trash region (11 files). A rollup is one sibling with the
+inside our aggregates or the `.Trash` region (11 files). A rollup is one sibling with the
 summed weight, so at 200×150 and 60×40 later siblings can move.
 
 Both views use the same priority-driven bounded refinement machinery, preserving
@@ -50,10 +50,10 @@ olive data and muted documents/unknowns. Classification is ASCII case-insensitiv
 by extension, not content or package inspection. A 155-degree linear gradient runs
 from 14% white through the base at 55% to 16% black, independent of ancestor depth.
 Each file tile has a one-backing-pixel seam on all four edges, the design's 0.5-point inset
-at 45% black. Gray diagonal hatching marks non-actionable aggregates. The root Trash (a
-`.Trash` directory that is a direct child of the inventory root, the design's rule) is one
-actionable tile with the design's TRASH stripes. Its children are never read, so it selects
-the Trash directory. A Trash focus draws its files normally. A volume scan has no such child.
+at 45% black. Gray diagonal hatching marks non-actionable aggregates. Each directory named exactly `.Trash`
+(a byte match) below the focus is one actionable tile with the design's TRASH stripes, at any
+depth. Its children are never read, so it selects that `.Trash`. A focus on or inside a
+`.Trash` draws its files normally.
 `diagram` takes a `MapAppearance`, which changes only the hatch, the Trash fill and the seam
 strength ([native-appearance.md](native-appearance.md)). Swift tags the bitmap as
 sRGB. Selection dimming and hover outlines remain native overlays,
@@ -131,8 +131,10 @@ A failed constructor rebuilds the retained session before ending read-only repla
   u64::MAX accounting, hardlink deduplication, zero-area tree access and pixel/work bounds.
 - "diagram_flat_gradient_has_no_ancestor_ridges_and_aggregates_are_hatched": identical
   shallow/deep raster bytes, monotonic interior shading, four-edge seams and aggregate authority.
-- "diagram_paints_root_trash_whole_with_trash_stripes_until_focused": exact TRASH pixels,
-  one actionable Trash region, unread children, a nested `.Trash` with type colors.
+- "diagram_paints_every_trash_whole_with_trash_stripes_until_focused": exact TRASH pixels
+  for a root and a nested `.Trash` at two focus levels, unread children, type colors for
+  `.trash` and inside a focused `.Trash`. "prototype_home_nested_trash_draws_projects_trash_whole_until_focused"
+  in [src/bridge/tests.rs](../src/bridge/tests.rs) checks the same in `prototype-home-nested-trash`.
 
 [src/diagram.rs](../src/diagram.rs):
 "type_palette_matches_prototype_and_flat_gradient_is_monotonic".

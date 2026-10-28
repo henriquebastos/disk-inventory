@@ -10,11 +10,17 @@ progress of Refresh Directory. The code is in
 
 ## Status bar
 
-The status bar is one line, 28 points high, below the map. It shows only the complete path of
-the selected item: the saved root path and the saved relative path, in a monospaced caption.
-A long path truncates in the middle; the help tag and the accessibility value keep the full
-text. With no selected item, or with a selected grouped block, the status bar is empty. Hover
-does not write to it. The hover outline identifies the block under the pointer.
+The status bar is one line, 28 points high, below the map. It names the map block under the
+pointer, also while another item is selected: the saved root path and the saved relative path,
+in a monospaced caption. A grouped block shows "Grouped in" and the complete folder path. A
+striped `.Trash` block shows the path of that `.Trash`. When the pointer is not over the map,
+the status bar is empty. The selection lives in the card below the tree. A long path truncates
+in the middle; the help tag and the accessibility label keep the full text.
+
+The path comes from the hover hit: the core builds it from the saved inventory, with no
+filesystem metadata and no scan. `StatusBar` in [ExplorerApp.swift](../native/Explorer/ExplorerApp.swift)
+is its own view, so a hover redraws only that line and the map overlay. A hover does not
+rebuild the map or change its picture, so it needs no throttle.
 
 The former footer messages moved:
 
@@ -23,8 +29,8 @@ The former footer messages moved:
 | Error line and Dismiss | Outcome banner |
 | Operation and refresh outcomes | Outcome banner |
 | Details: error text and core issues | Outcome banner, Details disclosure |
-| Hovered path and size | Removed; the hover outline stays |
-| "Recorded disk usage · Shared space is counted once · Deleting may free less space" | Removed. The card says "Shared space counted elsewhere" for a shared file. The Trash confirmation says "Trash may not free space until emptied." The Delete confirmation says "Deleting may free less space than shown." |
+| Hovered path and size | Status bar, the path only |
+| "Recorded disk usage · Shared space is counted once · Deleting may free less space" | Removed. The card says "Shared space counted elsewhere" for a shared file. The confirmations have no space sentence. |
 | "Some map detail is grouped or reduced at this scale…" | The card of a selected grouped block |
 
 ## Outcome banner
@@ -66,8 +72,7 @@ for the same new selection. Its label is "gaps=G selections=S draws=D".
 
 Esc clears the selection when the tree, the map or the window has the keyboard focus. The map
 never takes the focus, so a click on it leaves the focus where it was. Esc clears the selected
-item, its region and dim, the card, the tree highlight, the status bar and a grouped-block
-selection. Focus, expansion, scroll position, saved data and the map picture stay.
+item, its region and dim, the card, the tree highlight and a grouped-block selection. Focus, expansion, scroll position, saved data and the map picture stay.
 
 An attached confirmation sheet keeps its own Esc, which is Cancel; the selection stays. Esc
 does nothing while a scan, a refresh, an operation or a view rebuild runs, or while result
@@ -99,9 +104,11 @@ Refresh covers the focused subtree, in memory only. Navigation never scans.
 UI tests in [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift), on the
 real runner:
 
-- "testStatusBarShowsOnlyTheSelectedItemPath": empty with no selection and on hover, the full
-  path after selection, no old default text, the outcome in the banner over the map, Dismiss,
-  and the less-space sentence in the Delete confirmation.
+- "testStatusBarShowsTheHoveredBlockAlsoWhileAnItemIsSelected": empty with the pointer off the
+  map, also with a selection; the hovered file path while another item is selected; "Grouped
+  in" for a grouped block; no old default text; the outcome in the banner over the map; Dismiss.
+- "testNestedTrashIsStripedAtItsParentLevelAndColoredWhenFocused" includes the status bar path
+  of a hovered `.Trash` block.
 - "testSelectionDimIsLightAndKeepsUnselectedSeamsVisible": the 0.88 dim factor, seams of at
   least 1.8:1 after selection, and the white ring, in dark and light.
 - "testRepeatedMapClicksNeverDrawAFrameWithoutTheSelectionDim": 40 map clicks, zero gaps.
@@ -111,6 +118,8 @@ real runner:
   counter, Stop with unchanged data, then a complete refresh with the new file.
 
 Model tests in [FeedbackModelTests.swift](../native/ExplorerModelTests/FeedbackModelTests.swift):
+"testStatusTextNamesTheHoveredBlockWhileAnotherItemIsSelected" (the selection, the picture and
+the session selection-query count stay during a hover),
 "testSelectionRegionNeverClearsWhileTheNextRegionLoads",
 "testClearSelectionResetsItemRegionCardAndRowOnly",
 "testBannerDismissHidesOutcomeErrorAndSeenIssues",

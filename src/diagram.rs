@@ -57,7 +57,7 @@ impl MapAppearance {
             Self::LightIncreasedContrast | Self::DarkIncreasedContrast => 0.33,
         }
     }
-    /// The design's TRASH fill for the root Trash. Dark uses the design values; light uses a
+    /// The design's TRASH fill for a `.Trash` tile. Dark uses the design values; light uses a
     /// light base with black stripes. Increase Contrast uses 30% stripes. Its dark base is
     /// lighter, because no dark seam reaches 3:1 against the design's dark base.
     pub fn trash(self) -> TrashFill {
@@ -171,9 +171,9 @@ impl Explorer {
                 }
                 _ => None,
             };
-            // The root Trash is one actionable region that selects the Trash directory.
-            let trash =
-                matches!(tile.kind, TileKind::Entry(key) if self.is_root_trash(key.index()));
+            // A `.Trash` below the focus is one actionable region that selects that directory.
+            let trash = tile.depth > 0
+                && matches!(tile.kind, TileKind::Entry(key) if self.is_trash(key.index()));
             let actionable = file.is_some() || trash;
             let color = file.map(|key| type_color(self.map.basename(key.index() as usize)));
             let r = tile.rect;

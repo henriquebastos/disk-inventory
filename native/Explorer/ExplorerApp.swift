@@ -85,18 +85,17 @@ struct MapAppearanceProbe: View {
   }
 }
 
-/// Fixture-only accessibility probe naming the hovered map block. The status bar shows only
-/// the selected path, so UI tests read the hover here.
-struct MapHoverProbe: View {
+/// The status bar below the map. A separate view observes the hover, so a hover redraws only
+/// this line and the map overlay.
+struct StatusBar: View {
   let model: ExplorerModel
   var body: some View {
-    Color.clear.frame(width: 1, height: 1).accessibilityElement()
-      .accessibilityIdentifier("map-hover")
-      .accessibilityLabel(
-        model.hover.map {
-          ($0.actionable ? "" : "Grouped in ")
-            + ($0.relativePath.isEmpty ? entryName($0.entry) : displayPath($0.relativePath))
-        } ?? "none")
+    let text = model.statusText
+    Text(text)
+      .font(.system(.caption, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+      .help(text).accessibilityIdentifier("status-path")
+      .frame(maxWidth: .infinity, minHeight: 28, maxHeight: 28, alignment: .leading)
+      .padding(.horizontal, 12)
   }
 }
 
@@ -132,13 +131,12 @@ struct ExplorerView: View {
                 HStack(spacing: 0) {
                   MotionProbe(motion: model.motion)
                   MapAppearanceProbe(model: model)
-                  MapHoverProbe(model: model)
                 }
               }
             }
             .overlay(alignment: .top) { if model.bannerVisible { banner } }
             Divider()
-            footer
+            StatusBar(model: model)
           }.frame(minWidth: 350)
         }
         .overlay(alignment: .top) {
@@ -339,16 +337,6 @@ struct ExplorerView: View {
       }
     }.font(.callout).frame(maxWidth: .infinity, minHeight: 122, alignment: .leading)
       .padding(14).background(.bar)
-  }
-  /// The status bar shows only the complete path of the selected item, and nothing when no
-  /// item is selected.
-  var footer: some View {
-    Text(model.selected == nil ? "" : model.selectedDisplayPath ?? "")
-      .font(.system(.caption, design: .monospaced)).lineLimit(1).truncationMode(.middle)
-      .textSelection(.enabled).help(model.selectedDisplayPath ?? "")
-      .accessibilityIdentifier("status-path")
-      .frame(maxWidth: .infinity, minHeight: 28, maxHeight: 28, alignment: .leading)
-      .padding(.horizontal, 12)
   }
   /// Errors, operation outcomes and issues, over the top of the map. It hit-tests only its own
   /// frame and stays until Dismiss, a replacing outcome or a new folder.

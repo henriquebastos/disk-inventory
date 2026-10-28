@@ -1109,8 +1109,65 @@ fn diagram_appearance_changes_only_hatch_and_seam_colors() {
     assert!(minimum >= 3.0, "seam contrast {minimum}");
 }
 
+/// Checks every pixel of the `.Trash` tile `trash` in `d` against the TRASH fill. Returns the
+/// striped and plain interior pixel counts and the minimum top-seam contrast.
+fn trash_tile_pixels(
+    e: &Explorer,
+    d: &crate::diagram::Diagram,
+    trash: u32,
+    appearance: MapAppearance,
+) -> (usize, usize, f64) {
+    let (width, height) = (d.width, d.height);
+    let region = d.region(e.handle(trash)).unwrap();
+    let fill = appearance.trash();
+    let (mut striped, mut plain) = (0, 0);
+    let mut seam_minimum = f64::MAX;
+    for y in 0..height {
+        for x in 0..width {
+            let hit = d.hit(x, y).unwrap();
+            if hit.key.index() != trash {
+                continue;
+            }
+            let at = (y * width + x) as usize * 4;
+            let pixel = &d.rgba()[at..at + 3];
+            assert!(hit.actionable, "one hit region that selects the Trash");
+            assert_eq!(hit.rect, region);
+            let x0 = (region.x - 0.5).ceil() as u32;
+            let y0 = (region.y - 0.5).ceil() as u32;
+            let x1 = ((region.x + region.width - 0.5).ceil() as u32).min(width);
+            let y1 = ((region.y + region.height - 0.5).ceil() as u32).min(height);
+            let position = ((x as f64 + 0.5 - region.x) * 0.42261826174069944
+                + (y as f64 + 0.5 - region.y) * 0.9063077870366499)
+                / (region.width * 0.42261826174069944 + region.height * 0.9063077870366499);
+            let border = x == x0 || y == y0 || x + 1 == x1 || y + 1 == y1;
+            let diagonal = (x1 - x) as f64 + (y1 - y) as f64 - 1.0;
+            let seam = if border {
+                appearance.seam_factor()
+            } else {
+                1.0
+            };
+            assert_eq!(
+                pixel,
+                fill.color(position, diagonal, seam),
+                "{appearance:?} {x},{y}"
+            );
+            if border && x > x0 + 1 && x + 2 < x1 && y == y0 {
+                let inside = &d.rgba()[at + width as usize * 4..at + width as usize * 4 + 3];
+                seam_minimum = seam_minimum.min(contrast(pixel, inside));
+            } else if !border {
+                if fill.striped(diagonal) {
+                    striped += 1
+                } else {
+                    plain += 1
+                }
+            }
+        }
+    }
+    (striped, plain, seam_minimum)
+}
+
 #[test]
-fn diagram_paints_root_trash_whole_with_trash_stripes_until_focused() {
+fn diagram_paints_every_trash_whole_with_trash_stripes_until_focused() {
     let mut map = tree();
     map.nodes[0].raw = 0;
     let trash = add(&mut map, 0, b".Trash", Kind::Dir, 0);
@@ -1118,9 +1175,12 @@ fn diagram_paints_root_trash_whole_with_trash_stripes_until_focused() {
     add(&mut map, trash, b"old.pdf", Kind::File, 1_000);
     let movies = add(&mut map, 0, b"Movies", Kind::Dir, 0);
     add(&mut map, movies, b"new.mov", Kind::File, 6_000);
-    // Only a direct child of the inventory root is the Trash.
+    // A `.Trash` at any depth is a Trash, matched by its exact name bytes.
     let nested = add(&mut map, movies, b".Trash", Kind::Dir, 0);
     let kept = add(&mut map, nested, b"kept.mov", Kind::File, 2_000);
+    add(&mut map, nested, b"kept.pdf", Kind::File, 1_000);
+    let lookalike = add(&mut map, movies, b".trash", Kind::Dir, 0);
+    let shown = add(&mut map, lookalike, b"shown.mov", Kind::File, 1_500);
     let e = explorer(map);
     let (width, height) = (240u32, 160u32);
     for appearance in [
@@ -1129,95 +1189,59 @@ fn diagram_paints_root_trash_whole_with_trash_stripes_until_focused() {
         MapAppearance::LightIncreasedContrast,
         MapAppearance::DarkIncreasedContrast,
     ] {
-        let d = e
-            .diagram(e.root_handle(), width, height, appearance)
-            .unwrap();
-        // Bounded work: the root Trash is one tile; its children are never read or drawn.
-        assert!(d.layout.groups.iter().all(|g| g.directory.index() != trash));
-        assert!(d.layout.tiles.iter().all(|t| !matches!(
-            t.kind,
-            TileKind::Entry(k) if e.map.nodes[k.index() as usize].parent == trash
-        )));
-        assert_eq!(d.stats.aggregate_pixels, 0, "the Trash is not an aggregate");
-        let region = d.region(e.handle(trash)).unwrap();
         let fill = appearance.trash();
-        let (mut striped, mut plain, mut kept_pixels) = (0, 0, 0);
-        let mut seam_minimum = f64::MAX;
-        for y in 0..height {
-            for x in 0..width {
-                let hit = d.hit(x, y).unwrap();
-                let at = (y * width + x) as usize * 4;
-                let pixel = &d.rgba()[at..at + 3];
-                if hit.key.index() == kept {
-                    kept_pixels += 1;
-                }
-                if hit.key.index() != trash {
-                    continue;
-                }
-                assert!(hit.actionable, "one hit region that selects the Trash");
-                assert_eq!(hit.rect, region);
-                let x0 = (region.x - 0.5).ceil() as u32;
-                let y0 = (region.y - 0.5).ceil() as u32;
-                let x1 = ((region.x + region.width - 0.5).ceil() as u32).min(width);
-                let y1 = ((region.y + region.height - 0.5).ceil() as u32).min(height);
-                let position = ((x as f64 + 0.5 - region.x) * 0.42261826174069944
-                    + (y as f64 + 0.5 - region.y) * 0.9063077870366499)
-                    / (region.width * 0.42261826174069944 + region.height * 0.9063077870366499);
-                let border = x == x0 || y == y0 || x + 1 == x1 || y + 1 == y1;
-                let diagonal = (x1 - x) as f64 + (y1 - y) as f64 - 1.0;
-                let seam = if border {
-                    appearance.seam_factor()
-                } else {
-                    1.0
-                };
-                assert_eq!(
-                    pixel,
-                    fill.color(position, diagonal, seam),
-                    "{appearance:?} {x},{y}"
+        for (focus, trashes) in [(0, vec![trash, nested]), (movies, vec![nested])] {
+            let d = e
+                .diagram(e.handle(focus), width, height, appearance)
+                .unwrap();
+            assert_eq!(d.stats.aggregate_pixels, 0, "a Trash is not an aggregate");
+            for &t in &trashes {
+                // Bounded work: each Trash is one tile; its children are never read or drawn.
+                assert!(d.layout.groups.iter().all(|g| g.directory.index() != t));
+                assert!(d.layout.tiles.iter().all(|tile| !matches!(
+                    tile.kind,
+                    TileKind::Entry(k) if e.map.nodes[k.index() as usize].parent == t
+                )));
+                let (striped, plain, seam_minimum) = trash_tile_pixels(&e, &d, t, appearance);
+                // Stripes cover 4 of every 9 points, so both bands are present in quantity.
+                assert!(
+                    striped > 150 && plain > 150,
+                    "{appearance:?} focus {focus} Trash {t}: {striped} {plain}"
                 );
-                if border && x > x0 + 1 && x + 2 < x1 && y == y0 {
-                    let inside = &d.rgba()[at + width as usize * 4..at + width as usize * 4 + 3];
-                    seam_minimum = seam_minimum.min(contrast(pixel, inside));
-                } else if !border {
-                    if fill.striped(diagonal) {
-                        striped += 1
-                    } else {
-                        plain += 1
-                    }
+                let band = |striped: bool| fill.color(0.5, if striped { 1.0 } else { 15.0 }, 1.0);
+                println!(
+                    "TRASH {appearance:?} focus {focus} Trash {t} stripe/base {:.3}:1 seam minimum {seam_minimum:.3}:1",
+                    contrast(&band(true), &band(false))
+                );
+                if matches!(
+                    appearance,
+                    MapAppearance::LightIncreasedContrast | MapAppearance::DarkIncreasedContrast
+                ) {
+                    assert!(
+                        seam_minimum >= 3.0,
+                        "{appearance:?} Trash seam {seam_minimum}"
+                    );
                 }
             }
+            // Only the exact name matches: `.trash` keeps its files and type colors.
+            let shown_pixels = (0..width * height)
+                .filter(|&i| d.hit(i % width, i / width).unwrap().key.index() == shown)
+                .count();
+            assert!(shown_pixels > 0, "{appearance:?}: `.trash` is not a Trash");
         }
-        // Stripes cover 4 of every 9 points, so both bands are present in quantity.
-        assert!(
-            striped > 500 && plain > 500,
-            "{appearance:?} {striped} {plain}"
-        );
-        assert!(kept_pixels > 0, "a nested .Trash keeps type colors");
-        let band = |striped: bool| fill.color(0.5, if striped { 1.0 } else { 15.0 }, 1.0);
-        println!(
-            "TRASH {appearance:?} stripe/base {:.3}:1 seam minimum {seam_minimum:.3}:1",
-            contrast(&band(true), &band(false))
-        );
-        if matches!(
-            appearance,
-            MapAppearance::LightIncreasedContrast | MapAppearance::DarkIncreasedContrast
-        ) {
+        // Focused on a Trash, the normal map shows its files with type colors.
+        for (focus, file) in [(trash, clip), (nested, kept)] {
+            let inside = e
+                .diagram(e.handle(focus), width, height, appearance)
+                .unwrap();
+            let hit = inside.hit(width / 4, height / 2).unwrap();
+            assert!(hit.actionable && hit.key.index() == file);
+            let at = ((height / 2) * width + width / 4) as usize * 4;
+            let pixel = &inside.rgba()[at..at + 3];
             assert!(
-                seam_minimum >= 3.0,
-                "{appearance:?} Trash seam {seam_minimum}"
+                pixel[2] > pixel[0] + 40,
+                "{appearance:?}: the file keeps the video color, got {pixel:?}"
             );
         }
-        // Focused on the Trash, the normal map shows its files with type colors.
-        let inside = e
-            .diagram(e.handle(trash), width, height, appearance)
-            .unwrap();
-        let hit = inside.hit(width / 4, height / 2).unwrap();
-        assert!(hit.actionable && hit.key.index() == clip);
-        let at = ((height / 2) * width + width / 4) as usize * 4;
-        let pixel = &inside.rgba()[at..at + 3];
-        assert!(
-            pixel[2] > pixel[0] + 40,
-            "{appearance:?}: the clip keeps the video color, got {pixel:?}"
-        );
     }
 }

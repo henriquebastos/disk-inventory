@@ -800,3 +800,59 @@ fn controlled_refresh_stop_keeps_views_and_completion_applies_live_changes() {
     );
     assert!(frame.hit(10, 10).is_err());
 }
+
+#[test]
+fn prototype_home_nested_trash_draws_projects_trash_whole_until_focused() {
+    let s = session("prototype-home-nested-trash");
+    let home = session("prototype-home");
+    let root = s.status().unwrap().root.key;
+    assert_eq!(
+        s.status().unwrap().root.subtree_bytes,
+        home.status().unwrap().root.subtree_bytes + 4_000_000_000
+    );
+    let projects = find(&s, b"Projects");
+    let nested = s
+        .children(projects.clone(), 0, 16)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.basename == b".Trash")
+        .unwrap()
+        .key;
+    // At the root and at its parent's level, the nested `.Trash` is one actionable region that
+    // selects the directory, and no file inside it is a target.
+    for focus in [root, projects] {
+        let frame = s
+            .clone()
+            .diagram(focus, 640, 400, MapAppearance::Dark)
+            .unwrap();
+        let rect = frame.region(nested.clone()).unwrap().unwrap();
+        let hit = frame
+            .hit(
+                (rect.x + rect.width / 2.) as u32,
+                (rect.y + rect.height / 2.) as u32,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(hit.actionable && hit.relative_path == b"Projects/.Trash");
+        assert!(
+            frame
+                .targets()
+                .unwrap()
+                .iter()
+                .all(|t| !t.relative_path.starts_with(b"Projects/.Trash/"))
+        );
+    }
+    // Focused on the nested `.Trash`, its files are the map.
+    let frame = s
+        .clone()
+        .diagram(nested, 640, 400, MapAppearance::Dark)
+        .unwrap();
+    let hit = frame.hit(320, 200).unwrap().unwrap();
+    assert!(
+        hit.actionable
+            && hit
+                .relative_path
+                .starts_with(b"Projects/.Trash/Old render ")
+    );
+}

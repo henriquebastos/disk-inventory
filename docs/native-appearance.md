@@ -72,7 +72,7 @@ Rust, in [src/explorer_tests.rs](../src/explorer_tests.rs):
 aggregates and long thin tiles in all four variants. Owners, hits and interiors match. Hatch
 pixels are exact. Seams on all four edges scale by the variant factor. The test prints the
 Increase Contrast seam minimum and requires 3.0:1.
-"diagram_paints_root_trash_whole_with_trash_stripes_until_focused" checks the Trash fill, its
+"diagram_paints_every_trash_whole_with_trash_stripes_until_focused" checks the Trash fill, its
 seams and its stripe contrast in all four variants. In [src/bridge/tests.rs](../src/bridge/tests.rs),
 "diagram_appearance_is_forwarded_and_swatch_colors_are_unchanged" checks the generated
 `diagram` parameter, the hatch, unchanged interiors and unchanged `map_rgb` values.
@@ -99,6 +99,8 @@ real runner's screenshots:
 - "testMapTilesHaveTheDesignSeamOnAllFourSides": each edge of the largest tiles, all four values.
 - "testRootTrashShowsTrashStripesAndSelectsTheTrashUntilFocused": TRASH stripes in all four
   values, one region that selects `.Trash`, and type colors after a Trash focus.
+- "testNestedTrashIsStripedAtItsParentLevelAndColoredWhenFocused": `Projects/.Trash` is
+  striped at the `Projects` focus and selects that `.Trash`; focused, it shows video colors.
 - "testPrototypeHomeDarkMapMatchesTheDesignBrightness": CSS-gradient interiors and a 0.55 edge
   ratio.
 - "testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast": black in light

@@ -47,7 +47,7 @@ struct ConfirmationAlert: NSViewRepresentable {
     static func alert(for pending: PendingConfirmation) -> NSAlert {
       let alert = NSAlert()
       alert.messageText = pending.title
-      alert.informativeText = pending.warning
+      alert.informativeText = pending.warning ?? ""
       let action = alert.addButton(withTitle: pending.actionTitle)
       action.hasDestructiveAction = pending.actionIsDestructive
       // NSAlert gives the first button Return. Permanent deletion has no default button.
@@ -74,7 +74,9 @@ struct ConfirmationAlert: NSViewRepresentable {
       for child in view?.subviews ?? [] {
         if let field = child as? NSTextField, field.stringValue == alert.messageText {
           field.setAccessibilityIdentifier("confirmation-title")
-        } else if let field = child as? NSTextField, field.stringValue == alert.informativeText {
+        } else if let field = child as? NSTextField, !alert.informativeText.isEmpty,
+          field.stringValue == alert.informativeText
+        {
           field.setAccessibilityIdentifier("confirmation-warning")
         }
         identifyText(in: child, alert: alert)
