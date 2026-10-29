@@ -93,7 +93,7 @@ struct StatusBar: View {
     let text = model.statusText
     Text(text)
       .font(.system(.caption, design: .monospaced)).lineLimit(1).truncationMode(.middle)
-      .help(text).accessibilityIdentifier("status-path")
+      .toolTip(text).accessibilityIdentifier("status-path")
       .frame(maxWidth: .infinity, minHeight: 28, maxHeight: 28, alignment: .leading)
       .padding(.horizontal, 12)
   }
@@ -138,7 +138,9 @@ struct ExplorerView: View {
             }
             .overlay(alignment: .top) {
               if let banner = model.outcomeBanner {
-                OutcomeBanner(state: banner) { model.dismissBanner() }
+                OutcomeBanner(
+                  state: banner, dismiss: { model.dismissBanner() },
+                  toggleDetails: { model.toggleBannerDetails() })
               }
             }
             Divider()
@@ -162,7 +164,7 @@ struct ExplorerView: View {
             VStack(alignment: .leading, spacing: 6) {
               Text("Last folder").font(.caption)
               if let path = last.rootName, !path.isEmpty {
-                Text(path).lineLimit(1).truncationMode(.middle).help(path)
+                Text(path).lineLimit(1).truncationMode(.middle).toolTip(path)
               }
               Text(last.scannedAt.formatted(date: .abbreviated, time: .shortened)).font(
                 .caption

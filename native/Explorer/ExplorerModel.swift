@@ -149,13 +149,29 @@ struct PendingConfirmation: Identifiable {
   var loading = false
   var replacingSession = false
   var working = false
-  var error: String?
-  var outcome: String?
+  var error: String? { didSet { closeDetailsWithBanner() } }
+  var outcome: String? { didSet { closeDetailsWithBanner() } }
   /// The session issue log. The outcome banner shows it until dismissed; new issues show it again.
-  var issues: [String] = [] { didSet { if issues.isEmpty { dismissedIssues = 0 } } }
-  private(set) var dismissedIssues = 0
+  var issues: [String] = [] {
+    didSet {
+      if issues.isEmpty { dismissedIssues = 0 }
+      closeDetailsWithBanner()
+    }
+  }
+  private(set) var dismissedIssues = 0 { didSet { closeDetailsWithBanner() } }
   /// The outcome banner over the map: errors, operation outcomes and new issues.
   var bannerVisible: Bool { error != nil || outcome != nil || issues.count > dismissedIssues }
+  /// The Details disclosure of the outcome banner is open. It closes when the banner hides, as
+  /// the disclosure's own view state did when the banner left the window.
+  private(set) var bannerDetailsShown = false
+  /// The Details word and its chevron both open and close the disclosure.
+  func toggleBannerDetails() {
+    guard bannerVisible else { return }
+    bannerDetailsShown.toggle()
+  }
+  private func closeDetailsWithBanner() {
+    if bannerDetailsShown, !bannerVisible { bannerDetailsShown = false }
+  }
   func dismissBanner() {
     error = nil
     outcome = nil

@@ -218,8 +218,8 @@ extension XCUIElement {
     outcome(is: "Deleted.")
     XCTAssertTrue(row("large-file").disappears(within: 8))
   }
-  /// Only the chevron opens Details. The other failure outcomes and the saved-only selection
-  /// are model tests in OperationOutcomeModelTests.swift.
+  /// The chevron opens Details; testSkippedItems… also clicks the word. The other failure
+  /// outcomes and the saved-only selection are model tests in OperationOutcomeModelTests.swift.
   func testUnknownTrashScopeIssueOpensFromTheDetailsChevron() {
     launch("trash-unknown")
     prepare("trash", target: "large-file")
@@ -1408,15 +1408,37 @@ extension XCUIElement {
     XCTAssertTrue(row("Library").exists, "the folders of skipped items stay")
     let details = app.disclosureTriangles["issues"]
     XCTAssertTrue(details.appears(within: 8))
-    let chevron = app.staticTexts["outcome"].frame.minX + 4.5 - details.frame.minX
-    details.coordinate(withNormalizedOffset: .zero)
-      .withOffset(CGVector(dx: chevron, dy: details.frame.height / 2)).click()
+    // The open disclosure is taller, so both points keep their offsets from the closed frame.
+    // Its accessibility frame runs from the banner edge to the end of the word "Details"; the
+    // chevron sits below the start of the outcome text.
+    let closed = details.frame
+    let chevronX = app.staticTexts["outcome"].frame.minX + 4.5 - closed.minX
+    let chevron = details.coordinate(withNormalizedOffset: .zero).withOffset(
+      CGVector(dx: chevronX, dy: closed.height / 2))
+    let word = details.coordinate(withNormalizedOffset: .zero).withOffset(
+      CGVector(dx: closed.width - 12, dy: closed.height / 2))
+    XCTAssertGreaterThan(closed.width - 12 - chevronX, 12, "the word is right of the chevron")
+    let window = app.windows.firstMatch.frame
+    print(
+      "FRAME details \(closed.minX - window.minX) \(closed.minY - window.minY) \(closed.width) \(closed.height) chevron \(chevronX)"
+    )
+    chevron.click()
     XCTAssertTrue(
       anyText(containing: "Skipped /Users/ana/Library/Caches/cache 01.db: permission denied")
         .appears(within: 8))
     XCTAssertTrue(
       anyText(containing: "cache 02.cache: not permitted, for example locked").exists)
     screenshot("delete-skipped-details")
+    // The word "Details" opens and closes the disclosure like its chevron.
+    let reason = anyText(containing: "cache 01.db: permission denied")
+    chevron.click()
+    XCTAssertTrue(reason.disappears(within: 8), "the chevron closes Details")
+    word.click()
+    _ = reason.appears(within: 2)
+    screenshot("delete-skipped-details-after-word-click")
+    XCTAssertTrue(reason.exists, "a click on the word opens Details")
+    word.click()
+    XCTAssertTrue(reason.disappears(within: 8), "a click on the word closes Details")
   }
   /// The names of the tree rows whose centers lie inside the tree, from one snapshot. The table
   /// creates row views only near the visible rows.
@@ -1531,10 +1553,10 @@ extension XCUIElement {
     screenshot("card-grouped")
   }
   /// Help tags: the Incomplete and Not saved badges stay and have no help tag; Refresh says what
-  /// it does, without a snapshot note. The badges come from a refresh. In trials the first
-  /// help tag in a window showed within about 2 s, but often none after one had shown, and none
-  /// after the pointer rested on text without one. So each check has its own launch, and a
-  /// badge is hovered once: later tries could not show its help tag.
+  /// it does, without a snapshot note. The badges come from a refresh. A help tag shows within
+  /// about 2 s. Each check has its own launch and hovers a badge once: a SwiftUI `.help` on a
+  /// badge would show no help tag after the pointer rested on a spot without one (see
+  /// `toolTip`), so a shared window or a second try could miss it.
   func testRefreshHelpTagHasNoSnapshotNoteAndBadgesHaveNoHelpTags() throws {
     continueAfterFailure = true
     for (badge, name) in [("stale", "Incomplete"), ("dirty", "Not saved")] {
@@ -1551,6 +1573,32 @@ extension XCUIElement {
     print("HELP refresh \(refreshHelp)")
     XCTAssertTrue(refreshHelp.contains("Rescan the focused directory"), refreshHelp)
     for part in ["memory", "snapshot"] { XCTAssertFalse(refreshHelp.contains(part), refreshHelp) }
+  }
+  /// Help tags show after the pointer rested on the map, again for the same element, and after
+  /// a confirmed Delete. With SwiftUI `.help`, a rest on any spot without a help tag stopped all
+  /// later help tags in the window, so they seemed lost after a click on the map and a Delete.
+  func testHelpTagsShowAfterARestOnTheMapAndAfterADelete() throws {
+    continueAfterFailure = true
+    launch()
+    let tile = app.buttons["map-file-large-file"]
+    XCTAssertTrue(tile.appears(within: 8))
+    // A user rest, longer than the help tag delay: this is input, not a wait.
+    tile.hover()
+    Thread.sleep(forTimeInterval: 4)
+    let window = app.windows.firstMatch.frame
+    for id in ["refresh", "map-file-large-file"] {
+      let f = app.descendants(matching: .any)[id].firstMatch.frame
+      print("FRAME \(id) \(f.minX - window.minX) \(f.minY - window.minY) \(f.width) \(f.height)")
+    }
+    XCTAssertTrue(showsHelpTag(app.buttons["refresh"]), "Refresh after a rest on the map")
+    screenshot("help-tag-after-map-rest")
+    XCTAssertTrue(showsHelpTag(app.staticTexts["focus-name"]), "breadcrumb after Refresh")
+    XCTAssertTrue(showsHelpTag(app.buttons["refresh"]), "Refresh a second time")
+    prepare("delete", target: "large-file")
+    app.buttons["confirm-action"].click()
+    outcome(is: "Deleted.")
+    operationEnds()
+    XCTAssertTrue(showsHelpTag(app.staticTexts["focus-name"]), "breadcrumb after a Delete")
   }
   /// Hovers `element` up to `tries` times and reports whether a help tag appears. In trials
   /// macOS sometimes skipped a help tag, mostly after clicks, so each try first rests the

@@ -28,7 +28,6 @@ pub struct BitmapRecord {
     pub child_visits: u64,
     pub retained_payload_bytes: u64,
     pub surface_payload_bytes: u64,
-    pub aggregate_pixels: u64,
     pub layout_micros: u64,
     pub raster_micros: u64,
 }
@@ -168,7 +167,6 @@ impl DiagramFrame {
             child_visits: s.child_visits as u64,
             retained_payload_bytes: s.retained_payload_bytes as u64,
             surface_payload_bytes: s.surface_payload_bytes as u64,
-            aggregate_pixels: s.aggregate_pixels as u64,
             layout_micros: s.layout_micros,
             raster_micros: s.raster_micros,
         }

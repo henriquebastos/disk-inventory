@@ -71,7 +71,7 @@ struct SelectionCard: View {
         HStack(alignment: .firstTextBaseline) {
           Button(item.name) { send(.showInList) }.buttonStyle(.plain)
             .font(.headline).lineLimit(1).truncationMode(.middle)
-            .help("Show selected item in list").accessibilityIdentifier("selected-name")
+            .toolTip("Show selected item in list").accessibilityIdentifier("selected-name")
           Spacer(minLength: 4)
           Text(item.size)
             .font(.callout.weight(.semibold)).monospacedDigit().accessibilityIdentifier(
@@ -83,7 +83,7 @@ struct SelectionCard: View {
         Text(item.path ?? "Loading path…")
           .font(.system(.caption, design: .monospaced))
           .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-          .help(item.path ?? "").accessibilityIdentifier("selected-path")
+          .toolTip(item.path ?? "").accessibilityIdentifier("selected-path")
         HStack(spacing: 6) {
           Button("Reveal in Finder") { send(.command(.revealInFinder)) }
             .disabled(!item.canRevealInFinder)

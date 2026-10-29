@@ -55,12 +55,12 @@ struct ExplorerHeader<Breadcrumbs: View>: View {
         Image(systemName: "externaldrive")
       }
       .disabled(!state.canChooseFolder)
-      .help("Inventory")
+      .toolTip("Inventory")
       ScrollView(.horizontal) { breadcrumbs }.scrollIndicators(.hidden).disabled(
         !state.breadcrumbsEnabled)
       HStack(spacing: 5) {
         if let errors = state.partialScanErrors {
-          badge("Partial", id: "partial").help(errors)
+          badge("Partial", id: "partial").toolTip(errors)
         }
         if state.stale { badge("Incomplete", id: "stale") }
         if state.dirty { badge("Not saved", id: "dirty") }
@@ -78,7 +78,7 @@ struct ExplorerHeader<Breadcrumbs: View>: View {
         send(.refreshDirectory)
       }
       .disabled(!state.canRefresh)
-      .accessibilityIdentifier("refresh").help(
+      .accessibilityIdentifier("refresh").toolTip(
         "Rescan the focused directory and descendants."
       )
     }.padding(.horizontal, 12).padding(.vertical, 10).background(.bar)
@@ -101,16 +101,16 @@ struct BreadcrumbStrip: View {
         r.focus.parent != nil
       {
         Button(r.breadcrumbName(r.status.root)) { model.focus(r.status.root.key) }
-          .help(r.breadcrumbHelp(r.status.root)).accessibilityIdentifier("breadcrumb-root")
+          .toolTip(r.breadcrumbHelp(r.status.root)).accessibilityIdentifier("breadcrumb-root")
         Text("…")
       }
       ForEach(Array(r.ancestors.enumerated()), id: \.offset) { i, entry in
-        Button(r.breadcrumbName(entry)) { model.focus(entry.key) }.help(r.breadcrumbHelp(entry))
+        Button(r.breadcrumbName(entry)) { model.focus(entry.key) }.toolTip(r.breadcrumbHelp(entry))
           .accessibilityIdentifier(
             "breadcrumb-\(i)")
         Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
       }
-      Text(r.breadcrumbName(r.focus)).help(r.breadcrumbHelp(r.focus)).fontWeight(.semibold)
+      Text(r.breadcrumbName(r.focus)).toolTip(r.breadcrumbHelp(r.focus)).fontWeight(.semibold)
         .accessibilityIdentifier("focus-name")
     }.buttonStyle(.plain)
   }

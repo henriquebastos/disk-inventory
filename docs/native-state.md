@@ -32,7 +32,7 @@ variant that needs no Rust session.
 | State | View | Variants |
 |---|---|---|
 | `SelectionCardState` | [SelectionCard.swift](../native/Explorer/SelectionCard.swift) | nothing selected (with or without Select Inventory Root), item, grouped block |
-| `OutcomeBannerState` | [OutcomeBanner.swift](../native/Explorer/OutcomeBanner.swift) | error, outcome and issues; `outcomeBanner` is nil while hidden |
+| `OutcomeBannerState` | [OutcomeBanner.swift](../native/Explorer/OutcomeBanner.swift) | error, outcome and issues, Details open or closed; `outcomeBanner` is nil while hidden |
 | `ProgressBarState` | [ProgressBar.swift](../native/Explorer/ProgressBar.swift) | operation (phase, counter, Stop), checking an item, preparing an inventory, working |
 | `HeaderState` | [ExplorerHeader.swift](../native/Explorer/ExplorerHeader.swift) | menu titles and rules, Partial, Incomplete and Not saved badges, total, scan date, Refresh, breadcrumbs enabled |
 | `TreeRowState` | [TreeRowState.swift](../native/Explorer/TreeRowState.swift), `Cell.apply` and `SizeCell.apply` in [NativeViews.swift](../native/Explorer/NativeViews.swift) | loaded row (name, depth, swatch color, usage percent, size, disclosure and accessibility ids), loading placeholder |
@@ -51,6 +51,11 @@ test per variant:
 - "testCardShowsTheProtectedInventoryRoot": root protection and no removal.
 - "testCardShowsAGroupedBlockSizeAndOpensItsDirectory": the size and Show Directory Contents.
 
+Help tags use `toolTip(_:)` in [ToolTip.swift](../native/Explorer/ToolTip.swift): an AppKit
+view behind the SwiftUI view carries the tool tip and takes no clicks.
+[ToolTipTests.swift](../native/ExplorerModelTests/ToolTipTests.swift) draws it offscreen:
+"testToolTipFollowsItsTextTakesNoClicksAndIsEmptyWithoutText".
+
 `progressBar` shows over the explorer while loading, working or replacing the session;
 `startScreenProgressBar` shows on the start screen only while a session loads.
 
@@ -64,8 +69,10 @@ and help come from the pure `ViewRecords.breadcrumbName` and `breadcrumbHelp`
 model test per variant:
 
 - Banner: "testBannerIsHiddenWithoutAnErrorOutcomeOrNewIssue",
-  "testBannerShowsAnOutcomeWithoutDetails", "testBannerShowsAnErrorWithItsMessageInDetails" and
-  "testBannerShowsIssuesUntilDismissedAndAgainForANewIssue".
+  "testBannerShowsAnOutcomeWithoutDetails", "testBannerShowsAnErrorWithItsMessageInDetails",
+  "testBannerShowsIssuesUntilDismissedAndAgainForANewIssue" and
+  "testBannerDetailsToggleFromOneIntentAndCloseWhenTheBannerHides" (the chevron and the word
+  Details send `toggleBannerDetails`).
 - Busy bar: "testProgressBarShowsPreparingInventoryWhileTheSessionLoads",
   "testProgressBarShowsWorkingWhileANavigationBuildsItsView",
   "testProgressBarNamesTheItemThatAPreparationChecks",

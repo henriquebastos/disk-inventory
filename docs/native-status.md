@@ -23,22 +23,12 @@ filesystem metadata and no scan. `StatusBar` in [ExplorerApp.swift](../native/Ex
 is its own view, so a hover redraws only that line and the map overlay. A hover does not
 rebuild the map or change its picture, so it needs no throttle.
 
-The former footer messages moved:
-
-| Message | Now |
-|---|---|
-| Error line and Dismiss | Outcome banner |
-| Operation and refresh outcomes | Outcome banner |
-| Details: error text and core issues | Outcome banner, Details disclosure |
-| Hovered path and size | Status bar, the path only |
-| "Recorded disk usage · Shared space is counted once · Deleting may free less space" | Removed. The card, the header and the confirmations have no space or accounting sentence. |
-| "Some map detail is grouped or reduced at this scale…" | Removed. The card of a grouped block shows its size. |
-
 ## Outcome banner
 
 The banner floats over the top of the map, at most 440 points wide. It shows the error line
 (`error`), the outcome text (`outcome`) and a Details disclosure with the error text and the
-session issue log (`issues`). The banner hit-tests only its own frame, so the rest of the map
+session issue log (`issues`). The chevron and the word Details both open and close it; the
+model keeps that state and closes Details when the banner hides. The banner hit-tests only its own frame, so the rest of the map
 takes clicks. It does not resize the map, also during result motion.
 
 A success says only what happened: "Deleted.", "Moved to Trash." or "Refreshed “Library”.". It
@@ -46,6 +36,10 @@ names no Trash scope and no saved-snapshot state; the totals and the Not saved b
 those. An unknown Trash scope is a core issue in Details. Failed, partial and indeterminate
 results keep their own text. Of the header badges, only Partial has a help tag (the scan error
 count); Incomplete and Not saved have none.
+
+Help tags are AppKit tool tips with the same text as the accessibility hint (`toolTip` in
+[ToolTip.swift](../native/Explorer/ToolTip.swift)). With SwiftUI `.help`, a rest of the pointer
+on any spot without a help tag, such as the map, stopped all later help tags in the window.
 
 The banner stays until Dismiss, until a new outcome replaces the old one, or until a new folder
 opens. Dismiss clears the error and the outcome and marks the current issues as seen. The issue
@@ -66,9 +60,7 @@ The selected region publishes with the selection, never after a frame without it
 - A map rebuild computes the region of the shown selection with the new picture and publishes
   both together.
 
-Before this rule, `select` cleared the region first and asked the session-locked
-`DiagramFrame.region` for the new one. When a display refresh came between the two, AppKit drew
-the whole map without the dim for 10 to 42 ms, about one click in three. That was the click
+A region cleared before the new one arrives let AppKit draw frames without the dim: the click
 flicker.
 
 In fixture mode only, `MapView` exposes the frame sampler `map-selection-gaps` as an
@@ -142,8 +134,10 @@ real runner:
   hard-link, directory and grouped cards without accounting or sharing notes.
 - "testRefreshHelpTagHasNoSnapshotNoteAndBadgesHaveNoHelpTags": the Incomplete and Not saved
   badges have no help tag; the Refresh help tag, read by on-device text recognition, is
-  "Rescan the focused directory and descendants." Often no further help tag shows in a window
-  after one, and none after a hover on text without one, so each check has its own launch.
+  "Rescan the focused directory and descendants." Each check has its own launch, which a
+  SwiftUI `.help` on a badge needs.
+- "testHelpTagsShowAfterARestOnTheMapAndAfterADelete": help tags after a rest on the map, twice
+  for one element, and after a Delete.
 
 Model tests in [FeedbackModelTests.swift](../native/ExplorerModelTests/FeedbackModelTests.swift):
 "testStatusTextNamesTheHoveredBlockWhileAnotherItemIsSelected" (the selection, the picture and

@@ -129,7 +129,7 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
   position while the selected directory remains above the visible viewport.
 - "testConfirmationCancelDeleteAndStaleHandleRecovery": cancellation, confirmed
   deletion, disappeared target, dirty inventory and root protection.
-- "testUnknownTrashScopeIssueOpensFromTheDetailsChevron": only the chevron opens Details.
+- "testUnknownTrashScopeIssueOpensFromTheDetailsChevron": the chevron opens Details.
 - "testImmediateSavedOnlySelection": later selection during the
   latency scenario; XCUITest timing includes automation waits, not paint latency.
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.

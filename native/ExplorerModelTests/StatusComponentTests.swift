@@ -61,6 +61,30 @@ import XCTest
         issues: ["Skipped locked: permission denied", "Skipped busy: resource busy"]))
   }
 
+  /// The Details word and its chevron send one intent. Details stay open for a new outcome
+  /// while the banner shows, and close when the banner hides.
+  func testBannerDetailsToggleFromOneIntentAndCloseWhenTheBannerHides() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    model.toggleBannerDetails()
+    XCTAssertFalse(model.bannerDetailsShown, "no banner, nothing to open")
+    model.outcome = "Deleted. 3 items skipped."
+    model.issues = ["Skipped locked: permission denied"]
+    XCTAssertEqual(model.outcomeBanner?.detailsShown, false)
+    model.toggleBannerDetails()
+    XCTAssertEqual(model.outcomeBanner?.detailsShown, true)
+    model.outcome = "Moved to Trash."
+    XCTAssertEqual(model.outcomeBanner?.detailsShown, true, "a new outcome keeps Details open")
+    model.toggleBannerDetails()
+    XCTAssertEqual(model.outcomeBanner?.detailsShown, false)
+    model.toggleBannerDetails()
+    model.dismissBanner()
+    XCTAssertNil(model.outcomeBanner)
+    XCTAssertFalse(model.bannerDetailsShown, "Dismiss closes Details")
+    model.issues.append("Skipped busy: resource busy")
+    XCTAssertEqual(model.outcomeBanner?.detailsShown, false, "a new issue shows Details closed")
+  }
+
   /// A new session: the explorer and the start screen both show the preparation.
   func testProgressBarShowsPreparingInventoryWhileTheSessionLoads() async throws {
     let model = ExplorerModel(
