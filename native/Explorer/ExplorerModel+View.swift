@@ -12,9 +12,7 @@ extension ExplorerModel {
     hover = nil
     outlineVersion += 1
     hoverVersion += 1
-    pendingRows = nil
-    pendingExpansion = nil
-    pendingReveal = nil
+    treeWorker.discardAll()
     treeEditing = false
     hitWorker.discardAll()
     clickVersion += 1

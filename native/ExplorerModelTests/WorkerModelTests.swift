@@ -113,4 +113,74 @@ import XCTest
     XCTAssertNil(model.hover)
     model.motion.cancel()
   }
+
+  /// Selects `name` while the lock is held, so its path, region and reveal queries wait.
+  func selectWhileHeld(_ model: ExplorerModel, _ name: String) async throws -> Task<
+    MetadataRecord, Error
+  > {
+    let session = try XCTUnwrap(model.session)
+    let blocker = try await holdBridge(model)
+    model.select(try entry(name, in: model))
+    try await pollUntil { session.activeCallCount() == 4 }
+    return blocker
+  }
+
+  /// A waiting expansion runs before a later reveal, even though the reveal changed the
+  /// outline version, so the reveal's rows show the expanded directory and the edit ends.
+  func testWaitingExpansionRunsBeforeALaterRevealAndEndsTheEdit() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    let rows = try XCTUnwrap(model.outline?.total)
+    model.expand(try entry("small-files", in: model), expanded: true)
+    model.select(try entry("large-file", in: model))
+    try await waitUntil { !model.treeEditing && model.selectedRow != nil }
+    await settled(model)
+    // The 128 items of small-files are visible rows.
+    XCTAssertEqual(model.outline?.total, rows + 128)
+  }
+
+  /// An expansion while a reveal waits on the lock: the obsolete reveal publishes no rows and
+  /// does not scroll.
+  func testObsoleteRevealDoesNotPublishAfterAnExpansion() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    let serial = model.revealSerial
+    let rows = try XCTUnwrap(model.outline?.total)
+    let blocker = try await selectWhileHeld(model, "large-file")
+    model.expand(try entry("small-files", in: model), expanded: true)
+    _ = try await blocker.value
+    await settled(model)
+    XCTAssertFalse(model.treeEditing)
+    XCTAssertEqual(model.revealSerial, serial)
+    XCTAssertEqual(model.outline?.total, rows + 128)
+  }
+
+  /// Esc while a reveal waits on the lock: the rows arrive, but no row is selected.
+  func testRevealAfterClearSelectionSelectsNoRow() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    let serial = model.revealSerial
+    let blocker = try await selectWhileHeld(model, "large-file")
+    model.clearSelection()
+    _ = try await blocker.value
+    await settled(model)
+    XCTAssertNil(model.selectedRow)
+    XCTAssertEqual(model.revealSerial, serial)
+  }
+
+  /// A row page asked for after a reveal is served after it, so the page the table asked for
+  /// last is the one shown.
+  func testRowPageAskedAfterARevealIsServedAfterIt() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    model.expand(try entry("small-files", in: model), expanded: true)
+    try await waitUntil { !model.treeEditing }
+    let deep = try entry("small-120", in: model)
+    model.select(deep)
+    model.requestRows(0)
+    await settled(model)
+    XCTAssertEqual(model.outline?.offset, 0)
+    let row = try XCTUnwrap(model.selectedRow)
+    XCTAssertTrue(model.outline?.rows[row].entry.key.sameEntry(other: deep.key) == true)
+  }
 }

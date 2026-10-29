@@ -136,15 +136,20 @@ The real secondary clicks stay in "testContextMenusSelectClickedRowAndHoveredBlo
 main actor. A new request replaces the waiting request of its slot, and a lower slot is served
 first. The serve function awaits its own detached Rust call and checks the model's versions
 before it publishes. It is held only while the worker runs, so an idle worker retains no
-model. The selection path, the selection region, Left-arrow parent selection and map hit tests
-use one each (`pathWorker`, `regionWorker`, `parentWorker`, `hitWorker`, where a waiting click
-is served before a waiting hover); the other requests still use their own loops.
+model. The selection path, the selection region, Left-arrow parent selection, map hit tests and
+the tree use one each (`pathWorker`, `regionWorker`, `parentWorker`, `hitWorker`, `treeWorker`).
+A waiting click is served before a waiting hover; a waiting expansion before a reveal, and a
+reveal before a row page. An expansion runs even when a newer request changed the outline
+version. The view build still uses its own loop.
 [WorkerModelTests.swift](../native/ExplorerModelTests/WorkerModelTests.swift) holds the Rust
 lock while requests wait: "testObsoleteRegionAnswersDoNotReturnAfterClearSelection",
 "testObsoleteHoverAnswersDoNotReturnAfterThePointerLeaves",
 "testObsoleteClickAnswersDoNotSelectAfterClearSelection",
 "testClickAnswersDoNotSelectAfterTheViewIsRebuilt" and
-"testHoverAnswersDoNotReturnDuringAResultMotion".
+"testHoverAnswersDoNotReturnDuringAResultMotion",
+"testWaitingExpansionRunsBeforeALaterRevealAndEndsTheEdit",
+"testObsoleteRevealDoesNotPublishAfterAnExpansion", "testRevealAfterClearSelectionSelectsNoRow"
+and "testRowPageAskedAfterARevealIsServedAfterIt".
 
 `ExplorerModel.settled()` returns once every worker is idle at the same moment. It does not wait
 for session loads, operations, the rebuild debounce, the motion clock or AppKit; tests wait

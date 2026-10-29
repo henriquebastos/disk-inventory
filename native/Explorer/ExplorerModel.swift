@@ -88,7 +88,6 @@ struct PendingConfirmation: Identifiable {
     let done: CheckedContinuation<Void, Never>
   }
   var treeEditing = false
-  var treeWorkerRunning = false
   enum TreeIntent {
     case rows(UInt64)
     case expand(EntryKey, Bool, UInt64, EntryKey?, Int)
@@ -99,10 +98,13 @@ struct PendingConfirmation: Identifiable {
     let generation: Int
     let version: Int
     let intent: TreeIntent
+    /// A waiting expansion is served first, then a reveal, then a row page.
+    static let expansionSlot = 0
+    static let revealSlot = 1
+    static let rowsSlot = 2
   }
-  var pendingRows: TreeRequest?
-  var pendingExpansion: TreeRequest?
-  var pendingReveal: TreeRequest?
+  /// Tree expansion, reveal and row pages, one Rust call at a time.
+  let treeWorker = LatestWorker<TreeRequest>(slots: 3)
   var clickVersion = 0
   struct HitRequest {
     let frame: DiagramFrame
@@ -189,7 +191,7 @@ struct PendingConfirmation: Identifiable {
   /// Publishes the saved path of the selection.
   let pathWorker = LatestWorker<PathRequest>()
   /// Every latest-wins worker, for `settled()`.
-  var workers: [any Settling] { [pathWorker, regionWorker, parentWorker, hitWorker] }
+  var workers: [any Settling] { [pathWorker, regionWorker, parentWorker, hitWorker, treeWorker] }
   /// Returns once every worker is idle at the same moment. A worker that hands work to another
   /// is seen on the next pass. Session loads, operations, the rebuild debounce, the motion
   /// clock and AppKit are not workers: they publish `loading`, `working` or their own state.
