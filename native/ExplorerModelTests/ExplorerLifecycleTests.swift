@@ -173,6 +173,29 @@ import XCTest
     model.shutdown()
   }
 
+  /// Opening a folder shows the scan on the start screen: its phase, its counter, its time and
+  /// Stop.
+  func testStartScreenShowsTheScanCounterTimeAndStop() async throws {
+    let root = try ownedRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent("source")
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    let model = ExplorerModel(
+      arguments: [], environment: [:],
+      storage: ManagedInventoryStorage(root: root.appendingPathComponent("support")),
+      numbers: NativeNumberFormat(locale: Locale(identifier: "en_US")))
+    defer { model.shutdown() }
+    model.createManaged(root: source)
+    XCTAssertEqual(
+      model.startScreenProgressBar,
+      .operation(
+        phase: "Examining items…", items: "0 items examined", elapsed: "0 sec",
+        offersStop: true, canStop: true))
+    try await waitUntil { !model.replacingSession }
+    XCTAssertNil(model.error)
+    XCTAssertNil(model.startScreenProgressBar)
+  }
+
   func testManagedStorageLifecycleReopensLastFolderOfflineAndCleansOldGeneration() async throws {
     let root = try ownedRoot()
     defer { try? FileManager.default.removeItem(at: root) }

@@ -1149,9 +1149,9 @@ extension XCUIElement {
     app.buttons["dismiss-banner"].click()
     XCTAssertTrue(outcome.disappears(within: 8))
   }
-  /// Refresh shows the scan's progress with the folder name, a live counter and Stop. Stop
-  /// keeps the previous data and says so; a complete refresh applies the live change.
-  func testRefreshShowsNamedProgressWithCounterAndStopKeepsData() throws {
+  /// Refresh shows the scan's progress with the folder name, a live counter, its time and Stop.
+  /// Stop keeps the previous data and says so; a complete refresh applies the live change.
+  func testRefreshShowsNamedProgressWithCounterTimeAndStopKeepsData() throws {
     launch("prototype-home-refresh")
     row("Library").doubleClick()
     text("focus-name", contains: "Library")
@@ -1167,6 +1167,7 @@ extension XCUIElement {
     }
     print("REFRESH counter \(first) -> \(second)")
     XCTAssertNotEqual(first, second, "the counter is live")
+    XCTAssertTrue(shownText("scan-elapsed").contains("sec"), "the bar shows the time")
     XCTAssertTrue(app.buttons["stop-scan"].isEnabled)
     screenshot("refresh-progress")
     app.buttons["stop-scan"].click()

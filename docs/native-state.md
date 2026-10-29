@@ -109,7 +109,7 @@ model test per variant:
 - Busy bar: "testProgressBarShowsPreparingInventoryWhileTheSessionLoads",
   "testProgressBarShowsWorkingWhileANavigationBuildsItsView",
   "testProgressBarNamesTheItemThatAPreparationChecks",
-  "testProgressBarShowsARefreshPhaseCounterAndStop" and
+  "testProgressBarShowsARefreshPhaseCounterTimeAndStop" and
   "testProgressBarShowsATrashWithoutStopOrCounter".
 - Header: "testHeaderShowsTheSavedTotalWithoutBadgesForAFixture",
   "testHeaderDisablesBreadcrumbsAndRefreshWhileAPreparationRuns",

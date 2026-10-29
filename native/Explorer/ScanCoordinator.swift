@@ -5,6 +5,8 @@ import Observation
   private(set) var progress: ScanProgress?
   private(set) var polling = false
   private(set) var samples = 0
+  /// Whole seconds since `begin`; each sample updates it.
+  private(set) var elapsed: Duration = .zero
   /// The focused folder name while a refresh runs; nil for a scan of a new folder.
   private(set) var refreshing: String?
   /// The Trash or Delete that runs, and the name of its item.
@@ -12,6 +14,10 @@ import Observation
   private var control: ScanControl?
   private var pollTask: Task<Void, Never>?
   private var version = 0
+  private var started: ContinuousClock.Instant?
+  private let now: () -> ContinuousClock.Instant
+
+  init(now: @escaping () -> ContinuousClock.Instant = { .now }) { self.now = now }
 
   func begin(
     _ control: ScanControl, refreshing: String? = nil,
@@ -22,6 +28,8 @@ import Observation
     self.refreshing = refreshing
     self.operation = operation
     progress = control.progress()
+    started = now()
+    elapsed = .zero
     polling = true
     let generation = version
     pollTask = Task { [weak self] in
@@ -37,6 +45,10 @@ import Observation
   func sample() {
     guard let control else { return }
     progress = control.progress()
+    if let started {
+      let seconds = Duration.seconds(started.duration(to: now()).components.seconds)
+      if seconds != elapsed { elapsed = seconds }
+    }
   }
   /// Only a scan, a refresh and a permanent deletion offer Stop; Trash cannot stop.
   var offersStop: Bool { operation?.kind != .trash }
@@ -53,6 +65,12 @@ import Observation
       return numbers.count(progress.itemsExamined, one: "item", other: "items")
     }
   }
+  /// The time since a scan or a refresh began, such as "8 sec" or "1 min, 5 sec". Trash and
+  /// Delete have none.
+  func elapsedText(_ numbers: NativeNumberFormat) -> String? {
+    guard progress != nil, operation == nil else { return nil }
+    return numbers.duration(elapsed)
+  }
   func stop() {
     guard let control else { return }
     _ = control.cancel()
@@ -66,6 +84,8 @@ import Observation
     polling = false
     control = nil
     progress = nil
+    started = nil
+    elapsed = .zero
     refreshing = nil
     operation = nil
   }

@@ -51,11 +51,16 @@ availability, including the atomic publication boundary. File > Stop Scan
 (Command-Period) uses the same rule ([native-commands.md](native-commands.md)). An active filesystem call
 may finish before cancellation unwinds all workers.
 
-UI displays a spinner, cumulative items examined and truthful traversal, accounting,
-saving/publication and preparing-view phases. There is no percentage, ETA or
-provisional byte total. The previous presentation remains read-only until the new
+UI displays a spinner, cumulative items examined, the time since the scan began and truthful
+traversal, accounting, saving/publication and preparing-view phases. The time counts whole
+seconds in the locale's abbreviated units, such as "8 sec" or "1 min, 5 sec", and each poll
+sample updates it. The start screen and the explorer show the same bar. There is no
+percentage, ETA or provisional byte total. The previous presentation remains read-only until the new
 session is installed. See [scan-control.md](scan-control.md) for counter semantics,
 publication arbitration and core cancellation tests.
+"testScanElapsedTimeCountsWholeSecondsAndOperationsShowNone" checks the time with a fixed
+clock, and "testStartScreenShowsTheScanCounterTimeAndStop" checks the start-screen bar of a
+real scan.
 
 ## Confirmed result motion
 

@@ -3,9 +3,10 @@ import SwiftUI
 /// What the busy bar shows. Plain values only, so the bar renders and previews without a Rust
 /// session.
 enum ProgressBarState: Equatable {
-  /// A scan, Refresh Directory, Trash or Delete with Rust progress: its phase, its item counter
-  /// and, except for Trash, a Stop button.
-  case operation(phase: String, items: String?, offersStop: Bool, canStop: Bool)
+  /// A scan, Refresh Directory, Trash or Delete with Rust progress: its phase, its item counter,
+  /// the time since a scan or a refresh began and, except for Trash, a Stop button.
+  case operation(
+    phase: String, items: String?, elapsed: String? = nil, offersStop: Bool, canStop: Bool)
   /// A Trash or Delete preparation checks this item before its confirmation opens.
   case checking(name: String)
   /// A new session is loading; the previous view stays read-only.
@@ -25,7 +26,8 @@ extension ExplorerModel {
   private var progressBarContent: ProgressBarState {
     if scan.progress != nil {
       return .operation(
-        phase: scan.label, items: scan.itemsText(numbers), offersStop: scan.offersStop,
+        phase: scan.label, items: scan.itemsText(numbers), elapsed: scan.elapsedText(numbers),
+        offersStop: scan.offersStop,
         canStop: ExplorerCommand.stopScan.isEnabled(in: self))
     }
     if let checking { return .checking(name: checking) }
@@ -53,10 +55,14 @@ struct ProgressBar: View {
     HStack(spacing: 10) {
       ProgressView().controlSize(.small)
       switch state {
-      case .operation(let phase, let items, let offersStop, let canStop):
+      case .operation(let phase, let items, let elapsed, let offersStop, let canStop):
         Text(phase).accessibilityIdentifier("scan-phase")
         if let items {
           Text(items).monospacedDigit().accessibilityIdentifier("scan-items")
+        }
+        if let elapsed {
+          Text(elapsed).monospacedDigit().foregroundStyle(.secondary)
+            .accessibilityIdentifier("scan-elapsed")
         }
         Spacer()
         if offersStop {
@@ -78,6 +84,13 @@ struct ProgressBar: View {
   }
 }
 
+#Preview("Scan") {
+  ProgressBar(
+    state: .operation(
+      phase: "Examining items…", items: "12,345 items examined", elapsed: "1 min, 5 sec",
+      offersStop: true, canStop: true)
+  ) {}.frame(width: 600)
+}
 #Preview("Delete") {
   ProgressBar(
     state: .operation(

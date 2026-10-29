@@ -116,16 +116,16 @@ import XCTest
     XCTAssertNil(model.progressBar)
   }
 
-  /// Refresh Directory shows its phase, its item counter and an enabled Stop.
-  func testProgressBarShowsARefreshPhaseCounterAndStop() async throws {
+  /// Refresh Directory shows its phase, its item counter, its time and an enabled Stop.
+  func testProgressBarShowsARefreshPhaseCounterTimeAndStop() async throws {
     let model = try await fixture()
     defer { model.shutdown() }
     model.refresh()
     XCTAssertEqual(
       model.progressBar,
       .operation(
-        phase: "Refreshing “Workspace”…", items: "0 items examined", offersStop: true,
-        canStop: true))
+        phase: "Refreshing “Workspace”…", items: "0 items examined", elapsed: "0 sec",
+        offersStop: true, canStop: true))
     try await waitUntil { !model.working && !model.loading }
   }
 

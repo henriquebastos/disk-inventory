@@ -202,6 +202,41 @@ import XCTest
     return (model, session)
   }
 
+  /// A scan and a refresh show the whole seconds since they began, in the locale's units. A new
+  /// scan starts again from zero. Trash and Delete show none, and the time goes with the bar.
+  func testScanElapsedTimeCountsWholeSecondsAndOperationsShowNone() {
+    var clock = ContinuousClock.now
+    let scan = ScanCoordinator(now: { clock })
+    defer { scan.stopPolling(cancelScan: true) }
+    let numbers = NativeNumberFormat(locale: Locale(identifier: "en_US"))
+    XCTAssertNil(scan.elapsedText(numbers))
+    scan.begin(ScanControl())
+    XCTAssertEqual(scan.elapsedText(numbers), "0 sec")
+    clock += .milliseconds(8_900)
+    scan.sample()
+    XCTAssertEqual(scan.elapsedText(numbers), "8 sec")
+    clock += .seconds(56)
+    scan.sample()
+    XCTAssertEqual(scan.elapsedText(numbers), "1 min, 4 sec")
+    clock += .seconds(3_600)
+    scan.sample()
+    XCTAssertEqual(scan.elapsedText(numbers), "1 hr, 1 min, 4 sec")
+    scan.begin(ScanControl(), refreshing: "Library")
+    XCTAssertEqual(scan.elapsedText(numbers), "0 sec")
+    clock += .seconds(3)
+    scan.sample()
+    XCTAssertEqual(scan.elapsedText(numbers), "3 sec")
+    for kind in [ActionKind.permanentlyDelete, .trash] {
+      scan.begin(ScanControl(), operation: (kind, "Library"))
+      clock += .seconds(5)
+      scan.sample()
+      XCTAssertNil(scan.elapsedText(numbers), "\(kind)")
+    }
+    scan.begin(ScanControl())
+    scan.stopPolling(cancelScan: true)
+    XCTAssertNil(scan.elapsedText(numbers))
+  }
+
   func testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop() async throws {
     let (model, session) = try await confirmLibrary(.permanentlyDelete)
     let execution = try XCTUnwrap(model.execute())

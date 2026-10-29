@@ -82,8 +82,9 @@ equivalent on macOS.
 ## Refresh progress and Stop
 
 Refresh Directory uses the scan's progress presentation: the busy bar over the split view with
-the phase text, the live "N items examined" counter and Stop. The phase text names the focused
-folder: "Refreshing “Library”…", "Stopping…", then "Updating “Library”…" while the view rebuilds.
+the phase text, the live "N items examined" counter, the time since it began and Stop. The
+phase text names the focused folder: "Refreshing “Library”…", "Stopping…", then "Updating
+“Library”…" while the view rebuilds.
 Stop and the Stop Scan menu item stop a refresh like a scan.
 
 `ExplorerSession.refreshDirectoryControlled` takes a `ScanControl`. The core reads the live
@@ -123,8 +124,8 @@ real runner:
 - "testRepeatedMapClicksNeverDrawAFrameWithoutTheSelectionDim": 40 map clicks, zero gaps.
 - "testEscapeClearsTheSelectionInTreeAndMap": Esc after a tree and a map selection, no dim
   after Esc, and the sheet's Esc priority.
-- "testRefreshShowsNamedProgressWithCounterAndStopKeepsData": the named phase, a rising
-  counter, Stop with unchanged data, then a complete refresh with the new file.
+- "testRefreshShowsNamedProgressWithCounterTimeAndStopKeepsData": the named phase, a rising
+  counter, the time, Stop with unchanged data, then a complete refresh with the new file.
 - "testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop" and
   "testSkippedItemsShowACountAndTheirReasonsInDetails": real clicks on Delete, its confirmation
   and Stop; the Checking and Deleting phases, a rising removed counter, the stopped and skipped

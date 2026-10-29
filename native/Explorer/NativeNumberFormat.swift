@@ -7,8 +7,12 @@ import Foundation
   private let integer = NumberFormatter()
   private let units: [String]
   private let oneByte: String
+  private let durationStyle: Duration.UnitsFormatStyle
 
   init(locale: Locale) {
+    durationStyle = Duration.UnitsFormatStyle(
+      allowedUnits: [.hours, .minutes, .seconds], width: .abbreviated
+    ).locale(locale)
     for formatter in [amount, integer] {
       formatter.locale = locale
       formatter.numberStyle = .decimal
@@ -49,4 +53,7 @@ import Foundation
   func count(_ value: UInt64, one: String, other: String) -> String {
     "\(count(value)) \(value == 1 ? one : other)"
   }
+
+  /// A duration in the locale's abbreviated units: "8 sec", "1 min, 5 sec", "1 hr, 2 min, 5 sec".
+  func duration(_ value: Duration) -> String { value.formatted(durationStyle) }
 }
