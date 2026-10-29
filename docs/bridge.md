@@ -2,9 +2,8 @@
 
 The optional `bridge` feature exposes [the session facade](../src/bridge/mod.rs)
 using UniFFI **=0.32.2** proc-macro library metadata, not UDL or a handwritten ABI.
-Default CLI/core builds do not enable UniFFI. `bridge-build` additionally enables
-its generator CLI. The library produces rlib/staticlib; the existing CLI and
-benchmark contracts are unchanged. All bridge methods are synchronous.
+Default CLI/core builds do not enable UniFFI. `bridge-build` also enables
+its generator CLI. The library produces rlib/staticlib. All bridge methods are synchronous.
 
 ## 1a Build and consume
 
@@ -12,21 +11,19 @@ With Rust, Swift 6 and Xcode installed, choose an external artifact directory:
 
 ```sh
 bash scripts/build-bridge.sh /absolute/external/bridge
-bash scripts/test-bridge.sh /absolute/external/bridge
 ```
 
-[Build](../scripts/build-bridge.sh) uses locked/offline Cargo, generates Swift,
-header and modulemap from the release archive, then compiles/links
+[Build](../scripts/build-bridge.sh) uses locked/offline Cargo (an exported
+`CARGO_TARGET_DIR`, else `target` in the directory), generates Swift, header and
+modulemap from the release archive, then compiles/links
 [the Swift smoke client](../tests/bridge-smoke.swift) in Swift 6 language mode.
-[Test](../scripts/test-bridge.sh) runs default/bridge tests, formatting, strict
-Clippy for default/bridge/build-tool configurations, and the executable. Fetch
-locked dependencies first if unavailable locally. Generated products, compiler
-caches and new owned fixtures stay in the supplied directory, outside Git.
-Existing core tests retain their established self-cleaning temporary paths.
+[check.sh](../scripts/check.sh) runs the bridge tests, Clippy and the smoke client
+([checks.md](checks.md)). Fetch locked dependencies first if they are not local.
+Generated products and compiler caches stay in the supplied directory, outside Git.
 
 Products: `generated/disk_map_bench.swift`, `disk_map_benchFFI.h` and
-`module.modulemap` (the latter two also under `generated`),
-`target/release/libdisk_map_bench.a`, and `bridge-smoke`.
+`module.modulemap` (the latter two also under `generated`), `libdisk_map_bench.a`
+(a copy of the release archive, made only when it changed), and `bridge-smoke`.
 Compile generated Swift into the client target; include the generated directory
 for the `disk_map_benchFFI` module and link the archive plus Foundation. No
 installation or checked-in generated code is needed.
@@ -114,40 +111,10 @@ try pending.cancel()                // or execute(action:) after confirmation
 
 ## 1c Native-free scenarios and evidence
 
-The explicit fixture constructor always uses the stateful `MemoryFileSystem`
-with real Rust explorer/layout/accounting/operations. Unknown names fail closed;
-no path instantiates the native adapter. `status().simulated` remains true.
-Discover entries through bounded queries: `small-files/small-00` through
-`small-15`, `large-file` (2^53+123 allocated bytes), `zero-byte`, `hardlink-a`,
-`hardlink-b`, `trash`, and raw bytes `raw-` followed by FF.
-
-| Scenario | Behavior/target |
-|---|---|
-| `presentation` | Balanced 4096-byte large file and 128 small children for native UI pagination |
-| `metadata-delay` | Presentation inventory; only large-file MemoryFileSystem metadata sleeps one second |
-| `prototype-home` | The design prototype's 236.9 GB home `/Users/ana`: its names (`CoreSimulator` is `CoreDevice`), hierarchy, sizes and extensions; directories own zero bytes |
-| `prototype-home-refresh` | `prototype-home`; each directory metadata request sleeps 300 ms and `Library/Caches/new cache.db` (2 GB) exists only live |
-| `prototype-home-nested-trash` | `prototype-home` plus `Projects/.Trash` with four videos (4 GB), added after the prototype's entries |
-| `file-type-colors` | `/Users/ana` with newly listed extensions, files without an extension in Git object storage (submodules, one slash-named, and a bare repository included) and cache folders, and gray controls |
-| `visual-details` | Isolated nested groups and a long directory path; entry-only metadata differs from subtree bytes |
-| `ordinary`, `trash-outside` | Trash moves to `/.Trash/moved` |
-| `trash-inside` | Moves to `trash/moved` within scope |
-| `presentation-trash-inside` | Larger Trash directory separates the visible source and destination regions |
-| `presentation-trash-late-target` | Original presentation sizes place the destination outside the 24 accessibility targets |
-| `metadata-failure` | `large-file` metadata denied; selection still works |
-| `permission-failure` | `small-files` enumeration denied; removal fails unchanged |
-| `changed-target` | Live `large-file` identity differs from saved |
-| `partial-deletion` | Removing `small-files` fails after one unlink; enumeration denied |
-| `trash-unknown`, `trash-missing` | Unknown scope or missing returned destination |
-| `trash-failure` | Guaranteed unchanged failed Trash |
-| `unknown-allocation` | Refresh root adds conflicting `unknown-a`/`unknown-b`; unattributed/stale |
-| `operation-quick`, `operation-skip` | `prototype-home`; in `-skip` Delete skips three `Library` files |
-| `operation-slow` | Each check, the Trash move and the update take 3 s; each removal 30 ms |
-| `operation-paused` | Holds each stage (check, trash, removal after 5 entries, update) until `releaseFixtureStage()`; `waitForHeldFixtureStage()` names it |
-
+The scenarios of the explicit fixture constructor are listed in [fixtures.md](fixtures.md).
 [src/bridge/tests.rs](../src/bridge/tests.rs) names the invariants:
 
-- "presentation_and_delay_fixtures_are_isolated": original scenarios unchanged; delay default-off.
+- "presentation_and_delay_fixtures_are_isolated": only `metadata-delay` delays metadata.
 - "visual_details_fixture_has_nested_groups_and_long_directory_confirmation": nested groups,
   long target paths, directory-entry-only sizes and pin release on cancellation.
 - "saved_views_are_bounded_native_free_and_byte_exact": zero adapter calls for views.
@@ -181,7 +148,7 @@ Discover entries through bounded queries: `small-files/small-00` through
 The Swift smoke exercises these conversions and operation flows, plus one owned
 one-file create followed by unavailable-source open, never native Trash or deletion. Native GUI/XCUITest behavior
 is documented in [native-explorer.md](native-explorer.md). Native Trash, hostile
-namespace races, non-macOS and Intel linking remain untested here.
+namespace races, non-macOS and Intel linking are untested here.
 
 ## Native presentation views
 
@@ -191,11 +158,10 @@ key's optional position without opening collapsed ancestors.
 Each `OutlineRow` includes optional `map_rgb` (Swift `mapRgb`), packed as `0xRRGGBB`.
 Files use the map's base type color, folder rule included. Directories have no color value.
 "outline_swatch_colors_match_map_file_tiles_and_directories_have_none" in
-[src/bridge/tests.rs](../src/bridge/tests.rs) checks this additive field.
-The saved `DMAPBEN1` format and default-feature builds remain unchanged.
+[src/bridge/tests.rs](../src/bridge/tests.rs) checks this field.
 `diagram` takes a `MapAppearance` (light, dark, light or dark Increase Contrast; a mirror
 of the core enum) and returns an immutable `DiagramFrame` with flat sRGB RGBA `bitmap`,
 owner `hit`, selection `region` and bounded accessibility `targets`. Neither view
 is an action capability. Execution/refresh revisions reject obsolete queries.
 Bounds, payload-versus-RSS distinctions and exact tests are specified in
-[native-diagram.md](native-diagram.md). Legacy children/layout methods are unchanged.
+[native-diagram.md](native-diagram.md).

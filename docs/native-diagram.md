@@ -3,8 +3,8 @@
 The [native explorer](native-explorer.md) uses generated objects in
 [src/bridge/views.rs](../src/bridge/views.rs). Rust owns saved inventory, accounting,
 geometry and rasterization. Swift owns input, native controls, asynchronous coordination
-and presentation. These views never authorize removal; the existing prepared-action
-contract in [bridge.md](bridge.md) is unchanged.
+and presentation. These views never authorize removal; only the prepared action of
+[bridge.md](bridge.md) does.
 
 ## Placement and pixel authority
 

@@ -12,7 +12,7 @@ settings:
     GENERATE_INFOPLIST_FILE: YES
     SWIFT_INCLUDE_PATHS: '$(BRIDGE_ROOT)/generated'
     HEADER_SEARCH_PATHS: '$(BRIDGE_ROOT)/generated'
-    OTHER_LDFLAGS: ['$(BRIDGE_ROOT)/target/release/libdisk_map_bench.a', '-framework', Foundation]
+    OTHER_LDFLAGS: ['$(BRIDGE_ROOT)/libdisk_map_bench.a', '-framework', Foundation]
 targets:
   DiskInventory:
     type: application

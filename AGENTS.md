@@ -6,7 +6,19 @@ For benchmark changes, read [scripts/run-benchmark.mjs](scripts/run-benchmark.mj
 
 ## 1a Verify changes
 
-- Run the formatting, test and Clippy commands in the README before reporting completion.
+- Before you report completion, run [scripts/check.sh](scripts/check.sh) in the mode for the
+  changed area ([docs/checks.md](docs/checks.md)):
+
+  | Changed area | Mode |
+  |---|---|
+  | Rust core, CLI, docs | `fast` |
+  | bridge, Swift model and views, build scripts | `model` |
+  | input, window layout, rendering | `model`, then `ui -only-testing:…` for the affected tests |
+  | shared UI test helpers; before a merge | `all` |
+
+- Export absolute `CHECK_ROOT`, `CARGO_TARGET_DIR`, `GUI_ROOT` and `TMPDIR` outside the
+  repository. Use your own `CHECK_ROOT` for each agent. Only one GUI run (every mode except
+  `fast`) can run on a machine; a second one stops.
 - A behavior change needs a test that fails without it. Report skipped platform checks.
 - Tests may mutate only their own temporary fixtures. Keep real inventories, snapshots,
   raw results and build artifacts outside Git. Broad scans need an explicit scope.

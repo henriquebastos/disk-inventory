@@ -17,8 +17,9 @@ receives allocation once. Aliases retain raw allocation but have zero accounted
 bytes. Parent IDs precede children; a reverse pass aggregates subtree totals.
 
 A hardlinked file can change between the stats of two of its links. The scan then
-counts a path error, so the result is partial (CLI exit 2), and gives every link the
-first allocation that it read. A saved snapshot with conflicting sizes in a hardlink
+counts one path error for each link whose allocation differs, so the result is partial
+(CLI exit 2). Every link gets the allocation of the link that was added to the map first
+(merge order, not stat order). A saved snapshot with conflicting sizes in a hardlink
 group is corrupt, and loading it fails. Tests:
 [src/lib.rs](../src/lib.rs)
 "hardlink_allocation_change_during_scan_is_a_path_error_in_a_saved_partial_result" and
@@ -145,9 +146,9 @@ stable across sync. The [README](../README.md) includes a typed SQLite import.
 - "export_broken_pipe_is_quiet_and_streaming_errors_propagate": closed CLI pipes are
   quiet and library writer failures propagate.
 
-The old benchmark alone retains top-ten queries and canonical details.
+Only the `disk-map-bench` binary has top-ten queries and canonical details.
 [tests/accounting.rs](../tests/accounting.rs) "cli_snapshot_load_and_opt_in_inventory"
-covers its unchanged adapter.
+covers its adapter.
 
 ## 1d Limits
 

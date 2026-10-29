@@ -133,22 +133,17 @@ publication. Motion does not claim reclaimed space or undo availability.
 [DixModelTests.swift](../native/ExplorerModelTests/DixModelTests.swift)
 "testDisclosureZoomBreadcrumbAndAncestorRestoreContext" and
 "testHistoryCapPayloadAndSessionAndMutationInvalidation" cover sparse-context
-restoration, the 64-context cap and mutation/replacement invalidation. Existing
-safety/replacement/pin and virtual-tree tests remain in the model suite.
+restoration, the 64-context cap and mutation/replacement invalidation.
 
-Build with `bash scripts/build-gui.sh "$G"`, then run the existing scheme with
-`xcodebuild -project "$G/project/DiskInventory.xcodeproj" -scheme DiskInventory
--configuration Debug -derivedDataPath "$G/DerivedData" BRIDGE_ROOT="$G/bridge"
-CLANG_MODULE_CACHE_PATH="$G/module-cache" -destination 'platform=macOS'
--resultBundlePath "$G/ModelTests.xcresult" -only-testing:ExplorerModelTests
-test-without-building`. Set TMPDIR below G. This is a hosted unit suite, not
-XCUITest: its app host is explicitly in presentation-fixture mode via DI_MODEL_TEST;
+Run the model tests with `scripts/check.sh model-only` ([checks.md](checks.md)). This is a
+hosted unit suite, not XCUITest: its app host is explicitly in presentation-fixture mode via DI_MODEL_TEST;
 DI_TEST_ROOT points below the external generated project. UI tests explicitly clear
 that host override and retain their own fixture-only launch arguments.
 
 Untested limits: real native chooser/Finder/Trash interactions, metadata crash
 recovery/durability faults, Intel/older macOS and full VoiceOver.
-The UI test checks which motion style ran. It cannot verify compositor output.
+Model tests check which motion style a removal chooses. No test reads the fixture-only
+`motion-style` probe or verifies compositor output.
 Manual frame-by-frame review must verify travel, poof, fade, and the final state.
 Hosted/offscreen tests do not replace foreground screenshots or UI automation. Startup failure stops that validation lane; no security changes or
 retries are a remedy.

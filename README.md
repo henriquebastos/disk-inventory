@@ -118,7 +118,7 @@ numeric aggregation and direct pipe with an unavailable source tree are tested i
 
 ## 1c Reuse and verify
 
-The library crate remains `disk_map_bench` for compatibility.
+The library crate is `disk_map_bench`.
 [Inventory](src/inventory.rs) exposes `create`, `open`, full-root `sync`, `root`,
 `counters`, `is_partial`, `entry` and `entries`. `SavedEntry` has raw relative path
 bytes, typed `Kind` and all three byte counts. `ScanOptions::default()` uses four
@@ -132,8 +132,8 @@ cargo test --offline --locked
 cargo clippy --offline --locked --all-targets -- -D warnings
 ```
 
-The unchanged `disk-map-bench` binary retains bulk/stat experiments and opt-in
-`--queries`/`--details`; these are not part of the new inventory interface.
+The `disk-map-bench` binary has bulk/stat experiments and opt-in
+`--queries`/`--details`; these are not part of the inventory interface.
 
 ```sh
 node scripts/run-benchmark.mjs "$CARGO_TARGET_DIR/release/disk-map-bench" \
@@ -159,6 +159,7 @@ prints one summary line with the time of each stage:
 export CHECK_ROOT=/private/tmp/disk-inventory-check  # all outputs, outside the repository
 scripts/check.sh fast   # format, Clippy x3, Rust tests, swift-format, docs, git diff --check
 scripts/check.sh model  # fast, GUI build and app icon check, bridge smoke, model tests
+scripts/check.sh model-only -only-testing:ExplorerModelTests/NativeNumberFormatTests
 scripts/check.sh ui -only-testing:ExplorerUITests/ExplorerUITests/testSiblingRowsStayVisibleAfterDeleteWithSkipsDeleteAndTrash
 scripts/check.sh all    # model, then every UI test
 ```
@@ -166,9 +167,9 @@ scripts/check.sh all    # model, then every UI test
 `CARGO_TARGET_DIR` and `GUI_ROOT` default below `CHECK_ROOT`; `TMPDIR` must also be outside the
 repository. It refuses to run with less than 1.5 GB free. The docs stage
 ([check-docs.py](scripts/check-docs.py)) keeps each Markdown document below 1,500 words with
-resolving links and existing quoted test names. UI tests need an unlocked console; they run one
-at a time through [test-gui.sh](scripts/test-gui.sh), and result bundles are deleted after the
-summary is read.
+resolving links and existing quoted test names. Only one GUI run (every mode except `fast`)
+can run on a machine at a time. [checks.md](docs/checks.md) gives the commands for one test,
+the log paths and the troubleshooting steps.
 
 Test each change in the cheapest layer that can fail when the behavior changes:
 

@@ -1,9 +1,8 @@
 # Controlled snapshot creation, refresh and deletion
 
 [Inventory::create_controlled](../src/inventory.rs) adds a single-use
-[ScanControl](../src/scan_control.rs) to `create(root, output, options)`. Existing
-create/open/sync, CLI defaults, partial-scan policy and snapshot bytes are unchanged.
-Create still requires a **new** destination: callers retaining a last valid snapshot
+[ScanControl](../src/scan_control.rs) to `create(root, output, options)`.
+Create requires a **new** destination: callers retaining a last valid snapshot
 must choose a new owned generation, then update their last-inventory reference only
 after success. This API does not replace or clean up previous generations.
 

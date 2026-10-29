@@ -4,7 +4,7 @@
 `FileSystem` adapter. `OperationSession::new` indexes every recorded identity,
 including files originally reporting one link, without consulting source paths.
 `NativeFileSystem::open_snapshot` decodes and pins the same open snapshot inode;
-it does not validate the source root. Snapshot format and CLI behavior are unchanged.
+it does not validate the source root.
 
 Use `explorer()` for saved selection, paging and layout. `live_metadata(handle)`
 is a separate targeted request returning identity, kind, allocation, logical size,

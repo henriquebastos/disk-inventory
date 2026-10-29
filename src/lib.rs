@@ -306,8 +306,9 @@ impl Method {
     }
 }
 /// A file can change between the stats of two of its hardlinks during a scan. The scan then
-/// reports a path error, so the result is partial, and gives every link the first allocation it
-/// saw. In a saved snapshot the same conflict means corruption.
+/// reports one path error for each link whose allocation differs, so the result is partial, and
+/// gives every link the allocation of the link that was added to the map first (merge order, not
+/// stat order). In a saved snapshot the same conflict means corruption.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HardlinkConflict {
     Reject,

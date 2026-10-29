@@ -2,21 +2,22 @@
 
 The [SwiftUI/AppKit app](../native/Explorer/ExplorerApp.swift) presents the
 [generated Rust bridge](bridge.md). It has no WebView, domain subprocess, second
-inventory, or Swift accounting/layout implementation. The CLI remains unchanged.
+inventory, or Swift accounting/layout implementation.
 
 ## 1a Build and launch
 
 Use installed Xcode, Swift 6, XcodeGen and the locked Rust dependencies. The build
 targets macOS 26, matching the installed Rust standard-library archive;
 older macOS and Intel are unverified. No installation or signing identity is needed.
-Choose an absolute artifact root outside the repository:
+To build and launch by hand, choose an absolute artifact root outside the repository:
 
 ```sh
 G=/absolute/external/gui
 bash scripts/build-gui.sh "$G"
-bash scripts/test-gui.sh "$G"
 open "$G/DerivedData/Build/Products/Debug/DiskInventory.app"
 ```
+
+Run the model and UI tests with [check.sh](../scripts/check.sh) ([checks.md](checks.md)).
 
 [Build](../scripts/build-gui.sh) regenerates UniFFI and the Xcode project from
 [project.yml](../native/project.yml) and builds the app and tests. actool compiles
@@ -25,7 +26,7 @@ open "$G/DerivedData/Build/Products/Debug/DiskInventory.app"
 Products, bindings, caches and results go under G; macOS/Xcode keep
 system-managed state elsewhere.
 
-For native-free exploration:
+For native-free exploration with a [fixture scenario](fixtures.md):
 
 ```sh
 open -n "$G/DerivedData/Build/Products/Debug/DiskInventory.app" \
@@ -153,7 +154,7 @@ Fixture mode shows "SIMULATED" only in the window title; other content matches p
 "testFixtureModeNamesSimulationOnlyInWindowTitle" checks the window and its confirmation.
 "testOnlyFixtureWindowTitleNamesSimulation" in
 [RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift) checks the production title.
-Command, shortcut and confirmation tests are listed in [native-commands.md](native-commands.md). `--fixture-mode`,
+`--fixture-mode`,
 `--scenario`, or `DI_UI_TEST` locks the app into fixture-only mode; incomplete or
 unknown configuration is an error, never a native fallback.
 
@@ -184,12 +185,11 @@ Fixture isolation is tested by "presentation_and_delay_fixtures_are_isolated" in
 [src/bridge/tests.rs](../src/bridge/tests.rs).
 "visual_details_fixture_has_nested_groups_and_long_directory_confirmation" in the
 same file verifies nested groups, long paths, entry-only sizes and cancelled pins.
-The original >2^53 fixture is unchanged.
 
 Untested limits: real Trash, native GUI picker lifecycle, hostile namespace races,
 full VoiceOver traversal (the tree is the exhaustive accessible alternative),
 large-inventory GUI paint latency,
-and cancellation of destructive executing work (unsupported). The additional native model/geometry tests
-are linked from [native-diagram.md](native-diagram.md); offscreen callback tests
-do not substitute for foreground input/screenshot acceptance. XCUITest requires an unlocked interactive
-console; do not change security settings to force automation.
+and cancellation of destructive executing work (unsupported). More native model/geometry tests
+are in [native-diagram.md](native-diagram.md); offscreen callback tests
+do not substitute for foreground input/screenshot acceptance. UI test needs are in
+[checks.md](checks.md).
