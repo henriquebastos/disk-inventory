@@ -41,7 +41,8 @@ extension ExplorerModel {
         SelectionCardItem(
           name: entryName(entry),
           size: numbers.storage(directory ? entry.subtreeBytes : entry.accountedBytes),
-          count: directory ? "\(numbers.count(entry.childCount)) direct items" : nil,
+          count: directory
+            ? numbers.count(entry.childCount, one: "direct item", other: "direct items") : nil,
           path: selectedDisplayPath, rootProtected: entry.parent == nil,
           canRevealInFinder: ExplorerCommand.revealInFinder.isEnabled(in: self),
           canMoveToTrash: ExplorerCommand.moveToTrash.isEnabled(in: self),

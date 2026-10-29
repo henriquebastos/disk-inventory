@@ -105,7 +105,9 @@ impl ExplorerTree {
 impl ExplorerTree {
     pub fn rows(&self, offset: u64, limit: u32) -> Result<OutlineSlice, BridgeError> {
         self.with(|e, t| {
-            let offset = usize::try_from(offset).map_err(|_| stale())?;
+            let offset = usize::try_from(offset).map_err(|_| BridgeError::InvalidInput {
+                message: "offset exceeds platform range".into(),
+            })?;
             let p = t.rows(e, offset, limit as usize)?;
             // Sibling rows share a parent, so its folder context is computed once per run.
             let mut context = None;

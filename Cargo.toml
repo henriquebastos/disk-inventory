@@ -21,6 +21,10 @@ required-features = ["bridge-build"]
 libc = "=0.2.186"
 uniffi = { version = "=0.32.2", optional = true }
 
+[lints.rust]
+# The allocation-counting measurement build: RUSTFLAGS="--cfg count_allocations".
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(count_allocations)"] }
+
 [profile.release]
 debug = 1
 

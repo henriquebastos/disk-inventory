@@ -1,7 +1,7 @@
 //! Sparse expansion state over the saved child index, with virtual row addressing.
 use crate::{
     Kind,
-    explorer::{EntryHandle, EntrySummary, Explorer},
+    explorer::{EntryHandle, EntrySummary, Explorer, child_order},
     invalid,
 };
 use std::{
@@ -45,19 +45,8 @@ pub struct TreePage<'a> {
 }
 impl Explorer {
     fn child_rank(&self, parent: u32, id: u32) -> io::Result<usize> {
-        let wanted = &self.map.nodes[id as usize];
         self.child_ids(parent)
-            .binary_search_by(|&other| {
-                wanted
-                    .subtree
-                    .cmp(&self.map.nodes[other as usize].subtree)
-                    .then_with(|| {
-                        self.map
-                            .basename(other as usize)
-                            .cmp(self.map.basename(id as usize))
-                    })
-                    .then(other.cmp(&id))
-            })
+            .binary_search_by(|&other| child_order(&self.map, other, id))
             .map_err(|_| invalid("entry is no longer a child of its saved parent"))
     }
 }

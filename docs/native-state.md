@@ -48,6 +48,9 @@ test per variant:
 - "testCardShowsAFileWithItsSizeAndLoadedPath": no count, the path once loaded, and both
   removal buttons disabled while a preparation runs.
 - "testCardShowsADirectoryWithItsSubtreeSizeAndDirectItems": the subtree size and the count.
+- "testCardNamesOneDirectItemInTheSingular": "1 direct item". The shared rule for every count
+  text is in [NativeNumberFormatTests.swift](../native/ExplorerModelTests/NativeNumberFormatTests.swift)
+  "testCountUsesTheSingularNounOnlyForOne".
 - "testCardShowsTheProtectedInventoryRoot": root protection and no removal.
 - "testCardShowsAGroupedBlockSizeAndOpensItsDirectory": the size and Show Directory Contents.
 

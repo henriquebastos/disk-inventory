@@ -88,7 +88,7 @@ The card has no accounting or sharing note. Storage uses decimal KB through EB a
 [NativeNumberFormatTests.swift](../native/ExplorerModelTests/NativeNumberFormatTests.swift):
 "testDecimalStorageUsesLocaleAndPreservesUnsignedRange" checks units, grouping, zero and UInt64.max in en_US and pt_BR.
 "testVisibleTreeSizeUsesInjectedLocaleWithoutChangingAccounting" checks size cells against exact counts.
-Counts use locale grouping. Confirmations omit sizes instead of implying reclaimable space. The
+Counts use locale grouping and the singular for one ("1 scan error"). Confirmations omit sizes instead of implying reclaimable space. The
 header shows the scope size alone; its Partial, Incomplete and Not saved badges stay. Detailed
 errors stay behind a disclosure.
 

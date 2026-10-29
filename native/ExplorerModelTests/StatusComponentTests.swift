@@ -235,7 +235,7 @@ import XCTest
     try await waitUntil { !model.replacingSession }
     XCTAssertNil(model.error)
     let header = try XCTUnwrap(model.header)
-    XCTAssertEqual(header.partialScanErrors, "1 scan errors")
+    XCTAssertEqual(header.partialScanErrors, "1 scan error")
     XCTAssertEqual(
       header.scanDate,
       model.scanDate.map { "Scanned " + $0.formatted(date: .abbreviated, time: .shortened) })

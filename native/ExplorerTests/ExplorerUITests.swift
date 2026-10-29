@@ -624,24 +624,20 @@ extension XCUIElement {
   /// Vertical center of the text drawn inside `element` and `row`, in screen points. The ink
   /// runs from its top pixel row down to the baseline: the most common lowest ink row of the
   /// pixel columns, so a descender does not move the center.
-  func inkCenter(_ element: XCUIElement, row: XCUIElement, image: NSBitmapImageRep) -> CGFloat? {
-    let screen = NSScreen.screens.first?.frame ?? .zero
-    let scale = CGFloat(image.pixelsWide) / screen.width
+  func inkCenter(_ element: XCUIElement, row: XCUIElement, pixels p: WindowPixels) -> CGFloat? {
     let frame = element.frame.intersection(row.frame.insetBy(dx: 0, dy: 1.5))
-    let x0 = Int(frame.minX * scale)
-    let x1 = Int((frame.maxX - 1) * scale)
-    let y0 = Int(frame.minY * scale)
-    let y1 = Int(frame.maxY * scale)
+    let x0 = p.x(frame.minX)
+    let x1 = p.x(frame.maxX - 1)
+    let y0 = p.y(frame.minY)
+    let y1 = p.y(frame.maxY)
     guard x0 < x1, y0 < y1 else { return nil }
-    var pixel = [Int](repeating: 0, count: 8)
-    var reference = [Int](repeating: 0, count: 8)
     var top: Int?
     var lowest: [Int: Int] = [:]
     for y in y0..<y1 {
       // One point left of the text frame is background on every pixel row.
-      image.getPixel(&reference, atX: x0 - Int(scale), y: y)
+      let reference = p.rgb(p.x(frame.minX - 1), y)
       for x in x0..<x1 {
-        image.getPixel(&pixel, atX: x, y: y)
+        let pixel = p.rgb(x, y)
         if (0..<3).contains(where: { abs(pixel[$0] - reference[$0]) > 64 }) {
           top = top ?? y
           lowest[x] = y
@@ -651,7 +647,7 @@ extension XCUIElement {
     let rows = Dictionary(grouping: lowest.values, by: { $0 }).mapValues(\.count)
     guard let top, let baseline = rows.max(by: { ($0.value, $0.key) < ($1.value, $1.key) })?.key
     else { return nil }
-    return CGFloat(top + baseline + 1) / 2 / scale
+    return CGFloat(top + baseline + 1) / 2 / p.scale + p.origin.y
   }
   func testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows() throws {
     continueAfterFailure = true  // Report both rows in every appearance.
@@ -659,8 +655,7 @@ extension XCUIElement {
       launch(appearance: appearance)
       row("small-files").click()
       text("selected-name", contains: "small-files")
-      let image = try XCTUnwrap(NSBitmapImageRep(data: settled { XCUIScreen.main.screenshot() }))
-      XCTAssertEqual(image.bitsPerSample, 8)
+      let pixels = try windowPixels()
       for (name, selected) in [("small-files", true), ("trash", false)] {
         let tableRow = app.outlines["entry-tree"].tableRows.containing(
           .staticText, identifier: "entry-\(name)"
@@ -668,8 +663,8 @@ extension XCUIElement {
         XCTAssertEqual(tableRow.isSelected, selected, name)
         let size = tableRow.staticTexts["tree-size"]
         XCTAssertTrue(size.exists, name)
-        let nameCenter = try XCTUnwrap(inkCenter(row(name), row: tableRow, image: image), name)
-        let sizeCenter = try XCTUnwrap(inkCenter(size, row: tableRow, image: image), name)
+        let nameCenter = try XCTUnwrap(inkCenter(row(name), row: tableRow, pixels: pixels), name)
+        let sizeCenter = try XCTUnwrap(inkCenter(size, row: tableRow, pixels: pixels), name)
         XCTAssertEqual(
           sizeCenter, nameCenter, accuracy: 1,
           "\(appearance) \(name): size text center \(sizeCenter), name text center \(nameCenter)")
@@ -832,24 +827,64 @@ extension XCUIElement {
     let minX = app.outlines["entry-tree"].frame.maxX
     let levels = hatchLevels(p, minX: minX)
     XCTAssertGreaterThan(levels.pixels, 0, "the map shows aggregate hatch")
-    func hatch(_ x: Int, _ y: Int) -> Bool {
-      let c = p.rgb(x, y)
-      return c.max()! - c.min()! <= 8
-        && (abs(c[1] - levels.light) <= 3 || abs(c[1] - levels.dark) <= 3)
+    let window = app.windows.firstMatch
+    guard
+      let (x, y) = Self.hatchPixel(
+        p, light: levels.light, dark: levels.dark, minX: p.x(minX),
+        top: p.y(window.frame.minY + 120))
+    else {
+      XCTFail("no hatch area")
+      return nil
     }
-    let top = p.y(app.windows.firstMatch.frame.minY + 120)
-    for y in stride(from: top, to: p.image.pixelsHigh - 8, by: 2) {
-      for x in stride(from: max(0, p.x(minX)) + 8, to: p.image.pixelsWide - 8, by: 2)
-      where (-6...6).allSatisfy({ d in hatch(x + d, y) && hatch(x, y + d) }) {
-        let window = app.windows.firstMatch
-        return window.coordinate(withNormalizedOffset: .zero).withOffset(
-          CGVector(
-            dx: CGFloat(x) / p.scale + p.origin.x - window.frame.minX,
-            dy: CGFloat(y) / p.scale + p.origin.y - window.frame.minY))
+    return window.coordinate(withNormalizedOffset: .zero).withOffset(
+      CGVector(
+        dx: CGFloat(x) / p.scale + p.origin.x - window.frame.minX,
+        dy: CGFloat(y) / p.scale + p.origin.y - window.frame.minY))
+  }
+  /// The first pixel, by rows from `top`, whose 13-pixel cross is all aggregate hatch: each
+  /// pixel has one stripe level, the other level two pixels right, its own level four pixels
+  /// right and one pixel up-right. A plain gray tile at one hatch level does not match.
+  static func hatchPixel(
+    _ p: WindowPixels, light: Int, dark: Int, minX: Int, top: Int
+  ) -> (Int, Int)? {
+    func at(_ c: [Int], _ level: Int) -> Bool { c.max()! - c.min()! <= 8 && abs(c[1] - level) <= 3 }
+    func same(_ a: [Int], _ b: [Int]) -> Bool { zip(a, b).allSatisfy { abs($0 - $1) <= 2 } }
+    func stripe(_ x: Int, _ y: Int) -> Bool {
+      let (a, b) = (p.rgb(x, y), p.rgb(x + 2, y))
+      return ((at(a, light) && at(b, dark)) || (at(a, dark) && at(b, light)))
+        && same(a, p.rgb(x + 4, y)) && same(a, p.rgb(x + 1, y - 1))
+    }
+    for y in stride(from: max(top, 7), to: p.image.pixelsHigh - 8, by: 2) {
+      for x in stride(from: max(0, minX) + 8, to: p.image.pixelsWide - 12, by: 2)
+      where (-6...6).allSatisfy({ d in stripe(x + d, y) && stripe(x, y + d) }) {
+        return (x, y)
       }
     }
-    XCTFail("no hatch area")
     return nil
+  }
+  /// The hatch search on drawn pixels, without the app: a plain gray area at the light hatch
+  /// level does not match; diagonal stripes of the two levels do.
+  func testHatchSearchRejectsAPlainGrayAreaAndFindsStripes() throws {
+    let (light, dark) = (128, 96)
+    let image = try XCTUnwrap(
+      NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: 48, pixelsHigh: 48, bitsPerSample: 8,
+        samplesPerPixel: 3, hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB,
+        bytesPerRow: 0, bitsPerPixel: 0))
+    func fill(_ level: (Int, Int) -> Int) {
+      for y in 0..<48 {
+        for x in 0..<48 {
+          var pixel = [Int](repeating: level(x, y), count: 3)
+          image.setPixel(&pixel, atX: x, y: y)
+        }
+      }
+    }
+    let pixels = WindowPixels(image: image, origin: .zero, scale: 1)
+    fill { _, _ in light }
+    XCTAssertNil(Self.hatchPixel(pixels, light: light, dark: dark, minX: 0, top: 8), "plain gray")
+    // Two pixels wide with a period of four, constant along x + y, as Rust draws the hatch.
+    fill { x, y in (x + y) / 2 % 2 == 0 ? light : dark }
+    XCTAssertNotNil(Self.hatchPixel(pixels, light: light, dark: dark, minX: 0, top: 8), "stripes")
   }
   func testAppearanceVariantsRenderMapChromeAndSheets() {
     for appearance in Self.appearances {

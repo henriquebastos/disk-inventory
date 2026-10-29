@@ -368,6 +368,48 @@ mod tests {
         assert_eq!(loaded.canonical(), map.canonical());
     }
     #[test]
+    fn snapshot_rejects_conflicting_hardlink_allocation() {
+        let mut map = Map {
+            root: "/fixture".into(),
+            nodes: vec![],
+            names: vec![],
+            counters: Counters::default(),
+            error_samples: vec![],
+        };
+        for (name, kind, ino, links, allocation) in [
+            (b"".as_slice(), Kind::Dir, 1, 1, 0),
+            (b"a".as_slice(), Kind::File, 2, 2, 4096),
+            (b"b".as_slice(), Kind::File, 2, 2, 8192),
+        ] {
+            map.add(
+                0,
+                name,
+                crate::Entry {
+                    kind,
+                    dev: 1,
+                    ino,
+                    flags: 0,
+                    links,
+                    allocation: Some(allocation),
+                    mount: 0,
+                },
+            )
+            .unwrap();
+        }
+        let directory = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("disk-map-hardlink-unit-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("snapshot.bin");
+        save(&map, &path).unwrap();
+        let loaded = load(&path);
+        fs::remove_dir_all(directory).unwrap();
+        assert_eq!(
+            loaded.unwrap_err().to_string(),
+            "conflicting allocations in one hardlink group"
+        );
+    }
+    #[test]
     fn snapshot_rejects_corrupt_structure_with_valid_checksum() {
         let mut map = Map {
             root: "/fixture".into(),

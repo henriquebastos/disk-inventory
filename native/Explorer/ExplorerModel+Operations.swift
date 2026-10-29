@@ -150,7 +150,7 @@ extension ExplorerModel {
     }
   }
   private func itemCount(_ count: UInt64) -> String {
-    "\(numbers.count(count)) \(count == 1 ? "item" : "items")"
+    numbers.count(count, one: "item", other: "items")
   }
   private func retainSkips(_ removal: RemovalRecord) {
     issues.append(contentsOf: removal.reasons.map { "Skipped \($0)" })

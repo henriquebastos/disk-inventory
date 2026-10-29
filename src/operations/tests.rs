@@ -4,6 +4,10 @@ use crate::{
     Counters, Entry, Map,
     layout::{LayoutOptions, Rect},
 };
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 fn meta(ino: u64, kind: Kind, raw: u64) -> LiveMetadata {
     LiveMetadata {
@@ -723,79 +727,6 @@ fn accounting_overflow_retains_consistent_attributed_totals_and_marks_stale() {
     assert_eq!(total(&s), before);
     assert_consistent(&s);
 }
-#[test]
-fn activity_is_observable_while_worker_refreshes_and_last_layout_remains_usable() {
-    struct Blocking {
-        inner: MemoryFileSystem,
-        started: std::sync::mpsc::Sender<()>,
-        resume: std::sync::mpsc::Receiver<()>,
-    }
-    impl FileSystem for Blocking {
-        type Pin = <MemoryFileSystem as FileSystem>::Pin;
-        fn pin(&mut self, target: &Target) -> io::Result<Self::Pin> {
-            self.inner.pin(target)
-        }
-        fn snapshot_identity(&self) -> Option<Identity> {
-            self.inner.snapshot_identity()
-        }
-        fn metadata(&mut self, p: &Path) -> io::Result<LiveMetadata> {
-            self.inner.metadata(p)
-        }
-        fn read_directory(&mut self, t: &Target) -> io::Result<Vec<DirectoryEntry>> {
-            self.started.send(()).unwrap();
-            self.resume.recv().unwrap();
-            self.inner.read_directory(t)
-        }
-        fn trash(&mut self, t: &Target, pin: &Self::Pin) -> Mutation {
-            self.inner.trash(t, pin)
-        }
-        fn refuse_protected_within(&mut self, t: &Target) -> io::Result<()> {
-            self.inner.refuse_protected_within(t)
-        }
-        fn remove(
-            &mut self,
-            t: &Target,
-            pin: &Self::Pin,
-            control: Option<&ScanControl>,
-        ) -> Mutation {
-            self.inner.remove(t, pin, control)
-        }
-        fn classify_destination(&mut self, p: &Path, r: Identity) -> DestinationScope {
-            self.inner.classify_destination(p, r)
-        }
-    }
-    let s = session();
-    let (started, rx) = std::sync::mpsc::channel();
-    let (tx, resume) = std::sync::mpsc::channel();
-    let mut s = OperationSession::new(
-        s.explorer,
-        Blocking {
-            inner: s.filesystem,
-            started,
-            resume,
-        },
-    );
-    let last = s
-        .explorer
-        .layout(s.explorer.root_handle(), options())
-        .unwrap();
-    let activity = s.activity();
-    assert!(!activity.is_busy());
-    let dir = s.explorer.handle(1);
-    let worker = std::thread::spawn(move || {
-        let r = s.refresh_directory(dir).unwrap();
-        (s, r)
-    });
-    rx.recv().unwrap();
-    assert!(activity.is_busy());
-    assert_eq!(last.total_bytes, 360);
-    tx.send(()).unwrap();
-    let (s, r) = worker.join().unwrap();
-    assert!(!activity.is_busy());
-    assert!(!r.state.stale);
-    assert_consistent(&s);
-}
-
 #[test]
 fn confirmations_pin_live_identity_until_cancel_error_or_completion() {
     let mut s = session();

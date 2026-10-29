@@ -107,11 +107,10 @@ session lifetime; reload is the reclamation boundary, not an interactive operati
 `SessionState::{dirty,stale}` are sticky, conservative flags, separate from original
 scan counters. Local updates never save or rewrite the monolithic snapshot. Saving
 is not exposed here. Run requests on a worker; retain the last bounded rows/layout
-for presentation while Rust holds the session exclusively. Clone `activity()` before
-moving it to the worker and poll `is_busy()` without locking. Completion returns
+for presentation while Rust holds the session exclusively. Completion returns
 state/issues and new views can then be requested. No progress percentage is invented.
 
-`MemoryFileSystem` is public and stateful: raw paths/identities, moves, removal,
+`MemoryFileSystem` exists only in tests and the bridge build. It is stateful: raw paths/identities, moves, removal,
 metadata, alias spellings, pins and injected failures. Its default Trash behavior
 fails closed. It never constructs a native adapter. It favors simple fixture logic;
 some fake operations scan its fixture map. Those costs are not native performance.
@@ -153,9 +152,8 @@ some fake operations scan its fixture map. Those costs are not native performanc
   "existing_hardlinks_allocation_and_directory_own_bytes_update_locally",
   "directory_move_recomputes_canonical_hardlink_paths_outside_moved_subtree" and
   "deleting_owner_reconciles_current_allocation_of_surviving_hardlink".
-- "incremental_work_is_independent_of_unrelated_entries_and_batched_per_parent",
-  "accounting_overflow_retains_consistent_attributed_totals_and_marks_stale" and
-  "activity_is_observable_while_worker_refreshes_and_last_layout_remains_usable".
+- "incremental_work_is_independent_of_unrelated_entries_and_batched_per_parent" and
+  "accounting_overflow_retains_consistent_attributed_totals_and_marks_stale".
 - "native_owned_fixture_metadata_url_scope_and_nofollow_permanent_removal" tests
   only owned fixtures, including a Data-volume namespace alias when available.
 
@@ -193,10 +191,11 @@ firmlink rule with owned directories as endpoints; "firmlink_list_parses_system_
 the list format.
 
 [src/operations/performance.rs](../src/operations/performance.rs)
-"operations_release_performance" is an ignored, explicit release measurement of
-three million unrelated entries and a million-child selected directory. It separates
-fake adapter/core/layout time, requested live/temporary allocation and process peak RSS.
-Allocator instrumentation adds overhead; this is not a native I/O or UI latency test.
+"operations_release_performance" is an ignored release measurement of three million
+unrelated entries and a million-child selected directory. It needs
+`RUSTFLAGS="--cfg count_allocations"`; only that build has the counting allocator. It
+separates fake adapter/core/layout time, requested live/temporary allocation and process
+peak RSS. It is not a native I/O or UI latency test.
 
 **Untested/remaining limits:** Native Trash execution, including the Trash-volume check,
 is deliberately untested against user Trash. Foundation paths must be Unicode, shorter than its 1024-byte output buffer,

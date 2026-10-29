@@ -86,6 +86,17 @@ fn success(output: &Output) {
     );
     assert!(output.stderr.is_empty());
 }
+/// APFS can change a new file's allocation when it flushes the data later. The accounting
+/// checks compare a scan with a later stat, so the fixture flushes the file and its parent.
+fn write_synced(path: &Path, bytes: &[u8]) {
+    let mut file = fs::File::create(path).unwrap();
+    file.write_all(bytes).unwrap();
+    file.sync_all().unwrap();
+    fs::File::open(path.parent().unwrap())
+        .unwrap()
+        .sync_all()
+        .unwrap();
+}
 fn exported(inventory: &Inventory, format: Format) -> Vec<u8> {
     let mut bytes = Vec::new();
     export::export(inventory, format, &mut bytes).unwrap();
@@ -240,7 +251,7 @@ fn assert_inventory_files(inventory: &Inventory, expected: &[&str]) {
 fn in_root_create_and_repeated_sync_omit_snapshot_from_entries_and_totals() {
     let mut f = Fixture::new();
     f.snapshot = f.root.join("map.dmap");
-    fs::write(f.root.join("payload"), vec![7; 65537]).unwrap();
+    write_synced(&f.root.join("payload"), &[7; 65537]);
     let created = f.create();
     assert_inventory_files(&created, &["payload"]);
     for workers in [1, 2, 4, 8] {
@@ -261,8 +272,8 @@ fn aliased_parent_and_current_snapshot_hardlinks_exclude_only_current_identity()
     let alias = f.base.join("parent-alias");
     symlink(&f.root, &alias).unwrap();
     fs::create_dir(f.root.join("nested")).unwrap();
-    fs::write(f.root.join("unrelated.bin"), vec![5; 32769]).unwrap();
-    fs::write(f.root.join("unrelated.dmap"), vec![6; 16385]).unwrap();
+    write_synced(&f.root.join("unrelated.bin"), &[5; 32769]);
+    write_synced(&f.root.join("unrelated.dmap"), &[6; 16385]);
     let output = alias.join("map.dmap");
     let created = Inventory::create(&f.root, &output, ScanOptions::default()).unwrap();
     assert_inventory_files(&created, &["unrelated.bin", "unrelated.dmap"]);
@@ -304,7 +315,7 @@ fn aliased_parent_and_current_snapshot_hardlinks_exclude_only_current_identity()
 fn legacy_snapshot_moved_or_copied_inside_root_can_sync() {
     for copy in [false, true] {
         let f = Fixture::new();
-        fs::write(f.root.join("payload"), vec![8; 65537]).unwrap();
+        write_synced(&f.root.join("payload"), &[8; 65537]);
         // Existing version-1 format, saved without the lifecycle wrapper.
         let map = scan(&f.root, Method::Bulk, 1).unwrap().map;
         snapshot::save(&map, &f.snapshot).unwrap();

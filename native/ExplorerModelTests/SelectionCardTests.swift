@@ -4,9 +4,9 @@ import XCTest
 
 /// The selection card renders `ExplorerModel.selectionCard`; one test per card variant.
 @MainActor final class SelectionCardTests: XCTestCase {
-  func fixture() async throws -> ExplorerModel {
+  func fixture(_ scenario: String = "presentation") async throws -> ExplorerModel {
     let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", "presentation"], environment: [:],
+      arguments: ["--fixture-mode", "--scenario", scenario], environment: [:],
       numbers: NativeNumberFormat(locale: Locale(identifier: "en_US")))
     try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
     return model
@@ -64,6 +64,17 @@ import XCTest
           name: "small-files", size: "8.2 KB", count: "128 direct items",
           path: "/Workspace/small-files", rootProtected: false, canRevealInFinder: false,
           canMoveToTrash: true, canDelete: true)))
+  }
+
+  /// "long-path" holds one directory.
+  func testCardNamesOneDirectItemInTheSingular() async throws {
+    let model = try await fixture("visual-details")
+    defer { model.shutdown() }
+    model.select(try entry("long-path", in: model))
+    guard case .item(let card) = model.selectionCard else {
+      return XCTFail("\(model.selectionCard)")
+    }
+    XCTAssertEqual(card.count, "1 direct item")
   }
 
   func testCardShowsTheProtectedInventoryRoot() async throws {

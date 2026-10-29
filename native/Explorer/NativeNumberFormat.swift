@@ -44,4 +44,9 @@ import Foundation
   func count(_ value: UInt64) -> String {
     integer.string(from: NSDecimalNumber(mantissa: value, exponent: 0, isNegative: false))!
   }
+
+  /// "1 item", "0 items", "2 items": the count with the singular or plural noun.
+  func count(_ value: UInt64, one: String, other: String) -> String {
+    "\(count(value)) \(value == 1 ? one : other)"
+  }
 }

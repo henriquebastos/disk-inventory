@@ -14,8 +14,15 @@ entirely. Directory allocation, including the root, contributes to totals.
 
 Regular-file hardlinks share `(device, inode)`. The smallest raw relative path
 receives allocation once. Aliases retain raw allocation but have zero accounted
-bytes. Conflicting sizes in a hardlink group cause an error. Parent IDs precede
-children; a reverse pass aggregates subtree totals.
+bytes. Parent IDs precede children; a reverse pass aggregates subtree totals.
+
+A hardlinked file can change between the stats of two of its links. The scan then
+counts a path error, so the result is partial (CLI exit 2), and gives every link the
+first allocation that it read. A saved snapshot with conflicting sizes in a hardlink
+group is corrupt, and loading it fails. Tests:
+[src/lib.rs](../src/lib.rs)
+"hardlink_allocation_change_during_scan_is_a_path_error_in_a_saved_partial_result" and
+[src/snapshot.rs](../src/snapshot.rs) "snapshot_rejects_conflicting_hardlink_allocation".
 
 [tests/accounting.rs](../tests/accounting.rs):
 

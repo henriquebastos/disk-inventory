@@ -427,7 +427,6 @@ impl FileSystem for NativeFileSystem {
     }
 
     fn snapshot_identity(&self) -> Option<Identity> {
-        let _pin = &self.snapshot;
         Some(self.identity)
     }
     fn metadata(&mut self, path: &Path) -> io::Result<LiveMetadata> {

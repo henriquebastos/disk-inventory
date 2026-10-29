@@ -8,7 +8,7 @@ use std::{
         ffi::OsStringExt,
         fs::{MetadataExt, PermissionsExt, symlink},
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -61,6 +61,21 @@ impl Fixture {
         symlink(self.base.join("outside"), self.root.join("outside-link")).unwrap();
         symlink(&self.root, self.root.join("nested/cycle")).unwrap();
         symlink(self.base.join("missing"), self.root.join("broken")).unwrap();
+        sync_tree(&self.base);
+    }
+}
+/// APFS can change a new file's allocation when it flushes the data later (a sparse file
+/// grew from 4,096 to 16,384 bytes between two scans). Flush every fixture file and
+/// directory, so that all scans of one test see the same allocation.
+fn sync_tree(path: &Path) {
+    let metadata = fs::symlink_metadata(path).unwrap();
+    if metadata.is_dir() {
+        for child in fs::read_dir(path).unwrap() {
+            sync_tree(&child.unwrap().path());
+        }
+    }
+    if metadata.is_dir() || metadata.is_file() {
+        File::open(path).unwrap().sync_all().unwrap();
     }
 }
 impl Drop for Fixture {
@@ -127,6 +142,11 @@ fn resource_fork_allocation_matches_stat() {
     fs::write(&path, b"data").unwrap();
     // Named fork path uses macOS's supported filesystem API; only fixture data.
     fs::write(path.join("..namedfork/rsrc"), vec![9u8; 32768]).unwrap();
+    File::open(path.join("..namedfork/rsrc"))
+        .unwrap()
+        .sync_all()
+        .unwrap();
+    sync_tree(&fixture.base);
     let stat = scan(&fixture.root, Method::Stat, 1).unwrap().map;
     let bulk = scan(&fixture.root, Method::Bulk, 4).unwrap().map;
     assert_eq!(bulk.counters.errors, 0, "{:?}", bulk.error_samples);
@@ -147,6 +167,7 @@ fn unreadable_directory_reports_partial_scan() {
     let denied = fixture.root.join("denied");
     fs::create_dir(&denied).unwrap();
     fs::write(denied.join("secret"), b"fixture").unwrap();
+    sync_tree(&fixture.base);
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).unwrap();
     let can_read = fs::read_dir(&denied).is_ok();
     let stat = scan(&fixture.root, Method::Stat, 1).unwrap().map;

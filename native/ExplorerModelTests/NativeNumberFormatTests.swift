@@ -24,6 +24,14 @@ import XCTest
     }
   }
 
+  func testCountUsesTheSingularNounOnlyForOne() {
+    let format = NativeNumberFormat(locale: Locale(identifier: "en_US"))
+    XCTAssertEqual(format.count(0, one: "scan error", other: "scan errors"), "0 scan errors")
+    XCTAssertEqual(format.count(1, one: "scan error", other: "scan errors"), "1 scan error")
+    XCTAssertEqual(format.count(2, one: "scan error", other: "scan errors"), "2 scan errors")
+    XCTAssertEqual(format.count(1234, one: "item", other: "items"), "1,234 items")
+  }
+
   func testStorageUnitNamesMatchNativeHostFormatter() {
     // The numeric locale is injectable. Unit language follows the host's native formatter.
     let native = ByteCountFormatter()

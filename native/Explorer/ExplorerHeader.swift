@@ -31,7 +31,7 @@ extension ExplorerModel {
       canReopenLastFolder: ExplorerCommand.reopenLastFolder.isEnabled(in: self),
       breadcrumbsEnabled: !(working || replacingSession),
       partialScanErrors: status.scanPartial
-        ? "\(numbers.count(status.counters.errors)) scan errors" : nil,
+        ? numbers.count(status.counters.errors, one: "scan error", other: "scan errors") : nil,
       stale: status.stale, dirty: status.dirty, total: numbers.storage(status.root.subtreeBytes),
       scanDate: scanDate.map { "Scanned " + $0.formatted(date: .abbreviated, time: .shortened) },
       canRefresh: ExplorerCommand.refreshDirectory.isEnabled(in: self))

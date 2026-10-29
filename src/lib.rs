@@ -187,10 +187,15 @@ impl Map {
     }
     /// Only multiply-linked regular files need identity storage or path comparisons.
     /// Parent IDs precede children, so one reverse pass computes subtree totals.
+    /// Conflicting allocations in one hardlink group are an error.
     pub fn aggregate(&mut self) -> io::Result<()> {
-        self.aggregate_controlled(None)
+        self.aggregate_controlled(None, HardlinkConflict::Reject)
     }
-    fn aggregate_controlled(&mut self, control: Option<&ScanControl>) -> io::Result<()> {
+    fn aggregate_controlled(
+        &mut self,
+        control: Option<&ScanControl>,
+        conflict: HardlinkConflict,
+    ) -> io::Result<()> {
         for (id, n) in self.nodes.iter_mut().enumerate() {
             if id % 256 == 0 {
                 scan_control::check(control)?;
@@ -208,8 +213,15 @@ impl Map {
             }
             let key = (n.dev, n.ino);
             if let Some(&owner) = owners.get(&key) {
-                if self.nodes[owner].raw != n.raw {
-                    return Err(invalid("hardlink allocation changed during scan"));
+                let raw = self.nodes[owner].raw;
+                if raw != n.raw {
+                    if conflict == HardlinkConflict::Reject {
+                        return Err(invalid("conflicting allocations in one hardlink group"));
+                    }
+                    let path = self.path(id);
+                    self.error(&path, "hardlink allocation changed during scan");
+                    self.nodes[id].raw = raw;
+                    self.nodes[id].accounted = raw;
                 }
                 if self.relative_path(id) < self.relative_path(owner) {
                     self.nodes[owner].accounted = 0;
@@ -292,6 +304,14 @@ impl Method {
             Self::Stat => "stat",
         }
     }
+}
+/// A file can change between the stats of two of its hardlinks during a scan. The scan then
+/// reports a path error, so the result is partial, and gives every link the first allocation it
+/// saw. In a saved snapshot the same conflict means corruption.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HardlinkConflict {
+    Reject,
+    ReportPathError,
 }
 pub struct Scan {
     pub map: Map,
@@ -466,7 +486,7 @@ fn scan_controlled(
     if let Some(control) = control {
         control.enter(ScanPhase::Accounting)?;
     }
-    map.aggregate_controlled(control)?;
+    map.aggregate_controlled(control, HardlinkConflict::ReportPathError)?;
     Ok(Scan {
         map,
         scan_time,
@@ -586,6 +606,11 @@ mod tests {
         fs::write(root.join("map.dmap"), vec![3; 65537]).unwrap();
         fs::hard_link(root.join("map.dmap"), root.join("nested/alias")).unwrap();
         fs::write(root.join("other.bin"), vec![4; 32769]).unwrap();
+        // APFS can change a new file's allocation when it flushes the data later; the
+        // scans below must all see the final allocation.
+        for path in ["map.dmap", "other.bin", "nested", ""] {
+            File::open(root.join(path)).unwrap().sync_all().unwrap();
+        }
         let file = File::open(root.join("map.dmap")).unwrap();
         let metadata = file.metadata().unwrap();
         let identity = (metadata.dev(), metadata.ino());
@@ -624,5 +649,63 @@ mod tests {
             }
         }
         drop(file);
+    }
+
+    #[test]
+    fn hardlink_allocation_change_during_scan_is_a_path_error_in_a_saved_partial_result() {
+        use crate::inventory::{Inventory, ScanOptions};
+        use std::io::Write;
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let base = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "disk-inventory-hardlink-change-{}",
+                std::process::id()
+            ));
+        fs::create_dir(&base).unwrap();
+        let _fixture = Fixture(base.clone());
+        let root = base.join("root");
+        for directory in ["", "a", "b"] {
+            fs::create_dir(root.join(directory)).unwrap();
+        }
+        let mut file = File::create(root.join("a/link")).unwrap();
+        file.write_all(&[1; 4096]).unwrap();
+        file.sync_all().unwrap();
+        fs::hard_link(root.join("a/link"), root.join("b/link")).unwrap();
+        let control = ScanControl::new();
+        // One worker reads the root (2 items), then one directory (1 item). The file grows
+        // before the other directory is read, so the two links see different allocations.
+        let grown = std::sync::atomic::AtomicBool::new(false);
+        *control.hook.lock().unwrap() = Some(Box::new(move |c| {
+            if c.progress().items_examined >= 4
+                && !grown.swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                (&file).write_all(&[2; 65536]).unwrap();
+                file.sync_all().unwrap();
+            }
+        }));
+        let output = base.join("map.dmap");
+        let created =
+            Inventory::create_controlled(&root, &output, ScanOptions { workers: 1 }, &control)
+                .unwrap();
+        assert!(created.is_partial());
+        assert_eq!(created.counters().errors, 1);
+        let saved = Inventory::open(&output).unwrap();
+        assert!(saved.is_partial());
+        let links: Vec<_> = saved
+            .entries()
+            .filter(|e| e.relative_path.ends_with(b"/link"))
+            .collect();
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].allocated_bytes, links[1].allocated_bytes);
+        assert_eq!(
+            links.iter().map(|e| e.accounted_bytes).sum::<u64>(),
+            links[0].allocated_bytes
+        );
     }
 }

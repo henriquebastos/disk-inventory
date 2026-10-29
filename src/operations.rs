@@ -1,6 +1,8 @@
 //! Explicit live operations over an indexed inventory. Run I/O on a worker thread.
 //! Saved reads stay available offline; confirmations are single-use capabilities.
 mod index;
+/// The fake filesystem with stage gates: for tests and the bridge fixture mode only.
+#[cfg(any(test, feature = "bridge"))]
 pub mod memory;
 pub mod native;
 
@@ -16,10 +18,6 @@ use std::{
     io,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -139,6 +137,7 @@ impl<'a> RemovalWalk<'a> {
             control.examined(1);
         }
     }
+    #[cfg(any(test, feature = "bridge"))]
     pub(crate) fn removed_count(&self) -> u64 {
         self.removal.removed
     }
@@ -235,24 +234,6 @@ impl<P> Confirmation<P> {
         &self.target.path
     }
 }
-/// Clone before moving the session to a worker; poll without locking the session.
-#[derive(Clone, Debug, Default)]
-pub struct Activity(Arc<AtomicBool>);
-impl Activity {
-    pub fn is_busy(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-    fn begin(&self) -> BusyGuard {
-        self.0.store(true, Ordering::Release);
-        BusyGuard(self.clone())
-    }
-}
-struct BusyGuard(Activity);
-impl Drop for BusyGuard {
-    fn drop(&mut self) {
-        self.0.0.store(false, Ordering::Release);
-    }
-}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SessionState {
     pub dirty: bool,
@@ -287,7 +268,6 @@ pub struct OperationSession<F: FileSystem> {
     filesystem: F,
     identities: index::IdentityIndex,
     state: SessionState,
-    activity: Activity,
     work: UpdateWork,
     groups: BTreeSet<Identity>,
     observations: HashMap<Identity, index::FileObservation>,
@@ -308,7 +288,6 @@ impl<F: FileSystem> OperationSession<F> {
             explorer,
             filesystem,
             identities,
-            activity: Activity::default(),
             state: SessionState {
                 dirty: false,
                 stale,
@@ -329,9 +308,6 @@ impl<F: FileSystem> OperationSession<F> {
     }
     pub fn state(&self) -> SessionState {
         self.state
-    }
-    pub fn activity(&self) -> Activity {
-        self.activity.clone()
     }
     /// Exposed for explicit fixture setup/fault injection; never creates a native fallback.
     pub fn filesystem_mut(&mut self) -> &mut F {
@@ -362,7 +338,6 @@ impl<F: FileSystem> OperationSession<F> {
     }
     /// Exactly one targeted metadata request; failure never changes saved accounting.
     pub fn live_metadata(&mut self, handle: EntryHandle) -> io::Result<LiveMetadata> {
-        let _busy = self.activity.begin();
         let id = self.explorer.resolve(handle)?;
         self.validate(&self.target(id))
     }
@@ -387,7 +362,6 @@ impl<F: FileSystem> OperationSession<F> {
         handle: EntryHandle,
         action: Action,
     ) -> io::Result<Confirmation<F::Pin>> {
-        let _busy = self.activity.begin();
         let id = self.explorer.resolve(handle)?;
         if id == 0 {
             return Err(invalid("scan root is protected"));
@@ -428,7 +402,6 @@ impl<F: FileSystem> OperationSession<F> {
         }
     }
     pub fn execute(&mut self, confirmation: Confirmation<F::Pin>) -> io::Result<OperationReport> {
-        let _busy = self.activity.begin();
         self.execute_with(confirmation, None)
     }
     /// `execute` with progress, and Stop for permanent deletion. Deletion checks in
@@ -441,7 +414,6 @@ impl<F: FileSystem> OperationSession<F> {
         confirmation: Confirmation<F::Pin>,
         control: &ScanControl,
     ) -> io::Result<OperationReport> {
-        let _busy = self.activity.begin();
         control.begin()?;
         let result = self.execute_with(confirmation, Some(control));
         if result.is_ok() {
@@ -567,7 +539,6 @@ impl<F: FileSystem> OperationSession<F> {
     }
     /// Recursively refresh only this directory. Failed enumerations retain old children.
     pub fn refresh_directory(&mut self, handle: EntryHandle) -> io::Result<UpdateReport> {
-        let _busy = self.activity.begin();
         let id = self.refresh_target_id(handle)?;
         Ok(self.apply_refresh(id))
     }
@@ -580,7 +551,6 @@ impl<F: FileSystem> OperationSession<F> {
         handle: EntryHandle,
         control: &ScanControl,
     ) -> io::Result<UpdateReport> {
-        let _busy = self.activity.begin();
         control.begin()?;
         let result = (|| {
             control.enter(ScanPhase::Scanning)?;

@@ -7,9 +7,11 @@ use std::{
 
 // Test-only requested-allocation counters; these exclude malloc metadata, ObjC,
 // and allocator retention. Unlike process peak RSS they reset per operation.
+#[cfg_attr(not(count_allocations), allow(dead_code))]
 struct MeasuredAllocator;
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
+#[cfg_attr(not(count_allocations), allow(dead_code))]
 fn allocated(size: usize) {
     let live = LIVE.fetch_add(size, Ordering::Relaxed) + size;
     PEAK.fetch_max(live, Ordering::Relaxed);
@@ -44,6 +46,9 @@ unsafe impl GlobalAlloc for MeasuredAllocator {
         ptr
     }
 }
+// Only the explicit measurement build counts allocations, so other tests use the system
+// allocator: RUSTFLAGS="--cfg count_allocations".
+#[cfg(count_allocations)]
 #[global_allocator]
 static ALLOCATOR: MeasuredAllocator = MeasuredAllocator;
 struct TimedMemory {
@@ -109,7 +114,6 @@ fn timed(s: OperationSession<MemoryFileSystem>) -> OperationSession<TimedMemory>
         },
         identities: s.identities,
         state: s.state,
-        activity: s.activity,
         work: s.work,
         groups: s.groups,
         observations: s.observations,
@@ -150,6 +154,9 @@ fn measure<R>(
 #[test]
 #[ignore = "release-only synthetic scale measurement, no source scan"]
 fn operations_release_performance() {
+    if cfg!(not(count_allocations)) {
+        panic!("build with RUSTFLAGS=\"--cfg count_allocations\" to count allocations");
+    }
     let count = std::env::var("OPERATIONS_ENTRIES")
         .ok()
         .and_then(|s| s.parse().ok())

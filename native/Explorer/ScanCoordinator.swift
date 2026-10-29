@@ -45,11 +45,12 @@ import Observation
   func itemsText(_ numbers: NativeNumberFormat) -> String? {
     guard let progress else { return nil }
     switch operation?.kind {
-    case nil: return "\(numbers.count(progress.itemsExamined)) items examined"
+    case nil:
+      return numbers.count(progress.itemsExamined, one: "item examined", other: "items examined")
     case .trash: return nil
     case .permanentlyDelete:
       guard progress.phase == .removing || progress.phase == .stopping else { return nil }
-      return "\(numbers.count(progress.itemsExamined)) items"
+      return numbers.count(progress.itemsExamined, one: "item", other: "items")
     }
   }
   func stop() {

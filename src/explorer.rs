@@ -58,7 +58,17 @@ pub struct StorageStats {
     pub index_bytes: usize,
 }
 
-/// CSR child lists sorted once by descending subtree allocation, then raw basename.
+/// Child order: descending subtree allocation, then raw basename, then node ID. Child lists
+/// are sorted with it, and `child_rank` binary-searches them with it.
+pub(crate) fn child_order(map: &Map, a: u32, b: u32) -> std::cmp::Ordering {
+    map.nodes[b as usize]
+        .subtree
+        .cmp(&map.nodes[a as usize].subtree)
+        .then_with(|| map.basename(a as usize).cmp(map.basename(b as usize)))
+        .then(a.cmp(&b))
+}
+
+/// CSR child lists sorted once in `child_order`.
 /// Local mutations replace affected lists without changing navigation/layout.
 /// Node slots must not be compacted/reused while session handles remain valid.
 #[derive(Debug)]
@@ -95,13 +105,7 @@ impl ChildIndex {
         for id in 0..map.nodes.len() {
             let start = index.offsets[id] as usize;
             let end = index.offsets[id + 1] as usize;
-            index.ids[start..end].sort_unstable_by(|&a, &b| {
-                map.nodes[b as usize]
-                    .subtree
-                    .cmp(&map.nodes[a as usize].subtree)
-                    .then_with(|| map.basename(a as usize).cmp(map.basename(b as usize)))
-                    .then(a.cmp(&b))
-            });
+            index.ids[start..end].sort_unstable_by(|&a, &b| child_order(map, a, b));
         }
         index
     }
@@ -195,17 +199,7 @@ impl Explorer {
     }
     pub(crate) fn sort_children(&mut self, id: u32) {
         let mut children = self.child_ids(id).to_vec();
-        children.sort_unstable_by(|&a, &b| {
-            self.map.nodes[b as usize]
-                .subtree
-                .cmp(&self.map.nodes[a as usize].subtree)
-                .then_with(|| {
-                    self.map
-                        .basename(a as usize)
-                        .cmp(self.map.basename(b as usize))
-                })
-                .then(a.cmp(&b))
-        });
+        children.sort_unstable_by(|&a, &b| child_order(&self.map, a, b));
         self.replace_children(id, children);
     }
     pub fn entry(&self, handle: EntryHandle) -> io::Result<EntrySummary<'_>> {
