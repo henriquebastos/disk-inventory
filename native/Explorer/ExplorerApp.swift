@@ -116,8 +116,10 @@ struct ExplorerView: View {
   @Bindable var model: ExplorerModel
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      if let records = model.records {
-        header(records)
+      if let records = model.records, let header = model.header {
+        ExplorerHeader(state: header, send: { $0.perform(in: model) }) {
+          BreadcrumbStrip(model: model, records: records)
+        }
         Divider()
         HSplitView {
           VStack(spacing: 0) {
@@ -134,13 +136,19 @@ struct ExplorerView: View {
                 }
               }
             }
-            .overlay(alignment: .top) { if model.bannerVisible { banner } }
+            .overlay(alignment: .top) {
+              if let banner = model.outcomeBanner {
+                OutcomeBanner(state: banner) { model.dismissBanner() }
+              }
+            }
             Divider()
             StatusBar(model: model)
           }.frame(minWidth: 350)
         }
         .overlay(alignment: .top) {
-          if model.loading || model.working || model.replacingSession { progress }
+          if let progress = model.progressBar {
+            ProgressBar(state: progress) { ExplorerCommand.stopScan.perform(in: model) }
+          }
         }
       } else {
         VStack(spacing: 20) {
@@ -179,133 +187,13 @@ struct ExplorerView: View {
             Text("Could not open the inventory.").foregroundStyle(.red)
             DisclosureGroup("Details") { Text(error).textSelection(.enabled) }.frame(maxWidth: 460)
           }
-          if model.loading || model.replacingSession { progress.frame(maxWidth: 500) }
+          if let progress = model.startScreenProgressBar {
+            ProgressBar(state: progress) { ExplorerCommand.stopScan.perform(in: model) }
+              .frame(maxWidth: 500)
+          }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
     .background(ConfirmationAlert(model: model, pending: model.pending))
-  }
-  var progress: some View {
-    HStack(spacing: 10) {
-      ProgressView().controlSize(.small)
-      if model.scan.progress != nil {
-        Text(model.scan.label).accessibilityIdentifier("scan-phase")
-        if let items = model.scan.itemsText(model.numbers) {
-          Text(items).monospacedDigit().accessibilityIdentifier("scan-items")
-        }
-        Spacer()
-        if model.scan.offersStop {
-          Button("Stop") { ExplorerCommand.stopScan.perform(in: model) }
-            .disabled(!ExplorerCommand.stopScan.isEnabled(in: model))
-            .accessibilityIdentifier("stop-scan")
-        }
-      } else if let checking = model.checking {
-        Text("Checking “\(checking)”…").accessibilityIdentifier("scan-phase")
-        Spacer()
-      } else {
-        Text(
-          model.replacingSession ? "Preparing inventory… Previous view is read-only." : "Working…")
-        Spacer()
-      }
-    }.font(.callout).padding(12).background(.bar)
-  }
-  func header(_ r: ViewRecords) -> some View {
-    HStack(spacing: 12) {
-      Menu {
-        Button("Choose Folder…") { ExplorerCommand.chooseFolder.perform(in: model) }
-          .accessibilityIdentifier("create-inventory")
-        Button(ExplorerCommand.reopenLastFolder.title(in: model)) {
-          ExplorerCommand.reopenLastFolder.perform(in: model)
-        }
-        .disabled(!ExplorerCommand.reopenLastFolder.isEnabled(in: model))
-      } label: {
-        Image(systemName: "externaldrive")
-      }
-      .disabled(!ExplorerCommand.chooseFolder.isEnabled(in: model))
-      .help("Inventory")
-      ScrollView(.horizontal) {
-        HStack(spacing: 4) {
-          if r.ancestors.first?.key.sameEntry(other: r.status.root.key) != true,
-            r.focus.parent != nil
-          {
-            Button(r.breadcrumbName(r.status.root)) { model.focus(r.status.root.key) }
-              .help(r.breadcrumbHelp(r.status.root)).accessibilityIdentifier("breadcrumb-root")
-            Text("…")
-          }
-          ForEach(Array(r.ancestors.enumerated()), id: \.offset) { i, entry in
-            Button(r.breadcrumbName(entry)) { model.focus(entry.key) }.help(r.breadcrumbHelp(entry))
-              .accessibilityIdentifier(
-                "breadcrumb-\(i)")
-            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-          }
-          Text(r.breadcrumbName(r.focus)).help(r.breadcrumbHelp(r.focus)).fontWeight(.semibold)
-            .accessibilityIdentifier("focus-name")
-        }.buttonStyle(.plain)
-      }.scrollIndicators(.hidden).disabled(model.working || model.replacingSession)
-      HStack(spacing: 5) {
-        if r.status.scanPartial {
-          badge("Partial", id: "partial").help(
-            "\(model.numbers.count(r.status.counters.errors)) scan errors")
-        }
-        if r.status.stale { badge("Incomplete", id: "stale") }
-        if r.status.dirty { badge("Not saved", id: "dirty") }
-      }
-      VStack(alignment: .trailing, spacing: 2) {
-        Text(model.numbers.storage(r.status.root.subtreeBytes)).font(
-          .callout.weight(.semibold)
-        )
-        .monospacedDigit().accessibilityIdentifier("scope-total")
-        if let scanDate = model.scanDate {
-          Text("Scanned " + scanDate.formatted(date: .abbreviated, time: .shortened))
-            .font(.caption).accessibilityIdentifier("scan-date")
-        }
-      }.fixedSize()
-      Button("Refresh Directory", systemImage: "arrow.clockwise") {
-        ExplorerCommand.refreshDirectory.perform(in: model)
-      }
-      .disabled(!ExplorerCommand.refreshDirectory.isEnabled(in: model))
-      .accessibilityIdentifier("refresh").help(
-        "Rescan the focused directory and descendants."
-      )
-    }.padding(.horizontal, 12).padding(.vertical, 10).background(.bar)
-  }
-  func badge(_ title: String, id: String) -> some View {
-    Text(title).font(.caption.weight(.medium)).padding(.horizontal, 7).padding(.vertical, 3)
-      .background(.quaternary, in: Capsule()).accessibilityIdentifier(id)
-  }
-  /// Errors, operation outcomes and issues, over the top of the map. It hit-tests only its own
-  /// frame and stays until Dismiss, a replacing outcome or a new folder.
-  var banner: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      if model.error != nil {
-        Text("Could not complete the request.").font(.callout.weight(.semibold))
-          .foregroundStyle(.red).accessibilityIdentifier("error")
-      }
-      if let outcome = model.outcome {
-        Text(outcome).font(.callout).textSelection(.enabled)
-          .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("outcome")
-      }
-      if model.error != nil || !model.issues.isEmpty {
-        DisclosureGroup("Details") {
-          ScrollView {
-            if let error = model.error {
-              Text(error).textSelection(.enabled).accessibilityIdentifier("error-details")
-            }
-            Text(model.issues.joined(separator: "\n")).textSelection(.enabled).frame(
-              maxWidth: .infinity, alignment: .leading)
-          }.frame(maxHeight: 100)
-        }.font(.caption).accessibilityIdentifier("issues")
-      }
-      HStack {
-        Spacer()
-        Button("Dismiss") { model.dismissBanner() }.accessibilityIdentifier("dismiss-banner")
-      }.controlSize(.small)
-    }
-    .padding(.horizontal, 14).padding(.vertical, 12).frame(maxWidth: 440, alignment: .leading)
-    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5))
-    .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
-    .padding(.top, 20).padding(.horizontal, 20)
-    .accessibilityElement(children: .contain).accessibilityIdentifier("outcome-banner")
   }
 }

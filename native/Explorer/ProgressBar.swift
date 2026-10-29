@@ -1,0 +1,88 @@
+import SwiftUI
+
+/// What the busy bar shows. Plain values only, so the bar renders and previews without a Rust
+/// session.
+enum ProgressBarState: Equatable {
+  /// A scan, Refresh Directory, Trash or Delete with Rust progress: its phase, its item counter
+  /// and, except for Trash, a Stop button.
+  case operation(phase: String, items: String?, offersStop: Bool, canStop: Bool)
+  /// A Trash or Delete preparation checks this item before its confirmation opens.
+  case checking(name: String)
+  /// A new session is loading; the previous view stays read-only.
+  case preparingInventory
+  case working
+}
+
+extension ExplorerModel {
+  /// The bar over the explorer split view: while loading, working or replacing the session.
+  var progressBar: ProgressBarState? {
+    loading || working || replacingSession ? progressBarContent : nil
+  }
+  /// The bar on the start screen: while a session loads. No operation runs without one.
+  var startScreenProgressBar: ProgressBarState? {
+    loading || replacingSession ? progressBarContent : nil
+  }
+  private var progressBarContent: ProgressBarState {
+    if scan.progress != nil {
+      return .operation(
+        phase: scan.label, items: scan.itemsText(numbers), offersStop: scan.offersStop,
+        canStop: ExplorerCommand.stopScan.isEnabled(in: self))
+    }
+    if let checking { return .checking(name: checking) }
+    return replacingSession ? .preparingInventory : .working
+  }
+}
+
+struct ProgressBar: View {
+  let state: ProgressBarState
+  let stop: @MainActor () -> Void
+  var body: some View {
+    HStack(spacing: 10) {
+      ProgressView().controlSize(.small)
+      switch state {
+      case .operation(let phase, let items, let offersStop, let canStop):
+        Text(phase).accessibilityIdentifier("scan-phase")
+        if let items {
+          Text(items).monospacedDigit().accessibilityIdentifier("scan-items")
+        }
+        Spacer()
+        if offersStop {
+          Button("Stop") { stop() }
+            .disabled(!canStop)
+            .accessibilityIdentifier("stop-scan")
+        }
+      case .checking(let name):
+        Text("Checking “\(name)”…").accessibilityIdentifier("scan-phase")
+        Spacer()
+      case .preparingInventory:
+        Text("Preparing inventory… Previous view is read-only.")
+        Spacer()
+      case .working:
+        Text("Working…")
+        Spacer()
+      }
+    }.font(.callout).padding(12).background(.bar)
+  }
+}
+
+#Preview("Delete") {
+  ProgressBar(
+    state: .operation(
+      phase: "Deleting “small-files”…", items: "12 items", offersStop: true, canStop: true)
+  ) {}.frame(width: 600)
+}
+#Preview("Trash") {
+  ProgressBar(
+    state: .operation(
+      phase: "Moving “large-file” to the Trash…", items: nil, offersStop: false, canStop: false)
+  ) {}.frame(width: 600)
+}
+#Preview("Checking") {
+  ProgressBar(state: .checking(name: "large-file")) {}.frame(width: 600)
+}
+#Preview("Preparing inventory") {
+  ProgressBar(state: .preparingInventory) {}.frame(width: 600)
+}
+#Preview("Working") {
+  ProgressBar(state: .working) {}.frame(width: 600)
+}

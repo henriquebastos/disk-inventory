@@ -4,7 +4,8 @@ This page specifies the parts of the [native explorer](native-explorer.md) windo
 state: the status bar below the map, the outcome banner, the selection dim, Esc and the
 progress of Refresh Directory. The code is in
 [ExplorerApp.swift](../native/Explorer/ExplorerApp.swift),
-[ExplorerModel.swift](../native/Explorer/ExplorerModel.swift) with its `+Selection` and `+Operations` extensions,
+[OutcomeBanner.swift](../native/Explorer/OutcomeBanner.swift),
+[ProgressBar.swift](../native/Explorer/ProgressBar.swift), the [model](native-state.md),
 [NativeViews.swift](../native/Explorer/NativeViews.swift) and
 [ScanCoordinator.swift](../native/Explorer/ScanCoordinator.swift).
 
