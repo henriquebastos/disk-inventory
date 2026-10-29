@@ -268,7 +268,7 @@ fn partial_removal_reconciles_survivors_and_preserves_inaccessible_data() {
     s.filesystem.remove_failure_after = Some(1);
     let c = s.prepare(dir, Action::PermanentlyDelete).unwrap();
     let r = s.execute(c).unwrap();
-    assert!(matches!(r.mutation, Mutation::Partial(_)));
+    assert!(matches!(r.mutation, Mutation::Partial { .. }));
     assert!(r.update.state.stale);
     assert_eq!(total(&s), 310);
     assert_eq!(s.explorer.entry(dir).unwrap().child_count, 1);
@@ -463,7 +463,21 @@ fn refresh_mount_firmlink_and_inaccessible_regions_are_not_followed() {
     assert_eq!(total(&s), 360);
     assert_eq!(s.explorer.entry(dir).unwrap().child_count, 1);
     s.filesystem.unreadable.insert("/scope/a".into());
+    // The live mount, firmlink and other-device entries refuse both actions.
     assert!(s.prepare(dir, Action::PermanentlyDelete).is_err());
+    assert!(s.prepare(dir, Action::Trash).is_err());
+    // An inaccessible folder alone no longer prevents preparation: Delete skips it and
+    // reports it, so nothing is deleted and the inventory stays.
+    for name in ["mount", "firmlink", "device"] {
+        s.filesystem.erase(Path::new(&format!("/scope/a/{name}")));
+    }
+    let c = s.prepare(dir, Action::PermanentlyDelete).unwrap();
+    let Mutation::Failed(message) = s.execute(c).unwrap().mutation else {
+        panic!("nothing could be deleted")
+    };
+    assert!(message.contains("/scope/a: permission denied"), "{message}");
+    assert_eq!(total(&s), 360);
+    assert!(s.filesystem.get(Path::new("/scope/a/file")).is_some());
     assert_consistent(&s);
 }
 
@@ -471,11 +485,14 @@ pub(super) struct Fixture(pub(super) PathBuf);
 impl Fixture {
     pub(super) fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let path = PathBuf::from(format!(
-            "/private/tmp/disk-inventory-native.otaCfM/operations/fixture-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
+        // An owned directory in the canonical temporary directory: no symlink ancestry.
+        let path = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "operations-fixture-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
         std::fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -603,9 +620,19 @@ fn native_snapshot_alias_protection_and_replaced_target_rejection() {
     assert!(s.execute(c).is_err());
     assert!(nested.join("file").exists());
     fs::hard_link(&map, nested.join("map-alias")).unwrap();
-    assert!(s.prepare(dir, Action::PermanentlyDelete).is_err());
     s.refresh_directory(dir).unwrap();
     assert_eq!(s.explorer.entry(dir).unwrap().child_count, 2);
+    // An extra hard link of the snapshot is a protected entry: Delete skips it and keeps
+    // its folder; the replacement and the renamed original are deleted.
+    let c = s.prepare(dir, Action::PermanentlyDelete).unwrap();
+    let Mutation::RemovedWithSkips(removal) = s.execute(c).unwrap().mutation else {
+        panic!("the snapshot alias is skipped")
+    };
+    assert_eq!((removal.removed, removal.skipped), (2, 1));
+    assert!(removal.reasons[0].contains("map-alias: protected"));
+    assert!(nested.join("map-alias").exists());
+    assert!(!nested.join("file").exists() && !nested.join("old").exists());
+    assert_eq!(s.explorer.entry(dir).unwrap().child_count, 0);
     assert!(map.exists());
 }
 
@@ -624,7 +651,7 @@ fn partial_removal_with_failed_reconciliation_retains_unknown_children() {
     s.filesystem.unreadable_after_partial = true;
     let c = s.prepare(dir, Action::PermanentlyDelete).unwrap();
     let r = s.execute(c).unwrap();
-    assert!(matches!(r.mutation, Mutation::Partial(_)));
+    assert!(matches!(r.mutation, Mutation::Partial { .. }));
     assert!(r.update.issues.len() >= 2);
     assert!(r.update.state.stale);
     assert_eq!(total(&s), before);
@@ -722,8 +749,16 @@ fn activity_is_observable_while_worker_refreshes_and_last_layout_remains_usable(
         fn trash(&mut self, t: &Target, pin: &Self::Pin) -> Mutation {
             self.inner.trash(t, pin)
         }
-        fn remove(&mut self, t: &Target, pin: &Self::Pin) -> Mutation {
-            self.inner.remove(t, pin)
+        fn refuse_protected_within(&mut self, t: &Target) -> io::Result<()> {
+            self.inner.refuse_protected_within(t)
+        }
+        fn remove(
+            &mut self,
+            t: &Target,
+            pin: &Self::Pin,
+            control: Option<&ScanControl>,
+        ) -> Mutation {
+            self.inner.remove(t, pin, control)
         }
         fn classify_destination(&mut self, p: &Path, r: Identity) -> DestinationScope {
             self.inner.classify_destination(p, r)
@@ -851,7 +886,7 @@ fn deleting_owner_reconciles_current_allocation_of_surviving_hardlink() {
     assert_consistent(&s);
 }
 #[test]
-fn in_scope_directory_move_refreshes_only_moved_region_and_marks_new_ancestry_unknown() {
+fn in_scope_directory_move_keeps_the_saved_subtree_without_a_walk_and_marks_new_ancestry_unknown() {
     let mut s = session();
     s.filesystem.insert("/scope/new", meta(50, Kind::Dir, 7));
     s.filesystem
@@ -863,9 +898,13 @@ fn in_scope_directory_move_refreshes_only_moved_region_and_marks_new_ancestry_un
     let c = s.prepare(dir, Action::Trash).unwrap();
     let r = s.execute(c).unwrap();
     assert_eq!(s.explorer.relative_path(dir).unwrap(), b"new/moved");
-    assert_eq!(s.explorer.entry(dir).unwrap().child_count, 2);
+    // The saved subtree moved with its saved sizes: no directory of it was read, so the
+    // live file the scan never saw is not added.
+    assert_eq!(s.filesystem.calls.directories, 0);
+    assert_eq!(s.explorer.entry(dir).unwrap().child_count, 1);
+    assert_eq!(s.explorer.entry(dir).unwrap().subtree_bytes, 120);
     assert!(r.update.state.stale);
-    assert_eq!(total(&s), 380);
+    assert_eq!(total(&s), 367);
     assert_consistent(&s);
 }
 
@@ -1115,8 +1154,11 @@ impl FileSystem for ListingOrder {
     fn trash(&mut self, t: &Target, p: &Self::Pin) -> Mutation {
         self.inner.trash(t, p)
     }
-    fn remove(&mut self, t: &Target, p: &Self::Pin) -> Mutation {
-        self.inner.remove(t, p)
+    fn refuse_protected_within(&mut self, t: &Target) -> io::Result<()> {
+        self.inner.refuse_protected_within(t)
+    }
+    fn remove(&mut self, t: &Target, p: &Self::Pin, c: Option<&ScanControl>) -> Mutation {
+        self.inner.remove(t, p, c)
     }
     fn classify_destination(&mut self, p: &Path, r: Identity) -> DestinationScope {
         self.inner.classify_destination(p, r)
@@ -1438,4 +1480,484 @@ fn stopped_controlled_refresh_leaves_the_inventory_unchanged() {
         assert_ne!(inventory_rows(&s), before);
         assert_consistent(&s);
     }
+}
+
+/// A directory `/scope/a/many` with `count` live files the saved scan does not have.
+fn with_live_files(count: u64) -> OperationSession<MemoryFileSystem> {
+    let mut s = session();
+    s.filesystem.insert("/scope/a/many", meta(40, Kind::Dir, 0));
+    for i in 0..count {
+        s.filesystem.insert(
+            format!("/scope/a/many/f-{i:06}"),
+            meta(100_000 + i, Kind::File, 1),
+        );
+    }
+    s
+}
+#[test]
+fn trash_and_delete_checks_read_no_directory_and_do_not_grow_with_the_subtree() {
+    let mut calls = Vec::new();
+    for count in [10, 10_000] {
+        for action in [Action::Trash, Action::PermanentlyDelete] {
+            let mut s = with_live_files(count);
+            s.filesystem.trash_behavior = TrashBehavior::MoveTo("/outside/moved".into());
+            let c = s.prepare(handle(&s, 1), action).unwrap();
+            let prepared = s.filesystem.calls;
+            let r = s.execute(c).unwrap();
+            assert!(
+                matches!(r.mutation, Mutation::Removed | Mutation::Trashed { .. }),
+                "{:?}",
+                r.mutation
+            );
+            assert_eq!(total(&s), 240);
+            // Root, target and protected locations only, at prepare and again at execute.
+            assert_eq!(prepared.directories, 0, "{action:?} prepare lists nothing");
+            assert_eq!(
+                s.filesystem.calls.directories, 0,
+                "{action:?} lists nothing"
+            );
+            assert_eq!(s.filesystem.calls.protection_checks, 2);
+            calls.push((action, s.filesystem.calls.metadata));
+        }
+    }
+    assert_eq!(
+        calls[..2],
+        calls[2..],
+        "metadata requests do not depend on the subtree"
+    );
+}
+#[test]
+fn delete_is_one_walk_that_also_removes_entries_created_after_the_scan() {
+    let mut s = with_live_files(100);
+    let c = s.prepare(handle(&s, 1), Action::PermanentlyDelete).unwrap();
+    assert_eq!(s.execute(c).unwrap().mutation, Mutation::Removed);
+    assert!(
+        s.filesystem
+            .get(Path::new("/scope/a/many/f-000099"))
+            .is_none()
+    );
+    assert!(s.filesystem.get(Path::new("/scope/a")).is_none());
+    assert_eq!(s.filesystem.calls.remove, 1);
+    assert_eq!(
+        s.filesystem.calls.directories, 0,
+        "the removal walk is the only walk"
+    );
+    assert_eq!(total(&s), 240);
+    assert_consistent(&s);
+}
+#[test]
+fn mount_snapshot_and_firmlink_inside_are_refused_before_any_removal() {
+    for kind in ["mount", "firmlink", "device", "snapshot"] {
+        let protected = || {
+            let mut m = meta(60, Kind::Dir, 5);
+            match kind {
+                "mount" => m.mount = true,
+                "firmlink" => m.flags = crate::native::SF_FIRMLINK,
+                "device" => m.identity.device = 2,
+                _ => m = meta(61, Kind::File, 5),
+            }
+            m
+        };
+        for action in [Action::Trash, Action::PermanentlyDelete] {
+            // Present at preparation: refused from the target-level checks, nothing listed.
+            let mut s = session();
+            s.filesystem.trash_behavior = TrashBehavior::MoveTo("/outside/moved".into());
+            s.filesystem.pin_snapshot(meta(61, Kind::File, 5).identity);
+            s.filesystem.insert("/scope/a/deep", meta(62, Kind::Dir, 0));
+            s.filesystem.insert("/scope/a/deep/x", protected());
+            assert!(
+                s.prepare(handle(&s, 1), action).is_err(),
+                "{kind} {action:?}"
+            );
+            assert_eq!(s.filesystem.calls.directories, 0);
+            // Appearing after preparation: execute checks again before anything changes.
+            s.filesystem.erase(Path::new("/scope/a/deep/x"));
+            let c = s.prepare(handle(&s, 1), action).unwrap();
+            s.filesystem.insert("/scope/a/deep/x", protected());
+            assert!(s.execute(c).is_err(), "{kind} {action:?}");
+            let calls = s.filesystem.calls;
+            assert_eq!((calls.directories, calls.remove, calls.trash), (0, 0, 0));
+            assert!(s.filesystem.get(Path::new("/scope/a/file")).is_some());
+            assert_eq!(total(&s), 360);
+            assert!(!s.state().dirty);
+        }
+    }
+}
+#[test]
+fn delete_skips_inaccessible_and_locked_entries_reports_them_and_keeps_their_folders() {
+    let mut s = session();
+    for (path, m) in [
+        ("/scope/a/second", meta(70, Kind::File, 50)),
+        ("/scope/a/locked", meta(71, Kind::File, 7)),
+        ("/scope/a/closed", meta(72, Kind::Dir, 3)),
+        ("/scope/a/closed/inner", meta(73, Kind::File, 9)),
+    ] {
+        s.filesystem.insert(path, m);
+    }
+    let dir = handle(&s, 1);
+    s.refresh_directory(dir).unwrap();
+    assert_eq!(total(&s), 429);
+    s.filesystem.unreadable.insert("/scope/a/closed".into());
+    s.filesystem.remove_skips.insert(
+        "/scope/a/locked".into(),
+        "not permitted, for example locked".into(),
+    );
+    let c = s.prepare(dir, Action::PermanentlyDelete).unwrap();
+    let r = s.execute(c).unwrap();
+    let Mutation::RemovedWithSkips(removal) = r.mutation else {
+        panic!("{:?}", r.mutation)
+    };
+    assert_eq!((removal.removed, removal.skipped), (2, 2));
+    assert_eq!(
+        removal.reasons,
+        [
+            "/scope/a/closed: permission denied",
+            "/scope/a/locked: not permitted, for example locked"
+        ]
+    );
+    // The survivors are read again; only the unreadable folder keeps its saved contents.
+    assert!(r.update.state.dirty && r.update.state.stale);
+    assert_eq!(s.explorer.entry(dir).unwrap().child_count, 2);
+    assert_eq!(total(&s), 429 - 150);
+    assert!(
+        s.filesystem
+            .get(Path::new("/scope/a/closed/inner"))
+            .is_some()
+    );
+    assert_consistent(&s);
+}
+#[test]
+fn delete_errors_that_end_the_walk_report_exact_counts() {
+    let mut s = with_live_files(10);
+    s.filesystem.remove_failure_after = Some(4);
+    let c = s.prepare(handle(&s, 1), Action::PermanentlyDelete).unwrap();
+    let r = s.execute(c).unwrap();
+    let Mutation::Partial {
+        message,
+        stopped,
+        removal,
+    } = r.mutation
+    else {
+        panic!("{:?}", r.mutation)
+    };
+    assert!(!stopped);
+    assert_eq!(message, "injected unlink failure");
+    assert_eq!((removal.removed, removal.skipped), (4, 0));
+    assert!(r.update.state.stale);
+    // `file` goes first, then three of the ten files.
+    assert!(s.filesystem.get(Path::new("/scope/a/file")).is_none());
+    let left = (0..10)
+        .filter(|i| {
+            s.filesystem
+                .get(Path::new(&format!("/scope/a/many/f-{i:06}")))
+                .is_some()
+        })
+        .count();
+    assert_eq!(left, 7);
+}
+/// Cancels when the removal reached `at` entries; returns whether Stop was accepted.
+fn stop_after(control: &ScanControl, at: u64) -> Arc<AtomicBool> {
+    let accepted = Arc::new(AtomicBool::new(false));
+    let seen = accepted.clone();
+    *control.hook.lock().unwrap() = Some(Box::new(move |c| {
+        let p = c.progress();
+        if p.phase == ScanPhase::Removing && p.items_examined == at && c.cancel() {
+            seen.store(true, Ordering::Relaxed);
+        }
+    }));
+    accepted
+}
+#[test]
+fn stop_during_controlled_delete_reports_partial_with_exact_counts() {
+    let mut s = with_live_files(20);
+    let dir = handle(&s, 1);
+    s.refresh_directory(dir).unwrap();
+    let control = ScanControl::default();
+    let accepted = stop_after(&control, 7);
+    let c = s.prepare(dir, Action::PermanentlyDelete).unwrap();
+    let r = s.execute_controlled(c, &control).unwrap();
+    assert!(accepted.load(Ordering::Relaxed));
+    let Mutation::Partial {
+        stopped, removal, ..
+    } = r.mutation
+    else {
+        panic!("{:?}", r.mutation)
+    };
+    assert!(stopped);
+    assert_eq!((removal.removed, removal.skipped), (7, 0));
+    assert_eq!(control.progress().items_examined, 7);
+    assert_eq!(control.progress().phase, ScanPhase::Committed);
+    // `file` and six of the twenty files are gone; the inventory holds the other fourteen.
+    let many = s
+        .explorer
+        .children(dir, 0, 10)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.basename == b"many")
+        .unwrap();
+    assert_eq!(s.explorer.entry(many.handle).unwrap().child_count, 14);
+    assert!(!r.update.state.stale);
+    assert_consistent(&s);
+}
+#[test]
+fn stop_before_the_first_unlink_cancels_with_nothing_changed_and_trash_cannot_stop() {
+    // Stop during the execute checks.
+    let mut s = with_live_files(5);
+    let control = ScanControl::default();
+    *control.hook.lock().unwrap() = Some(Box::new(|c| {
+        if c.progress().phase == ScanPhase::Scanning {
+            c.cancel();
+        }
+    }));
+    let c = s.prepare(handle(&s, 1), Action::PermanentlyDelete).unwrap();
+    let before = inventory_rows(&s);
+    let error = s.execute_controlled(c, &control).unwrap_err();
+    assert!(
+        error
+            .get_ref()
+            .is_some_and(|e| e.is::<crate::scan_control::ScanCancelled>())
+    );
+    assert_eq!(control.progress().phase, ScanPhase::Cancelled);
+    assert_eq!(s.filesystem.calls.remove, 0);
+    assert_eq!(inventory_rows(&s), before);
+    assert!(!s.state().dirty);
+    assert_eq!(s.filesystem.pinned_count(), 0);
+    // Stop as the removal begins.
+    let control = ScanControl::default();
+    let accepted = stop_after(&control, 0);
+    let c = s.prepare(handle(&s, 1), Action::PermanentlyDelete).unwrap();
+    assert!(s.execute_controlled(c, &control).is_err());
+    assert!(accepted.load(Ordering::Relaxed));
+    assert!(
+        s.filesystem
+            .get(Path::new("/scope/a/many/f-000000"))
+            .is_some()
+    );
+    assert_eq!(inventory_rows(&s), before);
+    // Trash commits before its checks: Stop is rejected while it moves.
+    let gate = Arc::new(super::memory::StageGate::default());
+    s.filesystem.stages.gate = Some(gate.clone());
+    s.filesystem.trash_behavior = TrashBehavior::MoveTo("/outside/moved".into());
+    let control = Arc::new(ScanControl::default());
+    let worker = {
+        let control = control.clone();
+        std::thread::spawn(move || {
+            let c = s.prepare(handle(&s, 1), Action::Trash).unwrap();
+            let r = s.execute_controlled(c, &control).unwrap();
+            (s, r)
+        })
+    };
+    let wait = || gate.wait_for_held(std::time::Duration::from_secs(10));
+    use super::memory::Stage;
+    for stage in [Stage::Check, Stage::Check, Stage::Trash, Stage::Update] {
+        assert_eq!(wait(), Some(stage));
+        let progress = control.progress();
+        if stage != Stage::Check || progress.phase == ScanPhase::Committing {
+            assert!(!progress.cancellable && !control.cancel(), "{stage:?}");
+        }
+        gate.release();
+    }
+    let (s, r) = worker.join().unwrap();
+    assert!(matches!(r.mutation, Mutation::Trashed { .. }));
+    assert_eq!(control.progress().phase, ScanPhase::Committed);
+    assert_eq!(total(&s), 240);
+}
+
+/// An owned native tree `root/dir` with `files` files and `dir/sub` with eight more.
+fn native_tree(files: usize) -> (Fixture, OperationSession<native::NativeFileSystem>) {
+    let fixture = Fixture::new();
+    let dir = fixture.0.join("root/dir");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    for i in 0..files {
+        std::fs::write(dir.join(format!("file-{i:05}")), b"owned").unwrap();
+    }
+    for i in 0..8 {
+        std::fs::write(dir.join(format!("sub/inner-{i}")), b"owned").unwrap();
+    }
+    let map = fixture.0.join("map");
+    crate::inventory::Inventory::create(&fixture.0.join("root"), &map, Default::default()).unwrap();
+    let s = native::NativeFileSystem::open_snapshot(&map).unwrap();
+    (fixture, s)
+}
+fn first_child<F: FileSystem>(s: &OperationSession<F>) -> EntryHandle {
+    s.explorer
+        .children(s.explorer.root_handle(), 0, 1)
+        .unwrap()
+        .entries[0]
+        .handle
+}
+#[test]
+fn native_delete_is_one_walk_and_its_checks_read_no_directory() {
+    let mut metadata = Vec::new();
+    for files in [16, 512] {
+        let (fixture, mut s) = native_tree(files);
+        let dir = first_child(&s);
+        let c = s.prepare(dir, Action::Trash).unwrap();
+        drop(c); // Native Trash is never executed in tests.
+        let c = s.prepare(dir, Action::PermanentlyDelete).unwrap();
+        assert_eq!(s.execute(c).unwrap().mutation, Mutation::Removed);
+        assert!(!fixture.0.join("root/dir").exists());
+        // The checks list no directory; the removal walk lists each entry exactly once.
+        assert_eq!(s.filesystem.enumeration_work.records, 0);
+        assert_eq!(s.filesystem.removal_records, files + 1 + 8);
+        metadata.push(s.filesystem.metadata_requests);
+        assert_consistent(&s);
+    }
+    println!("native metadata requests for 16 and 512 files: {metadata:?}");
+    assert_eq!(
+        metadata[0], metadata[1],
+        "checks do not grow with the subtree"
+    );
+}
+#[test]
+fn native_snapshot_inside_the_target_is_refused_and_an_extra_link_is_not() {
+    use std::fs;
+    let fixture = Fixture::new();
+    let dir = fixture.0.join("root/dir");
+    fs::create_dir_all(dir.join("deep")).unwrap();
+    fs::write(dir.join("deep/file"), b"owned").unwrap();
+    // The snapshot's own path is inside the target.
+    let map = dir.join("deep/map");
+    crate::inventory::Inventory::create(&fixture.0.join("root"), &map, Default::default()).unwrap();
+    let mut s = native::NativeFileSystem::open_snapshot(&map).unwrap();
+    let target = first_child(&s);
+    for action in [Action::Trash, Action::PermanentlyDelete] {
+        let error = s.prepare(target, action).unwrap_err();
+        assert!(error.to_string().contains("active snapshot"), "{error}");
+    }
+    assert_eq!(s.filesystem.enumeration_work.records, 0);
+    assert!(map.exists() && dir.join("deep/file").exists());
+    drop(s);
+    // The snapshot lives outside; an extra hard link inside, made after opening, is the most
+    // recently looked-up name, so the descriptor may report it.
+    let outside = fixture.0.join("map");
+    fs::rename(&map, &outside).unwrap();
+    let mut s = native::NativeFileSystem::open_snapshot(&outside).unwrap();
+    let alias = dir.join("deep/map-alias");
+    let file = fs::File::open(&outside).unwrap();
+    fs::hard_link(&outside, &alias).unwrap();
+    fs::metadata(&alias).unwrap();
+    let mut named = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes at most MAXPATHLEN bytes, NUL-terminated.
+    unsafe {
+        libc::fcntl(
+            std::os::fd::AsRawFd::as_raw_fd(&file),
+            libc::F_GETPATH,
+            named.as_mut_ptr(),
+        )
+    };
+    named.truncate(named.iter().position(|&b| b == 0).unwrap());
+    println!("descriptor path: {}", String::from_utf8_lossy(&named));
+    let target = first_child(&s);
+    drop(s.prepare(target, Action::Trash).unwrap());
+    let c = s.prepare(target, Action::PermanentlyDelete).unwrap();
+    let Mutation::RemovedWithSkips(removal) = s.execute(c).unwrap().mutation else {
+        panic!("the extra link is skipped")
+    };
+    assert_eq!((removal.removed, removal.skipped), (1, 1));
+    assert_eq!(
+        removal.reasons,
+        [format!(
+            "{}: protected: scan root, active snapshot or another volume",
+            alias.display()
+        )]
+    );
+    assert!(alias.exists() && outside.exists() && !dir.join("deep/file").exists());
+}
+/// Restores the permissions and flags a test changed, so the fixture can be deleted.
+struct Restore(Vec<(PathBuf, u32)>);
+impl Drop for Restore {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        for (path, mode) in &self.0 {
+            let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            // SAFETY: valid NUL-terminated path; clears the owner's immutable flag.
+            unsafe { libc::chflags(c.as_ptr(), 0) };
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode)).unwrap();
+        }
+    }
+}
+#[test]
+fn native_delete_skips_locked_and_unwritable_entries_and_keeps_their_folders() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let fixture = Fixture::new();
+    let dir = fixture.0.join("root/dir");
+    fs::create_dir_all(dir.join("closed")).unwrap();
+    fs::create_dir_all(dir.join("open/deeper")).unwrap();
+    for file in ["plain", "locked", "closed/kept", "open/deeper/gone"] {
+        fs::write(dir.join(file), b"owned").unwrap();
+    }
+    let map = fixture.0.join("map");
+    crate::inventory::Inventory::create(&fixture.0.join("root"), &map, Default::default()).unwrap();
+    let mut s = native::NativeFileSystem::open_snapshot(&map).unwrap();
+    let target = first_child(&s);
+    let _restore = Restore(vec![
+        (dir.join("locked"), 0o644),
+        (dir.join("closed"), 0o755),
+    ]);
+    let locked = std::ffi::CString::new(dir.join("locked").as_os_str().as_bytes()).unwrap();
+    // SAFETY: valid NUL-terminated path of an owned file; the owner may set this flag.
+    assert_eq!(
+        unsafe { libc::chflags(locked.as_ptr(), libc::UF_IMMUTABLE) },
+        0
+    );
+    fs::set_permissions(dir.join("closed"), fs::Permissions::from_mode(0o555)).unwrap();
+    // Created after the scan: deleted like the rest.
+    fs::write(dir.join("open/late"), b"owned").unwrap();
+    let c = s.prepare(target, Action::PermanentlyDelete).unwrap();
+    let r = s.execute(c).unwrap();
+    let Mutation::RemovedWithSkips(removal) = r.mutation else {
+        panic!("{:?}", r.mutation)
+    };
+    // plain, open/late, open/deeper/gone, open/deeper and open.
+    assert_eq!((removal.removed, removal.skipped), (5, 2));
+    let mut reasons = removal.reasons.clone();
+    reasons.sort();
+    assert_eq!(
+        reasons,
+        [
+            format!("{}: permission denied", dir.join("closed/kept").display()),
+            format!(
+                "{}: not permitted, for example locked",
+                dir.join("locked").display()
+            ),
+        ]
+    );
+    assert!(dir.join("locked").exists() && dir.join("closed/kept").exists());
+    assert!(!dir.join("plain").exists() && !dir.join("open").exists());
+    let kept: Vec<_> = s
+        .explorer
+        .children(target, 0, 10)
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| e.basename)
+        .collect();
+    assert_eq!(kept, [b"closed".to_vec(), b"locked".to_vec()]);
+    assert_consistent(&s);
+}
+#[test]
+fn native_stop_mid_delete_reports_partial_with_exact_counts() {
+    let (fixture, mut s) = native_tree(40);
+    let dir = first_child(&s);
+    let control = ScanControl::default();
+    let accepted = stop_after(&control, 12);
+    let c = s.prepare(dir, Action::PermanentlyDelete).unwrap();
+    let r = s.execute_controlled(c, &control).unwrap();
+    assert!(accepted.load(Ordering::Relaxed));
+    let Mutation::Partial {
+        stopped, removal, ..
+    } = r.mutation
+    else {
+        panic!("{:?}", r.mutation)
+    };
+    assert!(stopped);
+    assert_eq!((removal.removed, removal.skipped), (12, 0));
+    let left = |path: &Path| std::fs::read_dir(path).unwrap().count();
+    let root = fixture.0.join("root/dir");
+    assert_eq!(left(&root) + left(&root.join("sub")), 40 + 1 + 8 - 12);
+    assert!(!r.update.state.stale);
+    assert_eq!(s.explorer.entry(dir).unwrap().child_count, left(&root));
+    assert_consistent(&s);
 }

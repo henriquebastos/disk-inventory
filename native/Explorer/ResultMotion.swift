@@ -29,7 +29,7 @@ struct RemovalMotionPlan {
       return RemovalMotionPlan(
         style: reduceMotion ? .fade : (visible == nil ? .poof : .travel),
         source: source, destination: visible)
-    case .failed, .partial, .indeterminate: return nil
+    case .removedWithSkips, .failed, .partial, .indeterminate: return nil
     }
   }
 }

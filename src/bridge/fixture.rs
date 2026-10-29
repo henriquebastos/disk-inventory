@@ -5,10 +5,14 @@ use crate::{
     explorer::Explorer,
     operations::{
         Identity, LiveMetadata, OperationSession,
-        memory::{MemoryFileSystem, TrashBehavior},
+        memory::{MemoryFileSystem, OperationStages, StageGate, TrashBehavior},
     },
 };
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 pub(super) fn metadata(inode: u64, kind: Kind, bytes: u64) -> LiveMetadata {
     LiveMetadata {
@@ -438,6 +442,10 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         "prototype-home",
         "prototype-home-refresh",
         "prototype-home-nested-trash",
+        "operation-quick",
+        "operation-slow",
+        "operation-paused",
+        "operation-skip",
         "file-type-colors",
         "visual-details",
         "metadata-delay",
@@ -471,7 +479,9 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
         )?
     } else if scenario == "visual-details" {
         visual_details_map()?
-    } else if matches!(scenario, "prototype-home" | "prototype-home-refresh") {
+    } else if matches!(scenario, "prototype-home" | "prototype-home-refresh")
+        || scenario.starts_with("operation-")
+    {
         prototype_home_map()?
     } else if scenario == "prototype-home-nested-trash" {
         prototype_home(true)?
@@ -512,6 +522,43 @@ pub(super) fn session(scenario: &str) -> Result<OperationSession<MemoryFileSyste
             "/Users/ana/Library/Caches/new cache.db",
             metadata(900_000, Kind::File, 2_000_000_000),
         );
+    }
+    // Trash and Delete in `prototype-home`: instant, in stages of known length, held at each
+    // stage until a test releases it, or with three entries removal must skip.
+    match scenario {
+        "operation-slow" => {
+            fs.stages = OperationStages {
+                check: Duration::from_secs(3),
+                trash: Duration::from_secs(3),
+                per_removal: Duration::from_millis(30),
+                update: Duration::from_secs(3),
+                ..OperationStages::default()
+            }
+        }
+        "operation-paused" => {
+            fs.stages = OperationStages {
+                gate: Some(Arc::new(StageGate::default())),
+                hold_removal_after: 5,
+                ..OperationStages::default()
+            }
+        }
+        "operation-skip" => {
+            for (path, reason) in [
+                ("Library/Caches/cache 01.db", "permission denied"),
+                (
+                    "Library/Caches/cache 02.cache",
+                    "not permitted, for example locked",
+                ),
+                (
+                    "Library/Containers/container 01.sqlite",
+                    "permission denied",
+                ),
+            ] {
+                fs.remove_skips
+                    .insert(Path::new("/Users/ana").join(path), reason.into());
+            }
+        }
+        _ => {}
     }
     match scenario {
         "metadata-delay" => {

@@ -61,7 +61,7 @@ publication arbitration and core cancellation tests.
 
 [ResultMotion.swift](../native/Explorer/ResultMotion.swift) retains at most one previous
 bounded bitmap and one affected region. Only confirmed `removed`/`trashed` outcomes
-can produce a plan. Failures, partial removals and indeterminate outcomes retain
+can produce a plan. Failures, skipped or partial removals and indeterminate outcomes retain
 honest diagnostics and any surviving selection, without a success ghost.
 Recovery retains the bounded row slice without its obsolete tree handle. Native callbacks reject input until the new view is ready.
 The model publishes the recovered selection, rows, and map together. The outcome banner floats over the map, so outcome text never resizes it.

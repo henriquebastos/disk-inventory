@@ -193,4 +193,139 @@ import XCTest
     XCTAssertNil(model.scan.progress)
     XCTAssertFalse(model.scan.polling)
   }
+
+  /// Waits, off the main actor, until the paused fixture holds an operation; returns the stage.
+  func held(_ session: ExplorerSession) async throws -> String {
+    try await Task.detached { try session.waitForHeldFixtureStage() }.value
+  }
+  func contains(_ model: ExplorerModel, _ name: String) -> Bool {
+    model.outline?.rows.contains { $0.entry.displayName == name } == true
+  }
+  /// Prepares `kind` for Library in `operation-paused` and returns at the confirmation.
+  func confirmLibrary(_ kind: ActionKind) async throws -> (ExplorerModel, ExplorerSession) {
+    let model = try await load("operation-paused")
+    let session = try XCTUnwrap(model.session)
+    model.select(try row(model, "Library").entry)
+    let preparation = try XCTUnwrap(model.prepare(kind))
+    // The check runs before the alert, and the bar names it.
+    XCTAssertEqual(model.checking, "Library")
+    XCTAssertTrue(model.working)
+    let stage = try await held(session)
+    XCTAssertEqual(stage, "check")
+    XCTAssertNil(model.pending)
+    try session.releaseFixtureStage()
+    await preparation.value
+    XCTAssertNil(model.checking)
+    XCTAssertNotNil(model.pending)
+    return (model, session)
+  }
+
+  func testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop() async throws {
+    let (model, session) = try await confirmLibrary(.permanentlyDelete)
+    let execution = try XCTUnwrap(model.execute())
+    var stage = try await held(session)
+    XCTAssertEqual(stage, "check")
+    model.scan.sample()
+    XCTAssertEqual(model.scan.label, "Checking “Library”…")
+    XCTAssertNil(model.scan.itemsText(model.numbers))
+    XCTAssertTrue(model.scan.offersStop)
+    XCTAssertTrue(ExplorerCommand.stopScan.isEnabled(in: model))
+    try session.releaseFixtureStage()
+    stage = try await held(session)
+    XCTAssertEqual(stage, "remove")
+    model.scan.sample()
+    XCTAssertEqual(model.scan.label, "Deleting “Library”…")
+    XCTAssertEqual(model.scan.itemsText(model.numbers), "5 items")
+    XCTAssertTrue(ExplorerCommand.stopScan.isEnabled(in: model))
+    try session.releaseFixtureStage()
+    stage = try await held(session)
+    XCTAssertEqual(stage, "update")
+    model.scan.sample()
+    XCTAssertEqual(model.scan.label, "Updating view…")
+    XCTAssertNil(model.scan.itemsText(model.numbers))
+    XCTAssertFalse(ExplorerCommand.stopScan.isEnabled(in: model), "the deletion is done")
+    try session.releaseFixtureStage()
+    await execution.value
+    XCTAssertEqual(model.outcome, "Deleted.")
+    XCTAssertFalse(model.working)
+    XCTAssertNil(model.scan.progress)
+    XCTAssertFalse(contains(model, "Library"))
+  }
+
+  func testStopDuringDeleteSaysHowManyWereDeletedAndStopBeforeChangesNothing() async throws {
+    var (model, session) = try await confirmLibrary(.permanentlyDelete)
+    var execution = try XCTUnwrap(model.execute())
+    var stage = try await held(session)
+    XCTAssertEqual(stage, "check")
+    try session.releaseFixtureStage()
+    stage = try await held(session)
+    XCTAssertEqual(stage, "remove")
+    ExplorerCommand.stopScan.perform(in: model)
+    XCTAssertEqual(model.scan.label, "Stopping…")
+    try session.releaseFixtureStage()
+    stage = try await held(session)
+    XCTAssertEqual(stage, "update")
+    try session.releaseFixtureStage()
+    await execution.value
+    XCTAssertEqual(model.outcome, "Deletion stopped. 5 items deleted.")
+    XCTAssertTrue(contains(model, "Library"), "the survivors stay")
+    XCTAssertNil(model.error)
+    // Stop during the check before deletion: nothing changes, so the view is not rebuilt.
+    (model, session) = try await confirmLibrary(.permanentlyDelete)
+    let (frame, builds) = (model.picture?.frame, model.diagramBuilds)
+    let total = model.records?.focus.subtreeBytes
+    execution = try XCTUnwrap(model.execute())
+    stage = try await held(session)
+    XCTAssertEqual(stage, "check")
+    ExplorerCommand.stopScan.perform(in: model)
+    try session.releaseFixtureStage()
+    await execution.value
+    XCTAssertEqual(model.outcome, "Deletion of “Library” stopped. Nothing was deleted.")
+    XCTAssertTrue(model.picture?.frame === frame)
+    XCTAssertEqual(model.diagramBuilds, builds)
+    XCTAssertEqual(model.records?.focus.subtreeBytes, total)
+    XCTAssertFalse(model.records?.status.dirty ?? true)
+  }
+
+  func testTrashNamesItsPhasesAndOffersNoStop() async throws {
+    let (model, session) = try await confirmLibrary(.trash)
+    let execution = try XCTUnwrap(model.execute())
+    for stage in ["check", "trash"] {
+      let held = try await held(session)
+      XCTAssertEqual(held, stage)
+      model.scan.sample()
+      XCTAssertEqual(model.scan.label, "Moving “Library” to the Trash…")
+      XCTAssertNil(model.scan.itemsText(model.numbers))
+      XCTAssertFalse(model.scan.offersStop)
+      XCTAssertFalse(ExplorerCommand.stopScan.isEnabled(in: model))
+      try session.releaseFixtureStage()
+    }
+    let stage = try await held(session)
+    XCTAssertEqual(stage, "update")
+    model.scan.sample()
+    XCTAssertEqual(model.scan.label, "Updating view…")
+    try session.releaseFixtureStage()
+    await execution.value
+    XCTAssertEqual(model.outcome, "Moved to Trash.")
+    XCTAssertFalse(contains(model, "Library"))
+  }
+
+  func testSkippedItemsReadAsDeletedWithACountAndReasonsInDetails() async throws {
+    let model = try await load("operation-skip")
+    model.select(try row(model, "Library").entry)
+    await model.prepare(.permanentlyDelete)?.value
+    await model.execute()?.value
+    XCTAssertEqual(model.outcome, "Deleted. 3 items skipped.")
+    XCTAssertEqual(
+      model.issues,
+      [
+        "Skipped /Users/ana/Library/Caches/cache 01.db: permission denied",
+        "Skipped /Users/ana/Library/Caches/cache 02.cache: not permitted, for example locked",
+        "Skipped /Users/ana/Library/Containers/container 01.sqlite: permission denied",
+      ])
+    XCTAssertTrue(model.bannerVisible)
+    XCTAssertTrue(contains(model, "Library"), "the folders of skipped items stay")
+    XCTAssertTrue(contains(model, "Movies"), "the other rows stay")
+    XCTAssertNil(model.error)
+  }
 }

@@ -1842,6 +1842,108 @@ import XCTest
     XCTAssertTrue(row("new cache.db").waitForExistence(timeout: 8))
     screenshot("refresh-complete")
   }
+  /// The bar names the operation's phase and item; a bare "Working…" never shows. It reads the
+  /// value directly: a predicate expectation samples about once a second, slower than a phase.
+  func phase(_ value: String, timeout: TimeInterval = 6) {
+    let element = app.staticTexts["scan-phase"]
+    let deadline = Date().addingTimeInterval(timeout)
+    var shown = ""
+    while Date() < deadline {
+      if element.exists { shown = (element.value as? String) ?? element.label }
+      if shown.contains(value) { break }
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    XCTAssertTrue(shown.contains(value), "the phase must be \(value), got \(shown)")
+    XCTAssertFalse(anyText(containing: "Working…").exists, value)
+  }
+  /// The removed-items counter, such as "96 items".
+  func items() -> (count: Int, shown: String) {
+    let element = app.staticTexts["scan-items"]
+    let shown = (element.value as? String) ?? element.label
+    return (Int(shown.filter(\.isNumber)) ?? -1, shown)
+  }
+  /// `operation-slow`: each check, the Trash move and the update take 3 s, each removal 30 ms.
+  func testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop() throws {
+    launch("operation-slow")
+    row("Library").click()
+    app.buttons["delete"].click()
+    phase("Checking “Library”…")
+    screenshot("delete-checking")
+    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    app.buttons["confirm-action"].click()
+    phase("Deleting “Library”…", timeout: 8)
+    XCTAssertTrue(app.staticTexts["scan-items"].waitForExistence(timeout: 4))
+    let first = items()
+    XCTAssertTrue(app.buttons["stop-scan"].isEnabled)
+    screenshot("delete-deleting")
+    Thread.sleep(forTimeInterval: 1)
+    let second = items()
+    print("DELETE counter \(first.shown) -> \(second.shown)")
+    XCTAssertGreaterThan(second.count, first.count, "the removed-items counter is live")
+    XCTAssertNotNil(second.shown.range(of: #"^[0-9,]+ items$"#, options: .regularExpression))
+    phase("Updating view…", timeout: 8)
+    XCTAssertFalse(app.buttons["stop-scan"].isEnabled, "the deletion is done")
+    screenshot("delete-updating")
+    outcome(is: "Deleted.", timeout: 12)
+    XCTAssertTrue(app.staticTexts["scan-phase"].waitForNonExistence(timeout: 8))
+    XCTAssertFalse(row("Library").exists)
+    screenshot("delete-done")
+    app.terminate()
+    // Stop ends the walk between two entries and says how many were deleted.
+    launch("operation-slow")
+    row("Library").click()
+    app.buttons["delete"].click()
+    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    app.buttons["confirm-action"].click()
+    phase("Deleting “Library”…", timeout: 8)
+    Thread.sleep(forTimeInterval: 0.5)
+    app.buttons["stop-scan"].click()
+    text("outcome", contains: "Deletion stopped.", timeout: 12)
+    let stopped = (app.staticTexts["outcome"].value as? String) ?? ""
+    print("DELETE stopped: \(stopped)")
+    XCTAssertNotNil(
+      stopped.range(
+        of: #"^Deletion stopped\. [0-9,]+ items? deleted\.$"#, options: .regularExpression),
+      stopped)
+    XCTAssertTrue(row("Library").exists, "the survivors stay")
+    screenshot("delete-stopped")
+  }
+  func testTrashNamesItsPhasesAndOffersNoStop() throws {
+    launch("operation-slow")
+    row("Library").click()
+    app.buttons["trash"].click()
+    phase("Checking “Library”…")
+    XCTAssertFalse(app.buttons["stop-scan"].exists)
+    screenshot("trash-checking")
+    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    app.buttons["confirm-action"].click()
+    phase("Moving “Library” to the Trash…")
+    XCTAssertFalse(app.buttons["stop-scan"].exists, "Trash cannot stop")
+    XCTAssertFalse(app.staticTexts["scan-items"].exists)
+    screenshot("trash-moving")
+    phase("Updating view…", timeout: 8)
+    screenshot("trash-updating")
+    outcome(is: "Moved to Trash.", timeout: 12)
+    XCTAssertFalse(row("Library").exists)
+  }
+  func testSkippedItemsShowACountAndTheirReasonsInDetails() throws {
+    launch("operation-skip")
+    prepare("delete", target: "Library")
+    app.buttons["confirm-action"].click()
+    outcome(is: "Deleted. 3 items skipped.")
+    XCTAssertTrue(row("Library").exists, "the folders of skipped items stay")
+    let details = app.disclosureTriangles["issues"]
+    XCTAssertTrue(details.waitForExistence(timeout: 8))
+    let chevron = app.staticTexts["outcome"].frame.minX + 4.5 - details.frame.minX
+    details.coordinate(withNormalizedOffset: .zero)
+      .withOffset(CGVector(dx: chevron, dy: details.frame.height / 2)).click()
+    XCTAssertTrue(
+      anyText(containing: "Skipped /Users/ana/Library/Caches/cache 01.db: permission denied")
+        .waitForExistence(timeout: 8))
+    XCTAssertTrue(
+      anyText(containing: "cache 02.cache: not permitted, for example locked").exists)
+    screenshot("delete-skipped-details")
+  }
   /// Frame sampling across repeated map clicks: the fixture-only `map-selection-gaps` probe
   /// records every drawn map frame. No frame may lose the selection dim between the old
   /// selection and the new one (the click flicker).

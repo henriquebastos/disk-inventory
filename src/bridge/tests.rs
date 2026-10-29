@@ -928,3 +928,130 @@ fn file_type_colors_fixture_colors_new_extensions_and_context_folders_in_map_and
         assert_eq!(rows[0].map_rgb, Some(color), "{name} tree swatch");
     }
 }
+
+fn child(s: &ExplorerSession, parent: Arc<EntryKey>, name: &[u8]) -> Option<Arc<EntryKey>> {
+    s.children(parent, 0, 64)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.basename == name)
+        .map(|e| e.key)
+}
+#[test]
+fn paused_operation_fixture_holds_each_stage_counts_removals_and_stops() {
+    let s = session("operation-paused");
+    let root = s.status().unwrap().root.key;
+    let library = find(&s, b"Library");
+    // Preparation holds at its check; the gate needs no session lock.
+    let worker = {
+        let (s, key) = (s.clone(), library.clone());
+        std::thread::spawn(move || s.prepare(key, ActionKind::PermanentlyDelete))
+    };
+    assert_eq!(s.wait_for_held_fixture_stage().unwrap(), "check");
+    assert!(s.is_busy());
+    s.release_fixture_stage().unwrap();
+    let action = worker.join().unwrap().unwrap();
+    let control = ScanControl::new();
+    let worker = {
+        let (s, control) = (s.clone(), control.clone());
+        std::thread::spawn(move || s.execute_controlled(action, control))
+    };
+    assert_eq!(s.wait_for_held_fixture_stage().unwrap(), "check");
+    assert_eq!(control.progress().phase, ScanPhase::Scanning);
+    s.release_fixture_stage().unwrap();
+    assert_eq!(s.wait_for_held_fixture_stage().unwrap(), "remove");
+    let progress = control.progress();
+    assert_eq!(progress.phase, ScanPhase::Removing);
+    assert_eq!(progress.items_examined, 5);
+    assert!(progress.cancellable);
+    // Stop between two entries: the walk ends after exactly five removals.
+    assert!(control.cancel());
+    s.release_fixture_stage().unwrap();
+    assert_eq!(s.wait_for_held_fixture_stage().unwrap(), "update");
+    let progress = control.progress();
+    assert_eq!(progress.phase, ScanPhase::Committed);
+    assert!(!progress.cancellable);
+    s.release_fixture_stage().unwrap();
+    let r = worker.join().unwrap().unwrap();
+    let MutationOutcome::Partial {
+        stopped, removal, ..
+    } = r.mutation
+    else {
+        panic!("{:?}", r.mutation)
+    };
+    assert!(stopped);
+    assert_eq!((removal.removed, removal.skipped), (5, 0));
+    assert_eq!(control.progress().phase, ScanPhase::Complete);
+    assert!(child(&s, root.clone(), b"Library").is_some());
+    // Stop during the execute check: nothing changes and the old views stay valid.
+    let frame = s
+        .clone()
+        .diagram(root.clone(), 200, 150, MapAppearance::Dark)
+        .unwrap();
+    let total = s.status().unwrap().root.subtree_bytes;
+    let worker = {
+        let (s, key) = (s.clone(), find(&s, b"Library"));
+        std::thread::spawn(move || s.prepare(key, ActionKind::PermanentlyDelete))
+    };
+    assert_eq!(s.wait_for_held_fixture_stage().unwrap(), "check");
+    s.release_fixture_stage().unwrap();
+    let action = worker.join().unwrap().unwrap();
+    let control = ScanControl::new();
+    let worker = {
+        let (s, control) = (s.clone(), control.clone());
+        std::thread::spawn(move || s.execute_controlled(action, control))
+    };
+    assert_eq!(s.wait_for_held_fixture_stage().unwrap(), "check");
+    assert!(control.cancel());
+    s.release_fixture_stage().unwrap();
+    assert!(matches!(
+        worker.join().unwrap(),
+        Err(BridgeError::Cancelled)
+    ));
+    assert_eq!(control.progress().phase, ScanPhase::Cancelled);
+    assert_eq!(s.status().unwrap().root.subtree_bytes, total);
+    assert!(
+        frame.hit(10, 10).unwrap().is_some(),
+        "the old frame stays valid"
+    );
+    // Sessions without a paused scenario have no gate.
+    assert!(session("operation-quick").release_fixture_stage().is_err());
+}
+#[test]
+fn operation_fixtures_trash_quickly_and_skip_with_reasons() {
+    let s = session("operation-quick");
+    let a = s.prepare(find(&s, b"Library"), ActionKind::Trash).unwrap();
+    let control = ScanControl::new();
+    let r = s.execute_controlled(a, control.clone()).unwrap();
+    assert!(matches!(r.mutation, MutationOutcome::Trashed { .. }));
+    assert_eq!(control.progress().phase, ScanPhase::Complete);
+    assert!(memory(&s, |f| f.calls.directories) == 0);
+    let s = session("operation-skip");
+    let a = s
+        .prepare(find(&s, b"Library"), ActionKind::PermanentlyDelete)
+        .unwrap();
+    let r = s.execute_controlled(a, ScanControl::new()).unwrap();
+    let MutationOutcome::RemovedWithSkips { removal } = r.mutation else {
+        panic!("{:?}", r.mutation)
+    };
+    // 183 entries: 3 skipped files, their 3 folders kept, 177 removed.
+    assert_eq!((removal.removed, removal.skipped), (177, 3));
+    assert_eq!(
+        removal.reasons,
+        [
+            "/Users/ana/Library/Caches/cache 01.db: permission denied",
+            "/Users/ana/Library/Caches/cache 02.cache: not permitted, for example locked",
+            "/Users/ana/Library/Containers/container 01.sqlite: permission denied",
+        ]
+    );
+    let library = find(&s, b"Library");
+    assert!(child(&s, library.clone(), b"Developer").is_none());
+    let caches = child(&s, library, b"Caches").unwrap();
+    assert_eq!(s.children(caches, 0, 64).unwrap().total, 2);
+    let slow = session("operation-slow");
+    memory(&slow, |f| {
+        assert_eq!(f.stages.check, std::time::Duration::from_secs(3));
+        assert_eq!(f.stages.per_removal, std::time::Duration::from_millis(30));
+        assert!(f.stages.gate.is_none());
+    });
+}

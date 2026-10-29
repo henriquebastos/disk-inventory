@@ -29,10 +29,17 @@ pub(super) struct EnumerationWork {
 
 pub struct NativeFileSystem {
     snapshot: File,
+    /// The path the snapshot was opened with: its own location, unlike an extra hard link.
+    snapshot_path: PathBuf,
     identity: Identity,
     root: Identity,
+    /// `/usr/share/firmlinks`, read once: (system-volume path, Data-volume path).
+    firmlinks: Option<Vec<(PathBuf, PathBuf)>>,
     #[cfg(test)]
     pub(super) enumeration_work: EnumerationWork,
+    /// Directory records listed by the removal walk.
+    #[cfg(test)]
+    pub(super) removal_records: usize,
     #[cfg(test)]
     pub(super) metadata_requests: usize,
     #[cfg(test)]
@@ -62,10 +69,14 @@ impl NativeFileSystem {
             Explorer::from_map(map)?,
             Self {
                 snapshot,
+                snapshot_path: path.to_path_buf(),
                 identity,
                 root,
+                firmlinks: None,
                 #[cfg(test)]
                 enumeration_work: EnumerationWork::default(),
+                #[cfg(test)]
+                removal_records: 0,
                 #[cfg(test)]
                 metadata_requests: 0,
                 #[cfg(test)]
@@ -73,39 +84,130 @@ impl NativeFileSystem {
             },
         ))
     }
-    fn preflight(&mut self, target: &Target) -> io::Result<()> {
-        let mut pending = vec![target.clone()];
-        let mut seen = HashSet::new();
-        while let Some(t) = pending.pop() {
-            let m = self.metadata(&t.path)?;
-            check(&m, &t)?;
-            if m.identity == self.root
-                || m.identity == self.identity
-                || m.identity.device != self.root.device
-                || m.flags & crate::native::SF_FIRMLINK != 0
-            {
-                return Err(invalid("native root/snapshot or mount/firmlink protection"));
-            }
-            if m.kind == Kind::Dir {
-                if !seen.insert(m.identity) {
-                    return Err(invalid("duplicate directory identity"));
-                }
-                for entry in self.read_directory(&t)? {
-                    if entry.metadata.mount {
-                        return Err(invalid("mounted child is protected"));
-                    }
-                    if entry.metadata.kind != Kind::Symlink {
-                        pending.push(Target {
-                            path: t.path.join(OsStr::from_bytes(&entry.name)),
-                            identity: entry.metadata.identity,
-                            kind: entry.metadata.kind,
-                        });
-                    }
-                }
-            }
+    fn firmlinks(&mut self) -> io::Result<&[(PathBuf, PathBuf)]> {
+        if self.firmlinks.is_none() {
+            let list = match std::fs::read("/usr/share/firmlinks") {
+                Ok(bytes) => parse_firmlinks(&bytes),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(e),
+            };
+            self.firmlinks = Some(list);
         }
-        Ok(())
+        Ok(self.firmlinks.as_deref().unwrap_or_default())
     }
+    /// T4: the active snapshot's own path is not below the target. That is the path it was
+    /// opened with while it still names the snapshot, else the descriptor's path. With
+    /// extra hard links the descriptor may name any of them, the most recently looked up.
+    fn snapshot_within(&self, target: &Target) -> io::Result<bool> {
+        let m = stat_fd(&self.snapshot)?;
+        if m.identity.device != target.identity.device || m.links == 0 {
+            return Ok(false);
+        }
+        let opened = parent(&self.snapshot_path).and_then(|(dir, name)| stat_at(&dir, &name));
+        if opened.is_ok_and(|m| m.identity == self.identity && m.kind == Kind::File) {
+            return directory_above(&self.snapshot_path, target.identity);
+        }
+        let mut path = vec![0u8; libc::PATH_MAX as usize];
+        // SAFETY: F_GETPATH writes at most MAXPATHLEN bytes, NUL-terminated, to the buffer.
+        if unsafe {
+            libc::fcntl(
+                self.snapshot.as_raw_fd(),
+                libc::F_GETPATH,
+                path.as_mut_ptr(),
+            )
+        } == -1
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let end = path
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or_else(|| invalid("unterminated snapshot path"))?;
+        path.truncate(end);
+        directory_above(Path::new(OsStr::from_bytes(&path)), target.identity)
+    }
+}
+/// `/usr/share/firmlinks` lines are "/system-path<TAB>data-relative-path".
+fn parse_firmlinks(bytes: &[u8]) -> Vec<(PathBuf, PathBuf)> {
+    bytes
+        .split(|&b| b == b'\n')
+        .filter_map(|line| {
+            let tab = line.iter().position(|&b| b == b'\t')?;
+            let (system, data) = (&line[..tab], &line[tab + 1..]);
+            let data = data.strip_prefix(b"/").unwrap_or(data);
+            (system.starts_with(b"/") && !data.is_empty()).then(|| {
+                (
+                    PathBuf::from(OsStr::from_bytes(system)),
+                    Path::new(DATA_VOLUME).join(OsStr::from_bytes(data)),
+                )
+            })
+        })
+        .collect()
+}
+const DATA_VOLUME: &str = "/System/Volumes/Data";
+/// The path and its other spelling through the Data-volume firmlinks.
+fn spellings(path: &Path) -> [PathBuf; 2] {
+    match path.strip_prefix(DATA_VOLUME) {
+        Ok(rest) => [path.to_path_buf(), Path::new("/").join(rest)],
+        Err(_) => [
+            path.to_path_buf(),
+            Path::new(DATA_VOLUME).join(path.strip_prefix("/").unwrap_or(path)),
+        ],
+    }
+}
+/// Whether `path` is `directory` or below it, by components, ignoring ASCII case: a case
+/// variant on a case-insensitive volume still becomes a candidate.
+fn at_or_below(path: &Path, directory: &Path) -> bool {
+    let mut components = path.components();
+    directory.components().all(|d| {
+        components.next().is_some_and(|c| {
+            c.as_os_str()
+                .as_bytes()
+                .eq_ignore_ascii_case(d.as_os_str().as_bytes())
+        })
+    })
+}
+/// Whether a directory with this identity is among the parents of `path`, following `..`
+/// from the parent of `path`; `path` itself is never opened.
+fn directory_above(path: &Path, directory: Identity) -> io::Result<bool> {
+    let mut dir = crate::open_directory(
+        path.parent()
+            .ok_or_else(|| invalid("path needs a parent"))?,
+    )?;
+    let up = CString::new("..").unwrap();
+    loop {
+        let m = stat_fd(&dir)?;
+        if m.identity == directory {
+            return Ok(true);
+        }
+        let parent = open_at(&dir, &up)?;
+        if stat_fd(&parent)?.identity == m.identity {
+            return Ok(false);
+        }
+        dir = parent;
+    }
+}
+/// T5/T6: the first endpoint at or below the target. Each endpoint is a spelling and the
+/// paths whose parents confirm it. Text selects the candidates first, in both target
+/// spellings, so no other endpoint is ever opened (a dead network mount would hang). The
+/// parent identities of a candidate then confirm it; one that cannot be checked counts.
+fn endpoint_within(target: &Target, endpoints: &[(PathBuf, Vec<PathBuf>)]) -> Option<PathBuf> {
+    let spellings = spellings(&target.path);
+    let mut candidates: Vec<_> = endpoints
+        .iter()
+        .filter(|(text, _)| spellings.iter().any(|t| at_or_below(text, t)))
+        .collect();
+    candidates.sort_by_key(|(text, _)| text.components().count());
+    candidates.into_iter().find_map(|(text, confirm)| {
+        let itself = spellings
+            .iter()
+            .any(|t| at_or_below(text, t) && t.components().count() == text.components().count());
+        let inside = itself
+            || confirm
+                .iter()
+                .any(|path| directory_above(path, target.identity).unwrap_or(true));
+        inside.then(|| text.clone())
+    })
 }
 fn c_name(name: &OsStr) -> io::Result<CString> {
     CString::new(name.as_bytes()).map_err(|_| invalid("NUL in path"))
@@ -354,6 +456,39 @@ impl FileSystem for NativeFileSystem {
         }
         result
     }
+    fn refuse_protected_within(&mut self, target: &Target) -> io::Result<()> {
+        if target.kind != Kind::Dir {
+            return Ok(());
+        }
+        if self.snapshot_within(target)? {
+            return Err(invalid("the active snapshot is inside the target"));
+        }
+        let mounts: Vec<_> = crate::native::mount_paths()?
+            .into_iter()
+            .map(|mount| (mount.clone(), vec![mount]))
+            .collect();
+        if let Some(mount) = endpoint_within(target, &mounts) {
+            return Err(invalid(&format!(
+                "the mounted volume at {} is the target or inside it",
+                mount.display()
+            )));
+        }
+        let firmlinks: Vec<_> = self
+            .firmlinks()?
+            .iter()
+            .flat_map(|(system, data)| {
+                let confirm = vec![system.clone(), data.clone()];
+                [(system.clone(), confirm.clone()), (data.clone(), confirm)]
+            })
+            .collect();
+        if let Some(firmlink) = endpoint_within(target, &firmlinks) {
+            return Err(invalid(&format!(
+                "the firmlink {} is the target or inside it",
+                firmlink.display()
+            )));
+        }
+        Ok(())
+    }
     fn trash(&mut self, target: &Target, pin: &Self::Pin) -> Mutation {
         if let Err(e) = stat_fd(&pin._file).and_then(|m| check(&m, target)) {
             return Mutation::Failed(e.to_string());
@@ -367,7 +502,8 @@ impl FileSystem for NativeFileSystem {
             return Mutation::Failed("Trash must run off the main thread".into());
         }
         let validated = self
-            .preflight(target)
+            .refuse_protected_within(target)
+            .and_then(|()| trash_on_same_volume(target))
             .and_then(|()| self.metadata(&target.path))
             .and_then(|m| {
                 check(&m, target)?;
@@ -411,96 +547,178 @@ impl FileSystem for NativeFileSystem {
             }
         })
     }
-    fn remove(&mut self, target: &Target, pin: &Self::Pin) -> Mutation {
+    fn remove(
+        &mut self,
+        target: &Target,
+        pin: &Self::Pin,
+        control: Option<&ScanControl>,
+    ) -> Mutation {
         if let Err(e) = stat_fd(&pin._file).and_then(|m| check(&m, target)) {
             return Mutation::Failed(e.to_string());
         }
-        let mut removed = 0;
-        let result = (|| {
-            self.preflight(target)?;
-            let (parent, name) = parent(&target.path)?;
-            check(&stat_at(&parent, &name)?, target)?;
-            remove_at(
-                &parent,
-                &name,
-                target.identity,
-                target.kind,
-                self.identity,
-                target.identity.device,
-                &mut removed,
-            )
-        })();
-        match result {
-            Ok(()) => Mutation::Removed,
-            Err(e) if removed == 0 => Mutation::Failed(e.to_string()),
-            Err(e) => Mutation::Partial(e.to_string()),
+        let (parent, name) = match parent(&target.path).and_then(|(parent, name)| {
+            check(&stat_at(&parent, &name)?, target).map(|()| (parent, name))
+        }) {
+            Ok(found) => found,
+            Err(e) => return Mutation::Failed(e.to_string()),
+        };
+        let mut walk = NativeRemoval {
+            protected: [self.root, self.identity],
+            device: target.identity.device,
+            path: target.path.clone(),
+            walk: RemovalWalk::new(control),
+            records: 0,
+        };
+        let result = walk.remove(&parent, &name, target.identity, target.kind);
+        #[cfg(test)]
+        {
+            self.removal_records += walk.records;
         }
+        walk.walk.outcome(result)
     }
     fn classify_destination(&mut self, path: &Path, root: Identity) -> DestinationScope {
         classify(path, root).unwrap_or(DestinationScope::Unknown)
     }
 }
-fn remove_at(
-    parent: &File,
-    name: &CString,
-    expected: Identity,
-    kind: Kind,
-    snapshot: Identity,
+/// T7: Foundation's Trash for this item is on the item's own volume, so the move is a
+/// rename, never a copy. A volume without a usable Trash is refused; there is no fallback.
+fn trash_on_same_volume(target: &Target) -> io::Result<()> {
+    autoreleasepool(|_| {
+        let url = if target.kind == Kind::Dir {
+            NSURL::from_directory_path(&target.path)
+        } else {
+            NSURL::from_file_path(&target.path)
+        }
+        .ok_or_else(|| invalid("Foundation URL conversion failed"))?;
+        let manager = NSFileManager::defaultManager();
+        // SAFETY: SDK NSFileManager.h declares (NSURL *)URLForDirectory:(NSSearchPathDirectory)
+        // inDomain:(NSSearchPathDomainMask) appropriateForURL:(NSURL *) create:(BOOL)
+        // error:(NSError **); both enums are NSUInteger. NSTrashDirectory is 102 and
+        // NSUserDomainMask is 1. create:NO creates nothing.
+        let trash: Result<Retained<NSURL>, Retained<NSError>> = unsafe {
+            msg_send![&*manager, URLForDirectory: 102usize, inDomain: 1usize, appropriateForURL: &*url, create: false, error: _]
+        };
+        let trash = trash
+            .ok()
+            .and_then(|url| url.to_file_path())
+            .ok_or_else(|| invalid("this volume has no usable Trash; nothing was moved"))?;
+        let m = stat_fd(&crate::open_directory(&trash)?)?;
+        if m.identity.device != target.identity.device {
+            return Err(invalid(
+                "the Trash for this item is on another volume; nothing was moved",
+            ));
+        }
+        Ok(())
+    })
+}
+/// The native removal walk. Skipped: permission denied (EACCES), not permitted (EPERM,
+/// such as a locked file), an entry changed since it was listed, a protected entry and a
+/// folder that still holds a skipped entry. Any other error ends the walk: EIO, ENOTDIR,
+/// ELOOP, EMFILE, a failed listing or a lost device.
+struct NativeRemoval<'a> {
+    protected: [Identity; 2],
     device: u64,
-    removed: &mut usize,
-) -> io::Result<()> {
-    let current = stat_at(parent, name)?;
-    if current.identity != expected
-        || current.kind != kind
-        || expected == snapshot
-        || expected.device != device
-        || current.flags & crate::native::SF_FIRMLINK != 0
-    {
-        return Err(invalid("removal target changed or is protected/excluded"));
-    }
-    if kind == Kind::Dir {
-        let dir = open_at(parent, name)?;
-        if stat_fd(&dir)?.identity != expected {
-            return Err(invalid("directory replaced before open"));
+    /// The current entry, for skip reasons only.
+    path: PathBuf,
+    walk: RemovalWalk<'a>,
+    records: usize,
+}
+impl NativeRemoval<'_> {
+    /// Ok(false): the entry stays, because it or an entry below it was skipped.
+    fn remove(
+        &mut self,
+        parent: &File,
+        name: &CString,
+        expected: Identity,
+        kind: Kind,
+    ) -> io::Result<bool> {
+        self.walk.check_stop()?;
+        if self.protected.contains(&expected) || expected.device != self.device {
+            return Ok(self.skip("protected: scan root, active snapshot or another volume"));
         }
-        for entry in enumerate(&dir, &mut EnumerationWork::default())? {
-            if entry.metadata.mount {
-                return Err(invalid("refusing mounted child"));
+        if kind == Kind::Dir {
+            // A directory gets one stat before it is opened, so a swap for a symlink is a
+            // skipped change rather than an O_NOFOLLOW error that would end the walk.
+            match stat_at(parent, name) {
+                Ok(m) if m.identity != expected || m.kind != kind => {
+                    return Ok(self.skip("changed since it was listed"));
+                }
+                Ok(m) if m.flags & crate::native::SF_FIRMLINK != 0 => {
+                    return Ok(self.skip("protected: firmlink"));
+                }
+                Ok(_) => {}
+                Err(e) => return self.failed(e),
             }
-            let name = CString::new(entry.name).map_err(|_| invalid("invalid child name"))?;
-            remove_at(
-                &dir,
-                &name,
-                entry.metadata.identity,
-                entry.metadata.kind,
-                snapshot,
-                device,
-                removed,
-            )?;
+            let dir = match open_at(parent, name) {
+                Ok(dir) => dir,
+                Err(e) => return self.failed(e),
+            };
+            if stat_fd(&dir)?.identity != expected {
+                return Ok(self.skip("changed since it was listed"));
+            }
+            let mut work = EnumerationWork::default();
+            let entries = enumerate(&dir, &mut work)?;
+            self.records += work.records;
+            let mut kept = false;
+            for entry in entries {
+                self.path.push(OsStr::from_bytes(&entry.name));
+                let gone = if entry.metadata.mount {
+                    self.skip("protected: mounted volume")
+                } else {
+                    let name =
+                        CString::new(entry.name).map_err(|_| invalid("invalid child name"))?;
+                    self.remove(&dir, &name, entry.metadata.identity, entry.metadata.kind)?
+                };
+                self.path.pop();
+                kept |= !gone;
+            }
+            if kept {
+                return Ok(false);
+            }
+        }
+        // The only stat of a file: the listing gave its identity, this confirms it.
+        match stat_at(parent, name) {
+            Ok(m) if m.identity != expected || m.kind != kind => {
+                return Ok(self.skip("changed since it was listed"));
+            }
+            Ok(m) if m.flags & crate::native::SF_FIRMLINK != 0 => {
+                return Ok(self.skip("protected: firmlink"));
+            }
+            Ok(_) => {}
+            Err(e) => return self.failed(e),
+        }
+        // SAFETY: valid parent/name, directory flag only for checked directory. unlinkat
+        // unlinks a symlink itself, never its target. Namespace races remain possible.
+        if unsafe {
+            libc::unlinkat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                if kind == Kind::Dir {
+                    libc::AT_REMOVEDIR
+                } else {
+                    0
+                },
+            )
+        } != 0
+        {
+            return self.failed(io::Error::last_os_error());
+        }
+        self.walk.removed();
+        Ok(true)
+    }
+    fn skip(&mut self, reason: &str) -> bool {
+        self.walk.skip(&self.path, reason)
+    }
+    /// An entry that vanished is gone, not skipped; a skip class continues the walk.
+    fn failed(&mut self, e: io::Error) -> io::Result<bool> {
+        match e.raw_os_error() {
+            Some(libc::ENOENT) => Ok(true),
+            Some(libc::EACCES) => Ok(self.skip("permission denied")),
+            Some(libc::EPERM) => Ok(self.skip("not permitted, for example locked")),
+            Some(libc::ENOTEMPTY) => Ok(self.skip("new contents appeared during deletion")),
+            _ => Err(e),
         }
     }
-    let current = stat_at(parent, name)?;
-    if current.identity != expected || current.kind != kind {
-        return Err(invalid("entry replaced before unlink"));
-    }
-    // SAFETY: valid parent/name, directory flag only for checked directory. unlinkat
-    // unlinks a symlink itself, never its target. Namespace races remain possible.
-    if unsafe {
-        libc::unlinkat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            if kind == Kind::Dir {
-                libc::AT_REMOVEDIR
-            } else {
-                0
-            },
-        )
-    } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    *removed += 1;
-    Ok(())
 }
 fn classify(path: &Path, root: Identity) -> io::Result<DestinationScope> {
     let (mut dir, name) = parent(path)?;
@@ -539,6 +757,90 @@ fn classify(path: &Path, root: Identity) -> io::Result<DestinationScope> {
 mod tests {
     use super::*;
     use crate::operations::tests::Fixture;
+
+    #[test]
+    fn firmlink_list_parses_system_and_data_volume_paths() {
+        let list = parse_firmlinks(b"/Users\tUsers\n/usr/local\tusr/local\n\nbroken\n");
+        assert_eq!(
+            list,
+            [
+                ("/Users".into(), "/System/Volumes/Data/Users".into()),
+                ("/usr/local".into(), "/System/Volumes/Data/usr/local".into()),
+            ]
+        );
+        assert_eq!(
+            spellings(Path::new("/System/Volumes/Data/usr")),
+            [PathBuf::from("/System/Volumes/Data/usr"), "/usr".into()]
+        );
+        assert_eq!(
+            spellings(Path::new("/usr")),
+            [PathBuf::from("/usr"), "/System/Volumes/Data/usr".into()]
+        );
+    }
+    #[test]
+    fn endpoints_inside_the_target_are_found_by_text_then_parent_identity() {
+        let fixture = Fixture::new();
+        let target_path = fixture.0.join("target");
+        std::fs::create_dir_all(target_path.join("deep/mnt")).unwrap();
+        std::fs::create_dir_all(fixture.0.join("target-sibling/mnt")).unwrap();
+        let m = stat_fd(&crate::open_directory(&target_path).unwrap()).unwrap();
+        let target = Target {
+            path: target_path.clone(),
+            identity: m.identity,
+            kind: Kind::Dir,
+        };
+        let endpoint = |path: PathBuf| vec![(path.clone(), vec![path])];
+        let inside = target_path.join("deep/mnt");
+        assert_eq!(
+            endpoint_within(&target, &endpoint(inside.clone())),
+            Some(inside)
+        );
+        // The target itself is a mount point.
+        assert!(endpoint_within(&target, &endpoint(target_path.clone())).is_some());
+        // The other spelling through the Data volume, when this host has it.
+        let data =
+            Path::new(DATA_VOLUME).join(target_path.join("deep/mnt").strip_prefix("/").unwrap());
+        if crate::open_directory(&data).is_ok() {
+            assert_eq!(
+                endpoint_within(&target, &endpoint(data.clone())),
+                Some(data)
+            );
+        }
+        // A case variant on this case-insensitive volume is confirmed by identity.
+        let variant = PathBuf::from(
+            target_path
+                .join("DEEP/mnt")
+                .to_string_lossy()
+                .replacen("/target/", "/TARGET/", 1),
+        );
+        if crate::open_directory(&variant).is_ok() {
+            assert_eq!(
+                endpoint_within(&target, &endpoint(variant.clone())),
+                Some(variant)
+            );
+        }
+        // An endpoint whose parent cannot be opened counts as inside.
+        let unknown = target_path.join("missing/mnt");
+        assert_eq!(
+            endpoint_within(&target, &endpoint(unknown.clone())),
+            Some(unknown)
+        );
+        // Text excludes other paths without opening them.
+        for outside in [
+            fixture.0.join("target-sibling/mnt"),
+            fixture.0.clone(),
+            PathBuf::from("/Volumes/never-opened/mnt"),
+        ] {
+            assert_eq!(endpoint_within(&target, &endpoint(outside)), None);
+        }
+        // A text candidate whose parents are not the target is dropped by identity.
+        let mut wrong = target.clone();
+        wrong.identity.inode += 1_000_000;
+        assert_eq!(
+            endpoint_within(&wrong, &endpoint(target_path.join("deep/mnt"))),
+            None
+        );
+    }
 
     #[test]
     fn bulk_fallback_checks_directory_identity_and_preserves_symlink_identity() {

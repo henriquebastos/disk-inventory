@@ -1,4 +1,4 @@
-//! Single-use, independently polled control for snapshot creation.
+//! Single-use, independently polled control for snapshot creation, refresh and deletion.
 use std::{
     io,
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
@@ -12,6 +12,8 @@ pub enum ScanPhase {
     Scanning,
     Accounting,
     Saving,
+    /// Permanent deletion is unlinking entries; Stop ends the walk between two entries.
+    Removing,
     Stopping,
     Committing,
     Committed,
@@ -25,7 +27,7 @@ impl ScanPhase {
     fn cancellable(self) -> bool {
         matches!(
             self,
-            Self::Ready | Self::Scanning | Self::Accounting | Self::Saving
+            Self::Ready | Self::Scanning | Self::Accounting | Self::Saving | Self::Removing
         )
     }
 }
@@ -114,6 +116,7 @@ impl ScanControl {
             Scanning,
             Accounting,
             Saving,
+            Removing,
             Stopping,
             Committing,
             Committed,

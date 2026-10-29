@@ -52,8 +52,8 @@ save/refresh is exposed. Open pins the snapshot without validating its source.
 
 `ExplorerSession` methods are `status()`, `children(parent:offset:limit:)`,
 `selection(key:)`, `layout(focus:request:)`, `liveMetadata(key:)`,
-`prepare(key:action:)`, `execute(action:)`, `refreshDirectory(key:)`,
-`refreshDirectoryControlled(key:control:)` (all throwing),
+`prepare(key:action:)`, `execute(action:)`, `executeControlled(action:control:)`,
+`refreshDirectory(key:)`, `refreshDirectoryControlled(key:control:)` (all throwing),
 and nonthrowing `isBusy()`, `activeCallCount()`, `selectionQueryCount()`. Records are defined in
 [records.rs](../src/bridge/records.rs). Byte arrays generate **Data**, u64 generates
 **UInt64**, and raw paths remain authoritative; display names alone are lossy.
@@ -74,8 +74,9 @@ Status preserves original `scanPartial`/scan counters and live `dirty`/`stale`.
 Update/operation records carry issues and work. Retain those diagnostics in the
 client. Unknown hardlink groups can have positive raw allocation and zero
 attribution: stale totals are partial, never measured zero usage. Mutation enums
-preserve removed, trashed, failed, partial and indeterminate; destination scope
-preserves inside/outside/unknown. Scope subtraction is not disk space reclaimed.
+preserve removed, removed with skips, trashed, failed, partial (with `stopped`) and
+indeterminate; removals carry a `RemovalRecord` of counts and at most 16 reasons. Scope
+is inside/outside/unknown; its subtraction is not disk space reclaimed.
 
 The session mutex serializes all saved reads and live operations. Dispatch calls,
 including constructors, off the main thread. `isBusy()` reads an independent
@@ -89,16 +90,15 @@ entered under the backend lock, including invalid keys, not merely dispatched wo
 These atomic diagnostics are not lock barriers. "presentation_and_delay_fixtures_are_isolated"
 in [src/bridge/tests.rs](../src/bridge/tests.rs) and the parent-request tests in
 [IntegrationFixTests.swift](../native/ExplorerModelTests/IntegrationFixTests.swift)
-check the counters and rejection of obsolete pending work. There are no callbacks or async
-Rust methods. Generated handles are Sendable; this does not make calls nonblocking.
+check them. There are no callbacks or async Rust methods; Sendable handles still block.
 
 `prepare` returns a Rust-owned `PreparedAction` retaining the actual core pin.
 `details()` returns fresh confirmation metadata, action, key and raw path.
 `cancel()` drops the pin; dropping the last action reference also releases it.
 `execute` consumes once even on a same-session validation error. Cross-session
-attempts reject without consuming. Cancellation cannot abort an already claimed
-execution. Native safety/namespace-race limits remain those in
-[operations.md](operations.md).
+attempts reject without consuming. `executeControlled` reports phases and removed items
+through a `ScanControl`; only deletion stops. Native safety/namespace-race limits remain
+those in [operations.md](operations.md).
 
 ```swift
 // Run inside a worker/task, not directly in a main-thread event handler.
@@ -141,6 +141,9 @@ Discover entries through bounded queries: `small-files/small-00` through
 | `trash-unknown`, `trash-missing` | Unknown scope or missing returned destination |
 | `trash-failure` | Guaranteed unchanged failed Trash |
 | `unknown-allocation` | Refresh root adds conflicting `unknown-a`/`unknown-b`; unattributed/stale |
+| `operation-quick`, `operation-skip` | `prototype-home`; in `-skip` Delete skips three `Library` files |
+| `operation-slow` | Each check, the Trash move and the update take 3 s; each removal 30 ms |
+| `operation-paused` | Holds each stage (check, trash, removal after 5 entries, update) until `releaseFixtureStage()`; `waitForHeldFixtureStage()` names it |
 
 [src/bridge/tests.rs](../src/bridge/tests.rs) names the invariants:
 
@@ -160,6 +163,8 @@ Discover entries through bounded queries: `small-files/small-00` through
 - "native_snapshot_open_never_requires_the_recorded_source": partial offline snapshot.
 - "update_issue_transfer_has_an_explicit_bound": diagnostic truncation count.
 - "invalid_bridge_requests_return_typed_errors_without_source_calls": input validation.
+- "paused_operation_fixture_holds_each_stage_counts_removals_and_stops" and
+  "operation_fixtures_trash_quickly_and_skip_with_reasons": phases, counts, Stop, skips.
 
 [prototype_parity_tests.rs](../src/bridge/fixture/prototype_parity_tests.rs) checks
 `prototype-home`. The fixture ports the prototype's seed-11 Park-Miller generator
@@ -173,9 +178,8 @@ The UI test "testPrototypeHomeMapShowsEveryKindColorAndPresentationStaysGray" in
 [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift) measures all eight
 colored kinds on the `prototype-home` map, and a gray `presentation` map, in light and dark.
 
-The Swift smoke exercises these generated conversions and operation flows, plus
-one explicitly owned one-file create followed by unavailable-source open. It
-never requests native Trash or permanent deletion. Native GUI/XCUITest behavior
+The Swift smoke exercises these conversions and operation flows, plus one owned
+one-file create followed by unavailable-source open, never native Trash or deletion. Native GUI/XCUITest behavior
 is documented in [native-explorer.md](native-explorer.md). Native Trash, hostile
 namespace races, non-macOS and Intel linking remain untested here.
 

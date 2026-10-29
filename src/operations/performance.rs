@@ -76,9 +76,20 @@ impl FileSystem for TimedMemory {
         self.elapsed += t.elapsed();
         r
     }
-    fn remove(&mut self, target: &Target, pin: &Self::Pin) -> Mutation {
+    fn refuse_protected_within(&mut self, target: &Target) -> io::Result<()> {
         let t = Instant::now();
-        let r = self.inner.remove(target, pin);
+        let r = self.inner.refuse_protected_within(target);
+        self.elapsed += t.elapsed();
+        r
+    }
+    fn remove(
+        &mut self,
+        target: &Target,
+        pin: &Self::Pin,
+        control: Option<&ScanControl>,
+    ) -> Mutation {
+        let t = Instant::now();
+        let r = self.inner.remove(target, pin, control);
         self.elapsed += t.elapsed();
         r
     }

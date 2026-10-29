@@ -85,14 +85,100 @@ pub enum DestinationScope {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mutation {
     Removed,
+    /// The removal walk finished and removed at least one entry, but entries it could not
+    /// or must not remove remain, with their folders.
+    RemovedWithSkips(Removal),
     Trashed {
         destination: PathBuf,
     },
     /// No usable destination, or failure after mutation may have started.
     Indeterminate(String),
-    Partial(String),
+    /// The removal walk ended early after removing at least one entry: by Stop
+    /// (`stopped`) or by an error that ends the walk (`message`).
+    Partial {
+        message: String,
+        stopped: bool,
+        removal: Removal,
+    },
     /// Adapter guarantees no mutation took place.
     Failed(String),
+}
+/// The counts of one permanent removal walk. `skipped` counts entries refused or failed
+/// for their own reason; a folder kept only because it still holds a skipped entry is not
+/// counted. `reasons` keeps the first `Removal::REASON_LIMIT` of them as "path: reason",
+/// for display only.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Removal {
+    pub removed: u64,
+    pub skipped: u64,
+    pub reasons: Vec<String>,
+}
+impl Removal {
+    pub const REASON_LIMIT: usize = 16;
+}
+/// One removal walk's counts, its Stop checks and its live progress: `items_examined`
+/// counts each removed entry, an atomic add beside each unlink.
+pub(crate) struct RemovalWalk<'a> {
+    control: Option<&'a ScanControl>,
+    removal: Removal,
+}
+impl<'a> RemovalWalk<'a> {
+    pub(crate) fn new(control: Option<&'a ScanControl>) -> Self {
+        Self {
+            control,
+            removal: Removal::default(),
+        }
+    }
+    /// Stop is checked before each entry.
+    pub(crate) fn check_stop(&self) -> io::Result<()> {
+        crate::scan_control::check(self.control)
+    }
+    pub(crate) fn removed(&mut self) {
+        self.removal.removed += 1;
+        if let Some(control) = self.control {
+            control.examined(1);
+        }
+    }
+    pub(crate) fn removed_count(&self) -> u64 {
+        self.removal.removed
+    }
+    /// Counts a skipped entry; the walk continues. Returns false: the entry stays.
+    pub(crate) fn skip(&mut self, path: &Path, reason: &str) -> bool {
+        self.removal.skipped += 1;
+        if self.removal.reasons.len() < Removal::REASON_LIMIT {
+            self.removal
+                .reasons
+                .push(format!("{}: {reason}", path.display()));
+        }
+        false
+    }
+    /// `walk` is true when the target is gone; an error ended the walk.
+    pub(crate) fn outcome(self, walk: io::Result<bool>) -> Mutation {
+        let removal = self.removal;
+        match walk {
+            Ok(true) => Mutation::Removed,
+            Ok(false) if removal.removed == 0 => Mutation::Failed(format!(
+                "nothing was deleted; skipped {}",
+                removal.reasons.join("; ")
+            )),
+            Ok(false) => Mutation::RemovedWithSkips(removal),
+            Err(e) if removal.removed == 0 => Mutation::Failed(e.to_string()),
+            Err(e) => {
+                let stopped = e
+                    .get_ref()
+                    .is_some_and(|e| e.is::<crate::scan_control::ScanCancelled>());
+                Mutation::Partial {
+                    message: if stopped {
+                        "deletion stopped".into()
+                    } else {
+                        e.to_string()
+                    },
+                    stopped,
+                    removal,
+                }
+            }
+        }
+    }
 }
 /// Narrow filesystem seam. Implementations must not follow symlinks in target ancestry,
 /// must validate expected identity immediately before mutation, and must protect the
@@ -105,8 +191,19 @@ pub trait FileSystem {
     fn snapshot_identity(&self) -> Option<Identity>;
     fn metadata(&mut self, path: &Path) -> io::Result<LiveMetadata>;
     fn read_directory(&mut self, target: &Target) -> io::Result<Vec<DirectoryEntry>>;
+    /// Errors when the target is a mount point, or the active snapshot, a mount or a
+    /// firmlink endpoint lies below it. It never lists the target's subtree, so its cost
+    /// does not depend on the subtree's size.
+    fn refuse_protected_within(&mut self, target: &Target) -> io::Result<()>;
     fn trash(&mut self, target: &Target, pin: &Self::Pin) -> Mutation;
-    fn remove(&mut self, target: &Target, pin: &Self::Pin) -> Mutation;
+    /// One walk that removes the target and its contents. It skips and reports what it
+    /// cannot or must not remove, and checks Stop between entries.
+    fn remove(
+        &mut self,
+        target: &Target,
+        pin: &Self::Pin,
+        control: Option<&ScanControl>,
+    ) -> Mutation;
     fn classify_destination(&mut self, path: &Path, root: Identity) -> DestinationScope;
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -269,42 +366,21 @@ impl<F: FileSystem> OperationSession<F> {
         let id = self.explorer.resolve(handle)?;
         self.validate(&self.target(id))
     }
-    fn protect(&mut self, target: &Target) -> io::Result<()> {
+    /// The target-level checks of prepare and execute. They read the root, the target and
+    /// the adapter's protected locations, never the target's contents.
+    fn check_target(&mut self, target: &Target) -> io::Result<LiveMetadata> {
         self.validate(&self.target(0))?;
         let root = index::identity(&self.explorer.map.nodes[0]);
-        let mut pending = vec![target.clone()];
-        let mut seen = HashSet::new();
-        while let Some(t) = pending.pop() {
-            let m = self.validate(&t)?;
-            if m.identity == root || Some(m.identity) == self.filesystem.snapshot_identity() {
-                return Err(invalid("scan root and active snapshot are protected"));
-            }
-            if m.identity.device != root.device
-                || m.mount
-                || m.flags & crate::native::SF_FIRMLINK != 0
-            {
-                return Err(invalid("operation crosses a mount or firmlink"));
-            }
-            if m.kind == Kind::Dir {
-                if !seen.insert(m.identity) {
-                    return Err(invalid("duplicate directory identity"));
-                }
-                for e in self.filesystem.read_directory(&t)? {
-                    if !crate::valid_basename(&e.name) {
-                        return Err(invalid("invalid child name"));
-                    }
-                    // Descendant symlinks can be unlinked, but are never traversed.
-                    if e.metadata.kind != Kind::Symlink {
-                        pending.push(Target {
-                            path: t.path.join(OsStr::from_bytes(&e.name)),
-                            identity: e.metadata.identity,
-                            kind: e.metadata.kind,
-                        });
-                    }
-                }
-            }
+        let m = self.validate(target)?;
+        if m.identity == root || Some(m.identity) == self.filesystem.snapshot_identity() {
+            return Err(invalid("scan root and active snapshot are protected"));
         }
-        Ok(())
+        if m.identity.device != root.device || m.mount || m.flags & crate::native::SF_FIRMLINK != 0
+        {
+            return Err(invalid("operation crosses a mount or firmlink"));
+        }
+        self.filesystem.refuse_protected_within(target)?;
+        Ok(m)
     }
     pub fn prepare(
         &mut self,
@@ -317,7 +393,7 @@ impl<F: FileSystem> OperationSession<F> {
             return Err(invalid("scan root is protected"));
         }
         let target = self.target(id);
-        self.protect(&target)?;
+        self.check_target(&target)?;
         let pin = self.filesystem.pin(&target)?;
         let metadata = self.validate(&target)?;
         Ok(Confirmation {
@@ -353,6 +429,32 @@ impl<F: FileSystem> OperationSession<F> {
     }
     pub fn execute(&mut self, confirmation: Confirmation<F::Pin>) -> io::Result<OperationReport> {
         let _busy = self.activity.begin();
+        self.execute_with(confirmation, None)
+    }
+    /// `execute` with progress, and Stop for permanent deletion. Deletion checks in
+    /// Scanning, unlinks in Removing (`items_examined` counts removed entries) and updates
+    /// the inventory in Committed. Stop before the first unlink returns `ScanCancelled`
+    /// with nothing changed; a later Stop ends the walk with `Mutation::Partial`. Trash
+    /// commits before its checks, so it cannot be stopped.
+    pub fn execute_controlled(
+        &mut self,
+        confirmation: Confirmation<F::Pin>,
+        control: &ScanControl,
+    ) -> io::Result<OperationReport> {
+        let _busy = self.activity.begin();
+        control.begin()?;
+        let result = self.execute_with(confirmation, Some(control));
+        if result.is_ok() {
+            control.published();
+        }
+        control.finish(&result);
+        result
+    }
+    fn execute_with(
+        &mut self,
+        confirmation: Confirmation<F::Pin>,
+        control: Option<&ScanControl>,
+    ) -> io::Result<OperationReport> {
         let id = self.explorer.resolve(confirmation.handle)?;
         let current = self.target(id);
         if current.path != confirmation.target.path
@@ -360,13 +462,38 @@ impl<F: FileSystem> OperationSession<F> {
         {
             return Err(invalid("confirmation target has moved or changed"));
         }
-        self.protect(&current)?;
-        let live = self.validate(&current)?;
+        let deleting = confirmation.action == Action::PermanentlyDelete;
+        if let Some(control) = control {
+            if deleting {
+                control.enter(ScanPhase::Scanning)?;
+            } else {
+                control.commit_from(ScanPhase::Ready)?;
+            }
+        }
+        let live = self.check_target(&current)?;
+        if let Some(control) = control.filter(|_| deleting) {
+            control.enter(ScanPhase::Removing)?;
+        }
         self.begin();
         let mutation = match confirmation.action {
             Action::Trash => self.filesystem.trash(&current, &confirmation.pin),
-            Action::PermanentlyDelete => self.filesystem.remove(&current, &confirmation.pin),
+            Action::PermanentlyDelete => {
+                self.filesystem.remove(&current, &confirmation.pin, control)
+            }
         };
+        if let Some(control) = control {
+            // A failed removal changed nothing, so an accepted Stop is a plain cancellation.
+            if matches!(mutation, Mutation::Failed(_))
+                && control.progress().phase == ScanPhase::Stopping
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    crate::scan_control::ScanCancelled,
+                ));
+            }
+            // The mutation is done; a later Stop changes nothing.
+            control.set(ScanPhase::Committed);
+        }
         let mut scope = None;
         match &mutation {
             Mutation::Removed => {
@@ -397,11 +524,10 @@ impl<F: FileSystem> OperationSession<F> {
                         self.remove_node(id);
                         self.refresh_own(parent);
                     }
+                    // The saved subtree moves with its saved sizes; nothing below it is read.
                     DestinationScope::Inside(relative) => {
                         if let Err(e) = self.relocate(id, relative, destination) {
                             self.issue(e);
-                        } else if current.kind == Kind::Dir {
-                            self.refresh_target(id);
                         }
                     }
                     DestinationScope::Unknown => self
@@ -409,9 +535,20 @@ impl<F: FileSystem> OperationSession<F> {
                 }
                 scope = Some(classified);
             }
-            Mutation::Partial(message) => {
+            Mutation::RemovedWithSkips(_) => {
                 self.state.dirty = true;
-                self.issue(message);
+                let parent = self.explorer.map.nodes[id as usize].parent;
+                self.refresh_target(id);
+                self.refresh_own(parent);
+            }
+            Mutation::Partial {
+                message, stopped, ..
+            } => {
+                self.state.dirty = true;
+                // The survivors are read again below; only an error leaves them uncertain.
+                if !stopped {
+                    self.issue(message);
+                }
                 let parent = self.explorer.map.nodes[id as usize].parent;
                 self.refresh_target(id);
                 self.refresh_own(parent);

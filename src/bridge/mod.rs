@@ -9,7 +9,7 @@ use crate::{
     layout::LayoutOptions,
     operations::{
         Confirmation, OperationSession,
-        memory::{MemoryFileSystem, MemoryPin},
+        memory::{MemoryFileSystem, MemoryPin, StageGate},
         native::{NativeFileSystem, NativePin},
     },
 };
@@ -42,9 +42,10 @@ impl EntryKey {
     }
 }
 
+// Both sessions are large and differ in size; the session lives behind one mutex.
 enum Backend {
-    Native(OperationSession<NativeFileSystem>),
-    Memory(OperationSession<MemoryFileSystem>),
+    Native(Box<OperationSession<NativeFileSystem>>),
+    Memory(Box<OperationSession<MemoryFileSystem>>),
 }
 // Dispatch only: every computation and operation stays in the existing core.
 macro_rules! dispatch {
@@ -98,6 +99,8 @@ pub struct ExplorerSession {
     active: AtomicUsize,
     revision: AtomicU64,
     selection_queries: AtomicU64,
+    /// The stage gate of a paused fixture scenario, outside the backend lock.
+    gate: Option<Arc<StageGate>>,
 }
 struct ActiveCall<'a>(&'a AtomicUsize);
 impl Drop for ActiveCall<'_> {
@@ -119,13 +122,25 @@ fn path(bytes: Vec<u8>) -> Result<PathBuf, BridgeError> {
     Ok(PathBuf::from(OsString::from_vec(bytes)))
 }
 impl ExplorerSession {
-    fn new(backend: Backend) -> Arc<Self> {
+    fn new(mut backend: Backend) -> Arc<Self> {
+        let gate = match &mut backend {
+            Backend::Memory(s) => s.filesystem_mut().stages.gate.clone(),
+            Backend::Native(_) => None,
+        };
         Arc::new(Self {
             backend: Mutex::new(backend),
             active: AtomicUsize::new(0),
             revision: AtomicU64::new(0),
             selection_queries: AtomicU64::new(0),
+            gate,
         })
+    }
+    fn gate(&self) -> Result<&StageGate, BridgeError> {
+        self.gate
+            .as_deref()
+            .ok_or_else(|| BridgeError::InvalidInput {
+                message: "only a paused fixture scenario has a stage gate".into(),
+            })
     }
     fn with<T>(
         &self,
@@ -140,9 +155,9 @@ impl ExplorerSession {
 impl ExplorerSession {
     #[uniffi::constructor]
     pub fn open_snapshot(snapshot_path: Vec<u8>) -> Result<Arc<Self>, BridgeError> {
-        Ok(Self::new(Backend::Native(NativeFileSystem::open_snapshot(
-            &path(snapshot_path)?,
-        )?)))
+        Ok(Self::new(Backend::Native(Box::new(
+            NativeFileSystem::open_snapshot(&path(snapshot_path)?)?,
+        ))))
     }
     /// Create once, release the returned inventory, then reopen/pin the saved inode.
     #[uniffi::constructor]
@@ -160,9 +175,9 @@ impl ExplorerSession {
                 workers: workers as usize,
             },
         )?);
-        Ok(Self::new(Backend::Native(NativeFileSystem::open_snapshot(
-            &snapshot,
-        )?)))
+        Ok(Self::new(Backend::Native(Box::new(
+            NativeFileSystem::open_snapshot(&snapshot)?,
+        ))))
     }
     /// The independently owned control remains pollable while this constructor runs.
     #[uniffi::constructor]
@@ -193,14 +208,16 @@ impl ExplorerSession {
         control.set(ScanPhase::PreparingView);
         let result = NativeFileSystem::open_snapshot(&snapshot);
         control.finish(&result);
-        let session = Self::new(Backend::Native(result?));
+        let session = Self::new(Backend::Native(Box::new(result?)));
         control.set(ScanPhase::Complete);
         Ok(session)
     }
     /// Explicit simulated constructor. Unknown scenarios fail closed; never opens native paths.
     #[uniffi::constructor]
     pub fn fixture(scenario: String) -> Result<Arc<Self>, BridgeError> {
-        Ok(Self::new(Backend::Memory(fixture::session(&scenario)?)))
+        Ok(Self::new(Backend::Memory(Box::new(fixture::session(
+            &scenario,
+        )?))))
     }
     pub fn is_busy(&self) -> bool {
         self.active.load(Ordering::Acquire) != 0
@@ -330,6 +347,59 @@ impl ExplorerSession {
             };
             Ok(report.into())
         })
+    }
+    /// `execute` with the scan's progress. Deletion: Stop before the first unlink returns
+    /// `BridgeError.Cancelled` with nothing changed and every view still valid; a later Stop
+    /// ends with `MutationOutcome.Partial` (`stopped`). Trash cannot be stopped.
+    pub fn execute_controlled(
+        &self,
+        action: Arc<PreparedAction>,
+        control: Arc<ScanControl>,
+    ) -> Result<OperationRecord, BridgeError> {
+        self.with(|b| {
+            let pin = if action.session != b.explorer().root_handle().session() {
+                Err(BridgeError::WrongSession)
+            } else {
+                lock(&action.pin)?.take().ok_or(BridgeError::ConsumedAction)
+            };
+            let report = match (b, pin) {
+                (Backend::Native(s), Ok(PinnedAction::Native(c))) => {
+                    s.execute_controlled(c, &control)
+                }
+                (Backend::Memory(s), Ok(PinnedAction::Memory(c))) => {
+                    s.execute_controlled(c, &control)
+                }
+                (_, pin) => {
+                    control.begin()?;
+                    control.set(ScanPhase::Failed);
+                    return Err(pin.err().unwrap_or(BridgeError::WrongSession));
+                }
+            }
+            .map_err(BridgeError::from);
+            // Like `execute`, any claimed attempt makes old views stale, except a Stop that
+            // won before the first removal: nothing changed, so frames, trees and hits stay valid.
+            if !matches!(report, Err(BridgeError::Cancelled)) {
+                self.revision.fetch_add(1, Ordering::AcqRel);
+            }
+            let report = report?;
+            control.set(ScanPhase::Complete);
+            Ok(report.into())
+        })
+    }
+    /// Fixture only: waits up to 10 s until a paused scenario holds an operation, and
+    /// returns the stage ("check", "trash", "remove" or "update").
+    pub fn wait_for_held_fixture_stage(&self) -> Result<String, BridgeError> {
+        self.gate()?
+            .wait_for_held(std::time::Duration::from_secs(10))
+            .map(|stage| stage.name().to_string())
+            .ok_or_else(|| BridgeError::Internal {
+                message: "no fixture stage was held within 10 s".into(),
+            })
+    }
+    /// Fixture only: lets the held operation continue to its next stage.
+    pub fn release_fixture_stage(&self) -> Result<(), BridgeError> {
+        self.gate()?.release();
+        Ok(())
     }
     pub fn refresh_directory(&self, key: Arc<EntryKey>) -> Result<UpdateRecord, BridgeError> {
         self.with(|b| {

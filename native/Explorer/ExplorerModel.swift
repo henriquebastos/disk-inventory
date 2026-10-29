@@ -191,6 +191,8 @@ struct PendingConfirmation: Identifiable {
   private var parentRequest: ParentRequest?
   private var parentWorkerRunning = false
   private var preparing = false
+  /// The item a Trash or Delete preparation checks, before its confirmation opens.
+  private(set) var checking: String?
   private var cancellationTask: Task<Void, Never>?
   private var requestedFocus: EntryKey?
   private var rebuildTask: Task<Void, Never>?
@@ -910,7 +912,9 @@ struct PendingConfirmation: Identifiable {
     !working && !loading && !replacingSession && pending == nil && session != nil
       && records != nil
   }
-  var canStopScan: Bool { scan.progress?.cancellable == true && pending == nil }
+  var canStopScan: Bool {
+    scan.progress?.cancellable == true && scan.offersStop && pending == nil
+  }
   private var canNavigate: Bool { !working && !loading && !replacingSession && pending == nil }
   var canOpenSelectedDirectory: Bool { canNavigate && selected?.kind == .directory }
   var canOpenEnclosingDirectory: Bool { canNavigate && records?.focus.parent != nil }
@@ -919,6 +923,7 @@ struct PendingConfirmation: Identifiable {
     guard canAct, let entry = selected, let s = session else { return nil }
     preparing = true
     working = true
+    checking = entryName(entry)
     actionVersion += 1
     let version = actionVersion
     let generation = sessionVersion
@@ -938,6 +943,7 @@ struct PendingConfirmation: Identifiable {
       if version == actionVersion {
         working = false
         preparing = false
+        checking = nil
       }
     }
   }
@@ -950,37 +956,32 @@ struct PendingConfirmation: Identifiable {
     if preparing {
       preparing = false
       working = false
+      checking = nil
     }
     // Executing work cannot be cancelled; its captured session remains alive.
   }
-  func execute() {
-    guard !replacingSession, let confirmation = pending, let s = session else { return }
+  /// Runs the confirmed action with the scan's progress: the phase names the item, Delete
+  /// counts removed items and offers Stop. Stop before the first removal changes nothing.
+  @discardableResult
+  func execute() -> Task<Void, Never>? {
+    guard !replacingSession, let confirmation = pending, let s = session else { return nil }
     pending = nil
     working = true
+    let control = ScanControl()
+    let kind = confirmation.details.action
+    scan.begin(control, operation: (kind, confirmation.name))
     let generation = sessionVersion
     let navigation = viewVersion
     let previous = picture
     let source = selectedRegion
     let selectedKey = selected?.key
-    Task {
+    return Task {
       do {
         let result = try await Task.detached(priority: .userInitiated) {
-          try s.execute(action: confirmation.action)
+          try s.executeControlled(action: confirmation.action, control: control)
         }.value
         guard generation == sessionVersion else { return }
-        switch result.mutation {
-        case .removed: outcome = "Deleted."
-        case .trashed: outcome = "Moved to Trash."
-        case .failed(let message):
-          outcome = "Failed. The operation could not be completed."
-          issues.append(message)
-        case .partial(let message):
-          outcome = "Partial removal — some contents remain."
-          issues.append(message)
-        case .indeterminate(let message):
-          outcome = "Indeterminate — verify before retrying."
-          issues.append(message)
-        }
+        report(result.mutation)
         retainIssues(result.update)
         // Failed/partial/uncertain removals retain the actual survivor selection, never a success ghost.
         let survivor = selectedKey
@@ -1004,6 +1005,11 @@ struct PendingConfirmation: Identifiable {
         } else if generation == sessionVersion {
           motion.cancel()
         }
+      } catch BridgeError.Cancelled {
+        // Nothing was removed, so the shown view stays valid.
+        if generation == sessionVersion {
+          outcome = "Deletion of “\(confirmation.name)” stopped. Nothing was deleted."
+        }
       } catch {
         if generation == sessionVersion {
           let failure = "Operation failed: \(error)"
@@ -1013,8 +1019,43 @@ struct PendingConfirmation: Identifiable {
           if generation == sessionVersion { self.error = failure }
         }
       }
-      if generation == sessionVersion { working = false }
+      if generation == sessionVersion {
+        scan.stopPolling(cancelScan: false)
+        working = false
+      }
     }
+  }
+  /// The outcome banner says what happened; skip reasons and messages go to Details.
+  private func report(_ mutation: MutationOutcome) {
+    switch mutation {
+    case .removed: outcome = "Deleted."
+    case .removedWithSkips(let removal):
+      outcome = "Deleted. \(itemCount(removal.skipped)) skipped."
+      retainSkips(removal)
+    case .trashed: outcome = "Moved to Trash."
+    case .failed(let message):
+      outcome = "Failed. The operation could not be completed."
+      issues.append(message)
+    case .partial(let message, let stopped, let removal):
+      if stopped {
+        outcome = "Deletion stopped. \(itemCount(removal.removed)) deleted."
+      } else {
+        outcome = "Partial removal — some contents remain."
+        issues.append(message)
+      }
+      retainSkips(removal)
+    case .indeterminate(let message):
+      outcome = "Indeterminate — verify before retrying."
+      issues.append(message)
+    }
+  }
+  private func itemCount(_ count: UInt64) -> String {
+    "\(numbers.count(count)) \(count == 1 ? "item" : "items")"
+  }
+  private func retainSkips(_ removal: RemovalRecord) {
+    issues.append(contentsOf: removal.reasons.map { "Skipped \($0)" })
+    let unlisted = removal.skipped - UInt64(removal.reasons.count)
+    if unlisted > 0 { issues.append("\(itemCount(unlisted)) more skipped, not listed") }
   }
   /// An inside-Trash move keeps the saved key, so the new frame can locate its destination
   /// directly; the bounded accessibility targets omit most small or late-laid-out tiles.

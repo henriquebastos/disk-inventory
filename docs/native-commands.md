@@ -30,7 +30,7 @@ disables Reveal in Finder, because fixtures have no Finder URL.
 | Navigate | Open Selected Directory | Command-Down |
 | Navigate | Enclosing Directory | Command-Up |
 
-Stop Scan also stops a running Refresh Directory. Esc clears the selection; its rules are in
+Stop Scan also stops a running Refresh Directory or Delete Immediately. Esc clears the selection; its rules are in
 [native-status.md](native-status.md).
 
 Reopen names the last folder. `title(in:)` gives the menu bar, the start screen and the
@@ -91,8 +91,11 @@ every command is disabled, so no shortcut or menu opens a second confirmation. R
 revalidates fresh metadata, raw paths and identity pins. Cancel, window close and
 session replacement release pending pins. Replacement awaits cancellation before it
 installs a new session. Root operations are disabled and Rust also protects them.
-Executing operations cannot be cancelled. There is no Trash-to-delete fallback and
-no permanent-delete Undo.
+Move to Trash cannot be stopped once confirmed. Delete Immediately can: Stop and the
+Stop Scan menu item end the walk between two entries, and the banner says how many items
+were deleted; Stop before the first removal changes nothing. The progress bar is in
+[native-status.md](native-status.md). There is no Trash-to-delete fallback and no
+permanent-delete Undo.
 
 ## 1d Executable evidence
 

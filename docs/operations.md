@@ -27,21 +27,37 @@ cancels and releases its pin. `execute` consumes it, revalidates the target/root
 and performs the explicitly chosen action. Cross-session, removed and replaced
 slots cannot authorize actions; new entries never reuse removed slots.
 
-The root, pinned snapshot identity, and directories containing any snapshot alias
-are protected. Directory preparation/execution requires complete safety enumeration;
-an inaccessible child prevents mutation. Descendant symlinks may be unlinked but
-are never traversed. Permanent deletion uses descriptor-relative no-follow opens,
-identity checks and `unlinkat`. There is no privilege escalation or Trash-to-delete
-fallback. Native Trash rejects the main thread and unsupported URLs, uses Foundation's
-actual resulting URL, and treats an error or missing URL conservatively as indeterminate.
+Prepare and execute check the target, never its contents, so their cost does not
+grow with the subtree: root and target identity, kind and no symlink; the target is
+not the root or the pinned snapshot, is on the root's device and has no firmlink flag;
+then `refuse_protected_within`. Natively that refuses a directory holding the snapshot's
+own path (the path it was opened with while it still names the snapshot, else its
+descriptor path), any mount-table entry and any `/usr/share/firmlinks` endpoint at or below
+the target. Mount and firmlink paths are compared as text in both spellings
+(`/X` and `/System/Volumes/Data/X`), so no other mount is opened, then confirmed by
+parent identities. Trash proceeds after these checks. Extra hard links of the snapshot
+are not found this way: Trash may move one, and Delete skips it.
+
+Permanent deletion is one walk with descriptor-relative no-follow opens, a re-stat before
+each `unlinkat` and per-entry identity, kind, root, snapshot, device, firmlink and mount
+checks. Entries created after the scan are deleted, like Finder. It skips and reports
+permission denied, not permitted (such as locked), a changed entry and a protected entry,
+and keeps their folders; any other error ends the walk (`Partial`). `Removal` carries the
+counts and at most 16 reasons. Descendant symlinks are unlinked, never traversed. There is
+no privilege escalation or Trash-to-delete fallback. Native Trash rejects the main thread,
+unsupported URLs and an item whose Foundation Trash is missing or on another volume, uses
+the actual resulting URL, and treats an error or missing URL as indeterminate.
 
 `OperationReport` separates mutation outcome, destination scope and reconciliation.
-In-scope moves relocate known allocation to the actual destination, updating moved
-subtrees and affected aliases. Destination ancestry is classified by directory
+In-scope moves relocate the saved subtree with its saved sizes to the actual destination,
+without reading it, and update affected aliases. Destination ancestry is classified by directory
 identities, not string prefixes. Outside moves subtract scope usage, **not guaranteed
 reclaimed disk space**. Unknown scope retains recorded allocation and marks it stale.
 New destination ancestors with unscanned children also mark the session stale.
-Partial removal reconciles survivors; failed enumeration preserves unknown children.
+Skipped or partial removal reconciles survivors; failed enumeration preserves unknown
+children. `execute_controlled` adds a [ScanControl](scan-control.md): Stop before the first
+unlink returns `ScanCancelled` with nothing changed; later it ends the walk as a stopped
+`Partial`. Trash cannot be stopped.
 
 ## 1b Refresh, ownership and work
 
@@ -84,7 +100,7 @@ child filtering preserves order. `UpdateWork` charges visited entries, baseline
 identity comparisons and group visits (baseline capture, lookup, propagation/owner
 choice, attribution),
 ancestor validation/updates, child IDs copied/sorted
-and refresh directory reads. It does not count adapter I/O or safety preflight scans.
+and refresh directory reads. It does not count adapter I/O.
 Navigation/layout budgets are unchanged. Arenas/tombstones/overlays grow for the
 session lifetime; reload is the reclamation boundary, not an interactive operation.
 
@@ -119,9 +135,20 @@ some fake operations scan its fixture map. Those costs are not native performanc
 - "permanent_file_and_directory_removal_invalidate_only_affected_handles",
   "partial_removal_reconciles_survivors_and_preserves_inaccessible_data" and
   "partial_removal_with_failed_reconciliation_retains_unknown_children".
+- "trash_and_delete_checks_read_no_directory_and_do_not_grow_with_the_subtree",
+  "delete_is_one_walk_that_also_removes_entries_created_after_the_scan",
+  "mount_snapshot_and_firmlink_inside_are_refused_before_any_removal",
+  "delete_skips_inaccessible_and_locked_entries_reports_them_and_keeps_their_folders",
+  "delete_errors_that_end_the_walk_report_exact_counts",
+  "stop_during_controlled_delete_reports_partial_with_exact_counts" and
+  "stop_before_the_first_unlink_cancels_with_nothing_changed_and_trash_cannot_stop".
+- Native, owned fixtures: "native_delete_is_one_walk_and_its_checks_read_no_directory",
+  "native_snapshot_inside_the_target_is_refused_and_an_extra_link_is_not",
+  "native_delete_skips_locked_and_unwritable_entries_and_keeps_their_folders" and
+  "native_stop_mid_delete_reports_partial_with_exact_counts".
 - "refresh_reconciles_raw_names_replacements_renames_and_snapshot_alias_exclusion",
   "refresh_mount_firmlink_and_inaccessible_regions_are_not_followed" and
-  "in_scope_directory_move_refreshes_only_moved_region_and_marks_new_ancestry_unknown".
+  "in_scope_directory_move_keeps_the_saved_subtree_without_a_walk_and_marks_new_ancestry_unknown".
 - "new_hardlink_finds_original_links_one_alias_outside_refreshed_subtree",
   "existing_hardlinks_allocation_and_directory_own_bytes_update_locally",
   "directory_move_recomputes_canonical_hardlink_paths_outside_moved_subtree" and
@@ -161,6 +188,9 @@ Conflict-baseline regressions in [src/operations/tests.rs](../src/operations/tes
 [src/operations/native.rs](../src/operations/native.rs)
 "bulk_fallback_checks_directory_identity_and_preserves_symlink_identity" verifies
 identity-checked allocation fallback and no-follow symlink identity on owned fixtures.
+"endpoints_inside_the_target_are_found_by_text_then_parent_identity" checks the mount and
+firmlink rule with owned directories as endpoints; "firmlink_list_parses_system_and_data_volume_paths"
+the list format.
 
 [src/operations/performance.rs](../src/operations/performance.rs)
 "operations_release_performance" is an ignored, explicit release measurement of
@@ -168,12 +198,13 @@ three million unrelated entries and a million-child selected directory. It separ
 fake adapter/core/layout time, requested live/temporary allocation and process peak RSS.
 Allocator instrumentation adds overhead; this is not a native I/O or UI latency test.
 
-**Untested/remaining limits:** Native Trash execution is deliberately untested against
-user Trash. Foundation paths must be Unicode, shorter than its 1024-byte output buffer,
+**Untested/remaining limits:** Native Trash execution, including the Trash-volume check,
+is deliberately untested against user Trash. Foundation paths must be Unicode, shorter than its 1024-byte output buffer,
 and round-trip byte-exactly (allowing a directory trailing slash). Raw non-Unicode paths
 remain supported in saved/fake views; Foundation Trash rejects them before mutation.
-Controlled mount/firmlink creation, hostile concurrent mutation and cloud behavior
-are untested. Historical inode reuse before preparation cannot be detected from the
+Real mounts and firmlinks below a target, hostile concurrent mutation and cloud behavior
+are untested. Mount paths that differ from the target by more than ASCII case or the
+Data-volume prefix are not matched. Historical inode reuse before preparation cannot be detected from the
 unchanged snapshot identity fields. Confirmation pins prevent reuse during confirmation,
 not historical substitution. Namespace changes between final checks and path-based
 Foundation/unlink calls are still possible; there is no atomic conditional filesystem

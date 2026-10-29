@@ -105,6 +105,18 @@ After the commit Stop is rejected, the update completes, and the banner says "Re
 
 Refresh covers the focused subtree, in memory only. Navigation never scans.
 
+## Trash and Delete progress
+
+The same bar names each phase of Move to Trash and Delete Immediately with the item:
+"Checking “Library”…" before the confirmation and again after it, "Moving “Library” to
+the Trash…", "Deleting “Library”…" with a live "N items" removed counter, then "Updating
+view…" while the inventory and the view update. Counts use the system number format; the
+bar samples the core's atomic counter four times a second. Only Delete shows Stop. A Stop
+during the walk keeps the survivors: "Deletion stopped. 47 items deleted."; a Stop before
+the first removal: "Deletion of “Library” stopped. Nothing was deleted.". Items Delete
+skips read "Deleted. 3 items skipped."; Details lists each "Skipped PATH: REASON", at most
+16 of them. The operation phases replace the former bare "Working…".
+
 ## Executable evidence
 
 UI tests in [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift), on the
@@ -122,6 +134,10 @@ real runner:
   after Esc, and the sheet's Esc priority.
 - "testRefreshShowsNamedProgressWithCounterAndStopKeepsData": the named phase, a rising
   counter, Stop with unchanged data, then a complete refresh with the new file.
+- "testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop",
+  "testTrashNamesItsPhasesAndOffersNoStop" and
+  "testSkippedItemsShowACountAndTheirReasonsInDetails": each named phase without
+  "Working…", a rising removed counter, Stop on Delete only, the stopped and skipped banners.
 - "testHeaderAndCardShowOnlySizesAndCountsWithoutAccountingNotes": the header size alone; file,
   hard-link, directory and grouped cards without accounting or sharing notes.
 - "testRefreshHelpTagHasNoSnapshotNoteAndBadgesHaveNoHelpTags": the Incomplete and Not saved
@@ -136,11 +152,16 @@ the session selection-query count stay during a hover),
 "testClearSelectionResetsItemRegionCardAndRowOnly",
 "testBannerDismissHidesOutcomeErrorAndSeenIssues",
 "testControlledRefreshNamesTheFolderCountsAndStopKeepsTheView",
-"testControlledRefreshAppliesLiveChangesAndRebuilds" and
-"testTrashRegionSelectsTheTrashDirectory".
+"testControlledRefreshAppliesLiveChangesAndRebuilds",
+"testTrashRegionSelectsTheTrashDirectory", and, held at each stage by the
+`operation-paused` gate, "testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop",
+"testStopDuringDeleteSaysHowManyWereDeletedAndStopBeforeChangesNothing",
+"testTrashNamesItsPhasesAndOffersNoStop" and
+"testSkippedItemsReadAsDeletedWithACountAndReasonsInDetails".
 
 The `prototype-home-refresh` fixture in [fixture.rs](../src/bridge/fixture.rs) adds 300 ms to
-each directory metadata request and one live file, `Library/Caches/new cache.db`.
+each directory metadata request and one live file, `Library/Caches/new cache.db`. The
+`operation-*` fixtures are listed in [bridge.md](bridge.md).
 
 Untested: Esc with full keyboard access on a focused button, and Stop during a real native
 refresh. The frame sampler counts drawn frames, not compositor output.

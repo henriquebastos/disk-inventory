@@ -1,4 +1,4 @@
-# Controlled snapshot creation
+# Controlled snapshot creation, refresh and deletion
 
 [Inventory::create_controlled](../src/inventory.rs) adds a single-use
 [ScanControl](../src/scan_control.rs) to `create(root, output, options)`. Existing
@@ -11,7 +11,7 @@ after success. This API does not replace or clean up previous generations.
 
 Construct the control before dispatching synchronous creation off the main thread.
 Polling and cancellation use only atomics, independent of collector and session
-mutexes. No callbacks, per-entry atomics, strings or FFI messages are emitted.
+mutexes. Creation emits no callbacks, per-entry atomics, strings or FFI messages.
 Uncontrolled calls allocate no control and update no progress atomics.
 
 `items_examined` counts the root metadata observation plus received directory-entry
@@ -29,6 +29,7 @@ Phases:
 | Scanning | Metadata traversal, including setup |
 | Accounting | Hardlink attribution and subtree aggregation |
 | Saving | Serialization, flush and file fsync; still cancellable |
+| Removing | Permanent deletion unlinks entries; still cancellable between two entries |
 | Stopping | Stop accepted; worker calls may still be unwinding |
 | Committing | Publication won against Stop; namespace syscall may be in flight |
 | Committed | Snapshot published; core create succeeded or durability work remains |
@@ -72,6 +73,18 @@ completes; the core leaves Committed and the bridge Complete. A stopped refresh 
 session revision, so existing frames and trees stay valid.
 "controlled_refresh_stop_keeps_views_and_completion_applies_live_changes" in
 [src/bridge/tests.rs](../src/bridge/tests.rs) checks both outcomes.
+
+## Controlled deletion
+
+`OperationSession::execute_controlled` and the bridge `execute_controlled` run a confirmed
+action with one control. Deletion checks in Scanning, unlinks in Removing and updates the
+inventory in Committed; `items_examined` counts removed entries, one atomic add beside each
+unlink. Stop is checked before each entry. Stop before the first unlink ends Cancelled with
+nothing changed; a later Stop ends the walk, and the report is a stopped `Partial` with
+exact counts. Trash commits from Ready before its checks, so Stop is rejected. The bridge
+ends Complete. "stop_during_controlled_delete_reports_partial_with_exact_counts" and
+"stop_before_the_first_unlink_cancels_with_nothing_changed_and_trash_cannot_stop" in
+[src/operations/tests.rs](../src/operations/tests.rs) check both.
 
 ## Generated Swift seam
 

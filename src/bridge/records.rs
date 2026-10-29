@@ -352,13 +352,42 @@ impl From<operations::UpdateReport> for UpdateRecord {
         }
     }
 }
+/// Counts of a permanent removal; `reasons` lists at most 16 of the `skipped` entries.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct RemovalRecord {
+    pub removed: u64,
+    pub skipped: u64,
+    pub reasons: Vec<String>,
+}
+impl From<operations::Removal> for RemovalRecord {
+    fn from(r: operations::Removal) -> Self {
+        Self {
+            removed: r.removed,
+            skipped: r.skipped,
+            reasons: r.reasons,
+        }
+    }
+}
 #[derive(Clone, Debug, uniffi::Enum)]
 pub enum MutationOutcome {
     Removed,
-    Trashed { destination: Vec<u8> },
-    Indeterminate { message: String },
-    Partial { message: String },
-    Failed { message: String },
+    RemovedWithSkips {
+        removal: RemovalRecord,
+    },
+    Trashed {
+        destination: Vec<u8>,
+    },
+    Indeterminate {
+        message: String,
+    },
+    Partial {
+        message: String,
+        stopped: bool,
+        removal: RemovalRecord,
+    },
+    Failed {
+        message: String,
+    },
 }
 #[derive(Clone, Debug, uniffi::Enum)]
 pub enum TrashScope {
@@ -384,7 +413,20 @@ impl From<operations::OperationReport> for OperationRecord {
                 operations::Mutation::Indeterminate(message) => {
                     MutationOutcome::Indeterminate { message }
                 }
-                operations::Mutation::Partial(message) => MutationOutcome::Partial { message },
+                operations::Mutation::RemovedWithSkips(removal) => {
+                    MutationOutcome::RemovedWithSkips {
+                        removal: removal.into(),
+                    }
+                }
+                operations::Mutation::Partial {
+                    message,
+                    stopped,
+                    removal,
+                } => MutationOutcome::Partial {
+                    message,
+                    stopped,
+                    removal: removal.into(),
+                },
                 operations::Mutation::Failed(message) => MutationOutcome::Failed { message },
             },
             scope: r.scope.map(|s| match s {

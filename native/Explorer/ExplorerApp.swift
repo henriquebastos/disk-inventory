@@ -188,14 +188,20 @@ struct ExplorerView: View {
   var progress: some View {
     HStack(spacing: 10) {
       ProgressView().controlSize(.small)
-      if let sample = model.scan.progress {
+      if model.scan.progress != nil {
         Text(model.scan.label).accessibilityIdentifier("scan-phase")
-        Text("\(model.numbers.count(sample.itemsExamined)) items examined").monospacedDigit()
-          .accessibilityIdentifier("scan-items")
+        if let items = model.scan.itemsText(model.numbers) {
+          Text(items).monospacedDigit().accessibilityIdentifier("scan-items")
+        }
         Spacer()
-        Button("Stop") { ExplorerCommand.stopScan.perform(in: model) }
-          .disabled(!ExplorerCommand.stopScan.isEnabled(in: model))
-          .accessibilityIdentifier("stop-scan")
+        if model.scan.offersStop {
+          Button("Stop") { ExplorerCommand.stopScan.perform(in: model) }
+            .disabled(!ExplorerCommand.stopScan.isEnabled(in: model))
+            .accessibilityIdentifier("stop-scan")
+        }
+      } else if let checking = model.checking {
+        Text("Checking “\(checking)”…").accessibilityIdentifier("scan-phase")
+        Spacer()
       } else {
         Text(
           model.replacingSession ? "Preparing inventory… Previous view is read-only." : "Working…")
