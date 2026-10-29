@@ -1,6 +1,8 @@
 use super::*;
 use crate::operations::{Identity, memory::MemoryCalls};
 
+mod map_pixels;
+
 fn session(s: &str) -> Arc<ExplorerSession> {
     ExplorerSession::fixture(s.into()).unwrap()
 }

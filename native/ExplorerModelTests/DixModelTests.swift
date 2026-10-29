@@ -6,19 +6,10 @@ import XCTest
 @testable import DiskInventory
 
 @MainActor final class DixModelTests: XCTestCase {
-  func wait(
-    _ condition: @escaping @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line
-  ) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(8))
-    while !condition(), ContinuousClock.now < deadline {
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    XCTAssertTrue(condition(), file: file, line: line)
-  }
   func load(_ scenario: String = "dix") async throws -> ExplorerModel {
     let model = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await wait { model.records != nil && !model.loading && !model.replacingSession }
+    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
     return model
   }
   func entry(_ name: String, _ model: ExplorerModel) throws -> EntryRecord {
@@ -34,22 +25,22 @@ import XCTest
     let target = try XCTUnwrap(
       model.picture?.targets.first { $0.entry.displayName.hasPrefix("asset-") })
     model.select(movie)
-    try await wait { model.selectedRow != nil }
+    try await waitUntil { model.selectedRow != nil }
     model.prepare(.permanentlyDelete)
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     let capability = model.pending!.action
     let builds = model.diagramBuilds
     let (x, y) = center(target)
     let start = ContinuousClock.now
     model.point(x, y)
-    try await wait { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
+    try await waitUntil { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
     print("DIX hover async publication=\(start.duration(to:.now)); not paint latency")
     XCTAssertTrue(model.selected!.key.sameEntry(other: movie.key))
     XCTAssertTrue(model.pending?.action === capability)
     XCTAssertEqual(model.diagramBuilds, builds)
     model.cancelConfirmation()
     model.point(x, y, click: true)
-    try await wait {
+    try await waitUntil {
       model.selected?.key.sameEntry(other: target.entry.key) == true && model.selectedRow != nil
     }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
@@ -66,23 +57,23 @@ import XCTest
     let projects = try entry("Projects", model)
     let tiny = try entry("Tiny files", model)
     model.expand(projects, expanded: true)
-    try await wait { !model.treeEditing && model.outline!.total == 2003 }
+    try await waitUntil { !model.treeEditing && model.outline!.total == 2003 }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
     model.scrollRow = 1200
     let original = model.tree
     model.focus(tiny.key)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     let notes = try entry("Notes", model)
     model.focus(notes.key)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     let small = try entry("four-KiB.txt", model)
     let rect = try XCTUnwrap(try model.picture!.frame.region(key: small.key))
     XCTAssertGreaterThan(rect.width * rect.height, 1000)
     model.back()
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: tiny.key))
     model.focus(root)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     XCTAssertTrue(model.tree === original)
     XCTAssertEqual(model.outline!.total, 2003)
     XCTAssertEqual(model.restoredScrollRow, 1200)
@@ -95,9 +86,9 @@ import XCTest
       let child = try XCTUnwrap(model.outline?.rows.first { $0.entry.kind == .directory }?.entry)
       let leaf = try XCTUnwrap(model.picture?.targets.first)
       model.select(leaf.entry)
-      try await wait { model.selectedRow != nil }
+      try await waitUntil { model.selectedRow != nil }
       model.focus(child.key)
-      try await wait { !model.loading }
+      try await waitUntil { !model.loading }
     }
     XCTAssertEqual(model.history.count, 64)
     let payload = try await model.historyExpansionPayloadBytes()
@@ -105,20 +96,20 @@ import XCTest
     print(
       "DIX64-context expansion payload=\(payload) bytes; excludes allocator and shared inventory")
     model.load { try ExplorerSession.fixture(scenario: "dix") }
-    try await wait { !model.replacingSession && !model.loading }
+    try await waitUntil { !model.replacingSession && !model.loading }
     XCTAssertTrue(model.history.isEmpty)
     let tiny = try entry("Tiny files", model)
     model.focus(tiny.key)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     let notes = try entry("Notes", model)
     model.focus(notes.key)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     let oldFrame = model.picture!.frame
     model.select(try entry("four-KiB.txt", model))
     model.prepare(.permanentlyDelete)
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     model.execute()
-    try await wait { !model.working }
+    try await waitUntil { !model.working }
     XCTAssertTrue(model.history.isEmpty)
     XCTAssertFalse(model.outline!.rows.contains { $0.entry.displayName == "four-KiB.txt" })
     XCTAssertThrowsError(try oldFrame.hit(x: 0, y: 0))
@@ -129,13 +120,13 @@ import XCTest
     let movie = try entry("large-file", model)
     let target = try XCTUnwrap(model.picture?.targets.first)
     let blocked = Task.detached { try old.liveMetadata(key: movie.key) }
-    try await wait { old.isBusy() }
+    try await pollUntil { old.isBusy() }
     model.select(target.entry)
     let (x, y) = center(target)
     model.point(x, y)
     let rebuilding = Task { await model.updateView(focus: movie.parent!) }
     model.load { try ExplorerSession.fixture(scenario: "ordinary") }
-    try await wait { !model.replacingSession && !model.loading }
+    try await waitUntil { !model.replacingSession && !model.loading }
     _ = try await blocked.value
     await rebuilding.value
     try await Task.sleep(for: .milliseconds(50))
@@ -171,9 +162,9 @@ import XCTest
     let projects = try entry("Projects", model)
     let expanded = ContinuousClock.now
     model.expand(projects, expanded: true)
-    try await wait { !model.treeEditing && table.numberOfRows == 100003 }
+    try await pollUntil { !model.treeEditing && table.numberOfRows == 100003 }
     table.scrollRowToVisible(99999)
-    try await wait { (model.outline?.offset ?? 0) > 99000 }
+    try await waitUntil { (model.outline?.offset ?? 0) > 99000 }
     XCTAssertLessThanOrEqual(model.outline!.rows.count, 256)
     XCTAssertLessThan(table.createdCells, 128)
     XCTAssertLessThan(model.outline!.visits, 1024)
@@ -198,7 +189,7 @@ import XCTest
     let total = Int(model.outline!.total)
     try await withThrowingTaskGroup(of: MetadataRecord.self) { group in
       group.addTask { try session.liveMetadata(key: key) }
-      try await wait { session.isBusy() }
+      try await pollUntil { session.isBusy() }
       let callback = ContinuousClock.now
       XCTAssertEqual(datasource.numberOfRows(in: table), total)
       _ = datasource.tableView(table, viewFor: table.tableColumns[0], row: 0)
@@ -214,7 +205,7 @@ import XCTest
     getrusage(RUSAGE_SELF, &baseline)
     let model = try await load()
     model.resize(CGSize(width: 8000, height: 4000))
-    try await wait { model.picture!.bitmap.width > 2000 && !model.loading }
+    try await waitUntil { model.picture!.bitmap.width > 2000 && !model.loading }
     let picture = model.picture!
     let target = try XCTUnwrap(picture.targets.first)
     XCTAssertLessThanOrEqual(Int(picture.bitmap.width) * Int(picture.bitmap.height), 4_000_000)
@@ -228,7 +219,7 @@ import XCTest
         with: .mouseMoved, location: point, modifierFlags: [], timestamp: 0, windowNumber: 0,
         context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
     view.pointer(event, click: false)
-    try await wait { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
+    try await waitUntil { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
     let builds = model.diagramBuilds
     let rep = try XCTUnwrap(
       NSBitmapImageRep(
@@ -277,14 +268,14 @@ import XCTest
         as! ContentsTree.Cell).disclosure
     }
     disclosure().performClick(nil)
-    try await wait { table.numberOfRows == initial + 128 && !model.treeEditing }
+    try await pollUntil { table.numberOfRows == initial + 128 && !model.treeEditing }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
     let parentView = try XCTUnwrap(coordinator.tableView(table, rowViewForRow: parentRow))
     XCTAssertTrue(parentView.isAccessibilityEnabled())
     XCTAssertTrue(parentView.isAccessibilityExpanded())
     XCTAssertEqual(parentView.accessibilityDisclosureLevel(), 0)
     table.selectRowIndexes(IndexSet(integer: parentRow + 1), byExtendingSelection: false)
-    try await wait { model.selectedRow == parentRow + 1 }
+    try await waitUntil { model.selectedRow == parentRow + 1 }
     func key(_ code: UInt16) throws {
       let e = try XCTUnwrap(
         NSEvent.keyEvent(
@@ -296,18 +287,18 @@ import XCTest
       table.keyDown(with: e)
     }
     try key(125)
-    try await wait { model.selected?.displayName == "small-01" }
+    try await waitUntil { model.selected?.displayName == "small-01" }
     try key(123)
-    try await wait {
+    try await waitUntil {
       model.selected?.displayName == "small-files" && model.selectedRow == parentRow
     }
     model.focus(parent.key)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     model.back()
-    try await wait { !model.loading && table.numberOfRows == initial + 128 }
+    try await pollUntil { !model.loading && table.numberOfRows == initial + 128 }
     XCTAssertTrue(disclosure().isEnabled)
     disclosure().performClick(nil)
-    try await wait { table.numberOfRows == initial && !model.treeEditing }
+    try await pollUntil { table.numberOfRows == initial && !model.treeEditing }
     let mapHost = NSHostingView(rootView: DiagramView(model: model))
     window.contentView = mapHost
     mapHost.layoutSubtreeIfNeeded()
@@ -318,7 +309,7 @@ import XCTest
     }
     let view = try XCTUnwrap(map(in: mapHost))
     try await Task.sleep(for: .milliseconds(250))
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     let target = try XCTUnwrap(model.picture?.targets.first)
     let rect = view.rect(target.rect)
     let location = view.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
@@ -328,7 +319,7 @@ import XCTest
         windowNumber: window.windowNumber, context: nil, eventNumber: 1, trackingNumber: 1,
         userData: nil))
     view.mouseEntered(with: entered)
-    try await wait { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
+    try await waitUntil { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
     XCTAssertTrue(model.selected?.key.sameEntry(other: parent.key) == true)
     view.mouseExited(with: entered)
     XCTAssertNil(model.hover)
@@ -338,7 +329,7 @@ import XCTest
         windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 0, pressure: 0)
     )
     view.mouseMoved(with: moved)
-    try await wait { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
+    try await waitUntil { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
 
   }
 
@@ -347,9 +338,9 @@ import XCTest
     let root = model.records!.focus.key
     let directory = try entry("small-files", model)
     model.expand(directory, expanded: true)
-    try await wait { !model.treeEditing }
+    try await waitUntil { !model.treeEditing }
     model.select(directory)
-    try await wait { model.selectedRow != nil }
+    try await waitUntil { model.selectedRow != nil }
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
       styleMask: [.titled], backing: .buffered, defer: false)
@@ -369,12 +360,12 @@ import XCTest
     let total = table.numberOfRows
     scroll.contentView.scroll(to: NSPoint(x: 0, y: 600))
     scroll.reflectScrolledClipView(scroll.contentView)
-    try await wait { model.scrollRow > 20 }
+    try await waitUntil { model.scrollRow > 20 }
     let savedRow = model.scrollRow
     model.focus(directory.key)
-    try await wait { !model.loading && table.numberOfRows == Int(directory.childCount) }
+    try await pollUntil { !model.loading && table.numberOfRows == Int(directory.childCount) }
     model.back()
-    try await wait {
+    try await pollUntil {
       !model.loading && table.numberOfRows == total
         && coordinator.scrollSerial == model.scrollSerial
     }
@@ -409,7 +400,7 @@ import XCTest
     let scroll = try XCTUnwrap(table.enclosingScrollView)
     let coordinator = try XCTUnwrap(table.delegate as? ContentsTree.Coordinator)
     model.focus(tiny.key)
-    try await wait {
+    try await pollUntil {
       !model.loading && table.numberOfRows == 1 && coordinator.scrollSerial == model.scrollSerial
     }
     host.layoutSubtreeIfNeeded()
@@ -432,11 +423,11 @@ import XCTest
     let old = model.tree
     let tiny = try entry("Tiny files", model)
     model.focus(tiny.key)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     let session = model.session!
     _ = try await Task.detached { try session.refreshDirectory(key: root) }.value
     model.back()
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
     XCTAssertFalse(model.tree === old)
     XCTAssertEqual(model.outline!.total, 3)
@@ -447,9 +438,9 @@ import XCTest
     let model = try await load()
     let total = model.records!.focus.subtreeBytes
     model.resize(CGSize(width: 1, height: 1))
-    try await wait { model.picture?.bitmap.width == 1 && !model.loading }
+    try await waitUntil { model.picture?.bitmap.width == 1 && !model.loading }
     model.point(0, 0, click: true)
-    try await wait { model.aggregate != nil }
+    try await waitUntil { model.aggregate != nil }
     XCTAssertNil(model.selected)
     XCTAssertFalse(model.canAct)
     XCTAssertEqual(model.aggregateText, model.numbers.storage(total))
@@ -468,7 +459,7 @@ import XCTest
     view.model = model
     window.contentView = view
     view.viewDidChangeBackingProperties()
-    try await wait {
+    try await waitUntil {
       model.picture!.bitmap.width == UInt32(600 * window.backingScaleFactor) && !model.loading
     }
     view.updatePicture()
@@ -477,11 +468,11 @@ import XCTest
     window.setContentSize(NSSize(width: 500, height: 400))
     view.layoutSubtreeIfNeeded()
     view.viewDidChangeBackingProperties()
-    try await wait {
+    try await waitUntil {
       model.picture!.bitmap.width == UInt32(500 * window.backingScaleFactor) && !model.loading
     }
     view.updatePicture()
-    try await wait { obsolete == nil }
+    try await waitUntil { obsolete == nil }
     XCTAssertFalse(oldTarget.accessibilityPerformPress())
     XCTAssertNil(model.selected)
   }
@@ -504,12 +495,12 @@ import XCTest
     let movie = try entry("Movie.mov", model)
     let tiny = try entry("Tiny files", model)
     model.select(movie)
-    try await wait { model.selectedRow != nil }
+    try await waitUntil { model.selectedRow != nil }
     let original = model.selectedRow!
     let builds = model.diagramBuilds
     for expanded in [true, false] {
       model.expand(tiny, expanded: expanded)
-      try await wait { !model.treeEditing }
+      try await waitUntil { !model.treeEditing }
       try await assertSelectedRow(model, matches: movie.key, expected: original)
       XCTAssertTrue(model.canAct)
     }
@@ -520,13 +511,13 @@ import XCTest
     let movie = try entry("Movie.mov", model)
     let projects = try entry("Projects", model)
     model.select(movie)
-    try await wait { model.selectedRow != nil }
+    try await waitUntil { model.selectedRow != nil }
     let original = model.selectedRow!
     model.expand(projects, expanded: true)
-    try await wait { !model.treeEditing }
+    try await waitUntil { !model.treeEditing }
     try await assertSelectedRow(model, matches: movie.key, expected: original + 2000)
     model.expand(projects, expanded: false)
-    try await wait { !model.treeEditing }
+    try await waitUntil { !model.treeEditing }
     try await assertSelectedRow(model, matches: movie.key, expected: original)
   }
   func testDisclosureHidesSelectedDescendantWithoutReopeningOrRetargeting() async throws {
@@ -536,20 +527,20 @@ import XCTest
     let leaf = try XCTUnwrap(
       model.picture?.targets.first { $0.entry.displayName.hasPrefix("asset-") })
     model.select(leaf.entry)
-    try await wait { model.selectedRow != nil }
+    try await waitUntil { model.selectedRow != nil }
     model.expand(projects, expanded: false)
-    try await wait { !model.treeEditing }
+    try await waitUntil { !model.treeEditing }
     XCTAssertEqual(model.outline!.total, 3)
     XCTAssertNil(model.selectedRow)
     XCTAssertTrue(model.selected!.key.sameEntry(other: leaf.entry.key))
     XCTAssertFalse(model.outline!.rows.first { $0.entry.displayName == "Projects" }!.expanded)
     model.expand(tiny, expanded: true)
-    try await wait { !model.treeEditing }
+    try await waitUntil { !model.treeEditing }
     XCTAssertEqual(model.outline!.total, 4)
     XCTAssertNil(model.selectedRow)
     XCTAssertTrue(model.selected!.key.sameEntry(other: leaf.entry.key))
     model.expand(projects, expanded: true)
-    try await wait { !model.treeEditing }
+    try await waitUntil { !model.treeEditing }
     try await assertSelectedRow(model, matches: leaf.entry.key)
   }
   func testDisclosureResultsRejectNewerSelectionSessionAndMutation() async throws {
@@ -561,9 +552,9 @@ import XCTest
       let delayed = try entry("large-file", model)
       let root = model.records!.focus
       model.select(directory)
-      try await wait { model.selectedRow != nil }
+      try await waitUntil { model.selectedRow != nil }
       let blocker = Task.detached { try session.liveMetadata(key: delayed.key) }
-      try await wait { session.isBusy() }
+      try await pollUntil { session.isBusy() }
       model.expand(directory, expanded: true)
       // Let the real tree worker queue behind the fixture's metadata lock.
       await Task.yield()
@@ -573,7 +564,7 @@ import XCTest
       default: model.refresh()
       }
       _ = try await blocker.value
-      try await wait {
+      try await waitUntil {
         !model.treeEditing && !model.replacingSession && !model.working && !model.loading
       }
       XCTAssertNil(model.selectedRow, change)
@@ -627,7 +618,7 @@ import XCTest
     }
     let table = try XCTUnwrap(table(in: host))
     model.expand(try entry("Tiny files", model), expanded: true)
-    try await wait { !model.treeEditing && table.numberOfRows == 4 }
+    try await pollUntil { !model.treeEditing && table.numberOfRows == 4 }
     // Expansion reloads rows after the initial host layout. Lay out the current row views.
     host.layoutSubtreeIfNeeded()
     window.displayIfNeeded()
@@ -682,7 +673,7 @@ import XCTest
     window.contentView = host
     host.layoutSubtreeIfNeeded()
     model.refresh()
-    try await wait { model.records?.status.stale == true && !model.working }
+    try await waitUntil { model.records?.status.stale == true && !model.working }
     func table(in view: NSView) -> ContentsTree.Table? {
       if let table = view as? ContentsTree.Table { return table }
       return view.subviews.compactMap { table(in: $0) }.first

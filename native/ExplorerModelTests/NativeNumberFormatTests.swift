@@ -49,10 +49,7 @@ import XCTest
       let model = ExplorerModel(
         arguments: ["--fixture-mode", "--scenario", "presentation"], environment: [:],
         numbers: NativeNumberFormat(locale: Locale(identifier: locale)))
-      for _ in 0..<1000 {
-        if !model.loading && model.outline != nil { break }
-        try await Task.sleep(for: .milliseconds(10))
-      }
+      try await waitUntil { !model.loading && model.outline != nil }
       defer { model.shutdown() }
       let row = try XCTUnwrap(
         model.outline?.rows.firstIndex { $0.entry.displayName == "large-file" })

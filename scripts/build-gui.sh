@@ -7,6 +7,7 @@ out=$(cd "$1" && pwd -P)
 case "$out/" in "$repo/"*) echo "output must be outside repository" >&2; exit 2;; esac
 export REPO_ROOT="$repo" BRIDGE_ROOT="$out/bridge"
 export TMPDIR="$out/tmp" CLANG_MODULE_CACHE_PATH="$out/module-cache"
+# XcodeGen fails with "The file “XcodeGen” doesn’t exist" when --project names a missing directory.
 mkdir -p "$TMPDIR" "$out/project" "$CLANG_MODULE_CACHE_PATH"
 bash "$repo/scripts/build-bridge.sh" "$BRIDGE_ROOT"
 # XcodeGen substitutions resolve all sources externally; no generated project enters Git.

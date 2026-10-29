@@ -149,3 +149,37 @@ citations; [AGENTS.md](AGENTS.md) for contributor navigation. Collection is in
 [src/lib.rs](src/lib.rs), native parsing in [src/native.rs](src/native.rs), persistence
 in [src/snapshot.rs](src/snapshot.rs), and the thin CLI in
 [src/bin/disk-inventory.rs](src/bin/disk-inventory.rs).
+
+## 1d Checks and test layers
+
+[check.sh](scripts/check.sh) runs the checks in named stages, stops at the first failure and
+prints one summary line with the time of each stage:
+
+```sh
+export CHECK_ROOT=/private/tmp/disk-inventory-check  # all outputs, outside the repository
+scripts/check.sh fast   # format, Clippy x3, Rust tests, swift-format, docs, git diff --check
+scripts/check.sh model  # fast, GUI build and app icon check, bridge smoke, model tests
+scripts/check.sh ui -only-testing:ExplorerUITests/ExplorerUITests/testSiblingRowsStayVisibleAfterDeleteWithSkipsDeleteAndTrash
+scripts/check.sh all    # model, then every UI test
+```
+
+`CARGO_TARGET_DIR` and `GUI_ROOT` default below `CHECK_ROOT`; `TMPDIR` must also be outside the
+repository. It refuses to run with less than 1.5 GB free. The docs stage
+([check-docs.py](scripts/check-docs.py)) keeps each Markdown document below 1,500 words with
+resolving links and existing quoted test names. UI tests need an unlocked console; they run one
+at a time through [test-gui.sh](scripts/test-gui.sh), and result bundles are deleted after the
+summary is read.
+
+Test each change in the cheapest layer that can fail when the behavior changes:
+
+1. Rust: domain, accounting and diagram pixels. [map_pixels.rs](src/bridge/tests/map_pixels.rs)
+   measures the fixture maps at window size.
+2. Model tests in `native/ExplorerModelTests`: texts, enablement, phases and outcomes. They wait
+   with `waitUntil`, which re-checks when an observed model property changes, or `pollUntil`
+   for Rust bridge and AppKit view state ([ModelWait.swift](native/ExplorerModelTests/ModelWait.swift)).
+3. Component pictures drawn offscreen, such as
+   [MapDrawingModelTests.swift](native/ExplorerModelTests/MapDrawingModelTests.swift).
+4. XCUITests only for real input (mouse, keyboard, menus, sheets, help tags), window-level
+   layout and rendering, and end-to-end flows.
+
+A UI assertion moves only with a replacement that fails on a deliberately broken variant.

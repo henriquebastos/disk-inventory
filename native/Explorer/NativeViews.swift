@@ -98,11 +98,14 @@ struct ContentsTree: NSViewRepresentable {
     }
     if c.scrollSerial != model.scrollSerial {
       // Save/restore the top unobscured row, accounting for AppKit's automatic header inset.
+      // `scroll(to:)` does not clamp: a restored row near the end, such as a surviving
+      // selection that became the last row, would scroll every other row out of view. So the
+      // origin stops where the last row meets the bottom, or at the first row.
       let clip = scroll.contentView
-      clip.scroll(
-        to: NSPoint(
-          x: clip.bounds.minX,
-          y: table.rect(ofRow: model.restoredScrollRow).minY - clip.contentInsets.top))
+      let first = table.rect(ofRow: 0).minY - clip.contentInsets.top
+      let bottom = max(first, table.frame.height - clip.bounds.height)
+      let top = table.rect(ofRow: model.restoredScrollRow).minY - clip.contentInsets.top
+      clip.scroll(to: NSPoint(x: clip.bounds.minX, y: min(top, bottom)))
       scroll.reflectScrolledClipView(clip)
       c.scrollSerial = model.scrollSerial
     }

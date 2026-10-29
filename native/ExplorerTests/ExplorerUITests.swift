@@ -35,14 +35,20 @@ import XCTest
   func text(_ id: String, contains value: String, timeout: TimeInterval = 8) {
     let element = id == "selected-name" ? app.buttons[id] : app.staticTexts[id]
     XCTAssertTrue(element.waitForExistence(timeout: timeout))
-    let predicate = NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", value, value)
-    let result = XCTWaiter.wait(
-      for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout)
-    if result != .completed {
-      screenshot("failure-\(id)")
-      print("UI_STATE id=\(id) actual=\(String(describing: element.value))")
-    }
-    XCTAssertEqual(result, .completed, "\(id) must contain \(value)")
+    // Polls about every 50 ms: a predicate expectation samples about once a second, which made
+    // each changing text cost a second. The query compares the whole value; a snapshot value
+    // can be truncated.
+    let match = (id == "selected-name" ? app.buttons : app.staticTexts).matching(identifier: id)
+      .matching(NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", value, value))
+      .firstMatch
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+      if match.exists { return }
+      Thread.sleep(forTimeInterval: 0.05)
+    } while Date() < deadline
+    screenshot("failure-\(id)")
+    print("UI_STATE id=\(id) actual=\(String(describing: element.value))")
+    XCTFail("\(id) must contain \(value), got \(String(describing: element.value))")
   }
   /// Waits for the outcome banner, then requires exactly `expected`: no added sentence.
   func outcome(is expected: String, timeout: TimeInterval = 8) {
@@ -177,92 +183,24 @@ import XCTest
     outcome(is: "Deleted.")
     XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
   }
-  func testTrashInsideAndOutside() {
-    for scenario in ["trash-inside", "trash-outside"] {
-      launch(scenario)
-      let before = app.staticTexts["scope-total"].value as? String
-      prepare("trash", target: "large-file")
-      screenshot("\(scenario)-confirmation")
-      app.buttons["confirm-action"].click()
-      // The banner names the outcome only; the inventory totals show where the space went.
-      outcome(is: "Moved to Trash.")
-      XCTAssertFalse(anyText(containing: "this inventory").exists, scenario)
-      XCTAssertFalse(row("large-file").exists)
-      let after = app.staticTexts["scope-total"].value as? String
-      if scenario == "trash-inside" {
-        XCTAssertEqual(before, after)
-      } else {
-        XCTAssertNotEqual(before, after)
-      }
-      if scenario == "trash-inside" {
-        row("trash").doubleClick()
-        XCTAssertTrue(row("moved").waitForExistence(timeout: 8))
-      }
-      screenshot(scenario)
-      app.terminate()
-    }
-  }
-  func testFailuresPartialUnknownAndSavedOnlySelection() {
-    for (scenario, target, action, expected) in [
-      ("trash-failure", "large-file", "trash", "Failed"),
-      ("trash-unknown", "large-file", "trash", "Moved to Trash."),
-      ("trash-missing", "large-file", "trash", "Indeterminate"),
-      ("permission-failure", "large-file", "delete", "Failed"),
-      ("partial-deletion", "small-files", "delete", "Partial"),
-    ] {
-      launch(scenario)
-      prepare(action, target: target)
-      app.buttons["confirm-action"].click()
-      text("outcome", contains: expected)
-      if scenario == "trash-unknown" {
-        // The unknown Trash scope is a core issue in Details, not a banner sentence.
-        outcome(is: expected)
-        XCTAssertTrue(app.staticTexts["stale"].waitForExistence(timeout: 8))
-        // Only the chevron toggles Details. It sits below the start of the outcome text; the
-        // accessibility frame of the control starts at the banner edge.
-        let details = app.disclosureTriangles["issues"]
-        let chevron = app.staticTexts["outcome"].frame.minX + 4.5 - details.frame.minX
-        details.coordinate(withNormalizedOffset: .zero)
-          .withOffset(CGVector(dx: chevron, dy: details.frame.height / 2)).click()
-        XCTAssertTrue(
-          anyText(containing: "Trash destination scope is unknown").waitForExistence(timeout: 8))
-        screenshot("trash-unknown-issue-details")
-      }
-      if scenario == "partial-deletion" {
-        XCTAssertTrue(row("small-files").exists)
-        XCTAssertTrue(app.staticTexts["stale"].exists)
-        screenshot("partial-survivors")
-      }
-      app.terminate()
-    }
-    launch("metadata-failure")
-    row("large-file").click()
-    text("selected-path", contains: "large-file")
-    XCTAssertFalse(app.staticTexts["metadata-state"].exists)
-    XCTAssertTrue(app.buttons["delete"].isEnabled)
-    text("selected-name", contains: "large-file")
-    screenshot("saved-only-selection")
-  }
-  func testChangedTargetAndUnknownAllocation() {
-    launch("changed-target")
-    row("large-file").click()
-    app.buttons["delete"].click()
-    text("error", contains: "Could not complete")
-    XCTAssertFalse(app.buttons["confirm-action"].exists)
-    app.terminate()
-    launch("unknown-allocation")
-    app.buttons["refresh"].click()
+  /// Only the chevron opens Details. The other failure outcomes and the saved-only selection
+  /// are model tests in OperationOutcomeModelTests.swift.
+  func testUnknownTrashScopeIssueOpensFromTheDetailsChevron() {
+    launch("trash-unknown")
+    prepare("trash", target: "large-file")
+    app.buttons["confirm-action"].click()
+    // The unknown Trash scope is a core issue in Details, not a banner sentence.
+    outcome(is: "Moved to Trash.")
     XCTAssertTrue(app.staticTexts["stale"].waitForExistence(timeout: 8))
-    XCTAssertTrue(row("unknown-a").exists)
-    row("unknown-a").click()
-    text("selected-name", contains: "unknown-a")
-    text("selected-path", contains: "unknown-a")
-    // The card has no sharing note; the Incomplete badge marks the unknown sizes.
-    XCTAssertFalse(app.staticTexts["sharing-note"].exists)
-    for note in ["Shared or unknown size", "Shared space counted elsewhere"] {
-      XCTAssertFalse(anyText(containing: note).exists, note)
-    }
-    screenshot("unknown-allocation")
+    // The chevron sits below the start of the outcome text; the accessibility frame of the
+    // control starts at the banner edge.
+    let details = app.disclosureTriangles["issues"]
+    let chevron = app.staticTexts["outcome"].frame.minX + 4.5 - details.frame.minX
+    details.coordinate(withNormalizedOffset: .zero)
+      .withOffset(CGVector(dx: chevron, dy: details.frame.height / 2)).click()
+    XCTAssertTrue(
+      anyText(containing: "Trash destination scope is unknown").waitForExistence(timeout: 8))
+    screenshot("trash-unknown-issue-details")
   }
   func testImmediateSavedOnlySelection() {
     launch("metadata-delay")
@@ -681,8 +619,7 @@ import XCTest
       launch(appearance: appearance)
       row("small-files").click()
       text("selected-name", contains: "small-files")
-      let image = try XCTUnwrap(
-        NSBitmapImageRep(data: XCUIScreen.main.screenshot().pngRepresentation))
+      let image = try XCTUnwrap(NSBitmapImageRep(data: settled { XCUIScreen.main.screenshot() }))
       XCTAssertEqual(image.bitsPerSample, 8)
       for (name, selected) in [("small-files", true), ("trash", false)] {
         let tableRow = app.outlines["entry-tree"].tableRows.containing(
@@ -748,36 +685,6 @@ import XCTest
     text("outcome", contains: "Moved to Trash")
   }
 
-  func testResultMotionStylesTravelPoofAndReduceMotionFade() throws {
-    for (scenario, action, reduceMotion, style) in [
-      ("presentation-trash-inside", "trash", false, "travel"),
-      ("presentation", "delete", false, "poof"),
-      ("presentation-trash-inside", "trash", true, "fade"),
-    ] {
-      launch(scenario, reduceMotion: reduceMotion)
-      let probe = app.descendants(matching: .any)["motion-style"]
-      XCTAssertTrue(probe.waitForExistence(timeout: 8))
-      XCTAssertEqual(probe.label, "none")
-      prepare(action, target: "large-file")
-      // Frame extraction aligns the screen recording with this wall-clock mark.
-      print("MOTION_CONFIRM \(scenario) \(style) \(Date().timeIntervalSince1970)")
-      app.buttons["confirm-action"].click()
-      text("outcome", contains: action == "trash" ? "Moved to Trash." : "Deleted.")
-      XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
-      XCTAssertTrue(app.staticTexts["dirty"].waitForExistence(timeout: 8))
-      let ran = NSPredicate(format: "label BEGINSWITH %@", style + " ")
-      XCTAssertEqual(
-        XCTWaiter.wait(
-          for: [XCTNSPredicateExpectation(predicate: ran, object: probe)], timeout: 8),
-        .completed, "\(scenario) must run \(style), got \(probe.label)")
-      // A 200 ms clock sampled about every 16 ms; one tick would be a jump, not motion.
-      let ticks = Int(probe.label.split(separator: " ").last ?? "") ?? 0
-      XCTAssertGreaterThanOrEqual(ticks, 4, "\(scenario) \(style) ticks")
-      screenshot("motion-\(scenario)-\(style)-final")
-      app.terminate()
-    }
-  }
-
   /// The four `DI_APPEARANCE` values. Contrast values change the map only: AppKit cannot
   /// create a high-contrast appearance without the system setting.
   static let appearances = ["light", "dark", "light-contrast", "dark-contrast"]
@@ -804,11 +711,23 @@ import XCTest
       return sum.map { $0 / 9 }
     }
   }
+  /// The PNG of a screenshot once two in a row are equal (at most about one second): a pixel
+  /// check right after an accessibility change can otherwise read a frame still being drawn.
+  func settled(_ shot: () -> XCUIScreenshot) -> Data {
+    var data = shot().pngRepresentation
+    for _ in 0..<10 {
+      Thread.sleep(forTimeInterval: 0.1)
+      let next = shot().pngRepresentation
+      if next == data { break }
+      data = next
+    }
+    return data
+  }
   /// `srgb` converts the screenshot from the display profile to sRGB, so colored pixels
   /// compare with the sRGB bytes that Rust draws. Neutral grays do not need it.
   func windowPixels(srgb: Bool = false) throws -> WindowPixels {
     let window = app.windows.firstMatch
-    var image = try XCTUnwrap(NSBitmapImageRep(data: window.screenshot().pngRepresentation))
+    var image = try XCTUnwrap(NSBitmapImageRep(data: settled { window.screenshot() }))
     if srgb {
       image = try XCTUnwrap(image.converting(to: .sRGB, renderingIntent: .default))
     }
@@ -916,294 +835,6 @@ import XCTest
       }
       // Each sheet and the hover keep the appearance: no rebuild with another variant.
       XCTAssertEqual(probe.label, appearance)
-      app.terminate()
-    }
-  }
-  func testMapHatchFollowsAppearance() throws {
-    continueAfterFailure = true  // Report every appearance.
-    for appearance in Self.appearances {
-      launch(appearance: appearance)
-      XCTAssertTrue(app.buttons["map-file-large-file"].waitForExistence(timeout: 8))
-      leaveMap()
-      let hatch = hatchLevels(
-        try windowPixels(), minX: app.outlines["entry-tree"].frame.maxX)
-      let ratio = Self.contrast(
-        [hatch.light, hatch.light, hatch.light], [hatch.dark, hatch.dark, hatch.dark])
-      print(
-        "HATCH \(appearance) light=\(hatch.light) dark=\(hatch.dark) ratio=\(ratio) pixels=\(hatch.pixels)"
-      )
-      XCTAssertGreaterThan(hatch.pixels, 500, appearance)
-      if appearance.hasPrefix("light") {
-        XCTAssertGreaterThan(hatch.dark, 140, "\(appearance): light hatch on a light window")
-      } else {
-        XCTAssertLessThan(hatch.light, 110, "\(appearance): dark hatch on a dark window")
-      }
-      if appearance.hasSuffix("contrast") {
-        XCTAssertGreaterThan(ratio, 2.3, "\(appearance): stronger hatch stripes")
-      } else {
-        XCTAssertLessThan(ratio, 1.5, appearance)
-      }
-      screenshot("hatch-\(appearance)")
-      app.terminate()
-    }
-  }
-  /// Contrast of the top seam of a map tile against the next pixel row inside the tile, at
-  /// three columns. The seam is the row above two matching interior rows.
-  func seamContrast(_ tile: XCUIElement, _ p: WindowPixels) -> Double? {
-    var ratios: [Double] = []
-    for fraction in [0.25, 0.5, 0.75] {
-      let x = p.x(tile.frame.minX + tile.frame.width * fraction)
-      let top = p.y(tile.frame.minY)
-      for y in (top - 3)...(top + 3) {
-        let (seam, inside, next) = (p.rgb(x, y), p.rgb(x, y + 1), p.rgb(x, y + 2))
-        if zip(inside, next).allSatisfy({ abs($0 - $1) <= 3 }),
-          zip(seam, inside).contains(where: { abs($0 - $1) > 3 })
-        {
-          ratios.append(Self.contrast(seam, inside))
-          break
-        }
-      }
-    }
-    return ratios.count == 3 ? ratios.min() : nil
-  }
-  func testIncreasedContrastDarkensMapSeams() throws {
-    continueAfterFailure = true
-    for appearance in Self.appearances {
-      launch(appearance: appearance)
-      let tile = app.buttons["map-file-large-file"]
-      XCTAssertTrue(tile.waitForExistence(timeout: 8))
-      leaveMap()
-      let ratio = try XCTUnwrap(seamContrast(tile, try windowPixels()), appearance)
-      print("SEAM \(appearance) ratio=\(ratio)")
-      if appearance.hasSuffix("contrast") {
-        XCTAssertGreaterThanOrEqual(ratio, 3.0, "\(appearance) seam")
-      } else {
-        // The ordinary seam is the design's inset (x0.55); Increase Contrast is stronger.
-        XCTAssertGreaterThanOrEqual(ratio, 1.8, "\(appearance) seam")
-        XCTAssertLessThan(ratio, 3.0, "\(appearance) seam")
-      }
-      screenshot("seam-\(appearance)")
-      app.terminate()
-    }
-  }
-  /// Increase Contrast: an opaque 2-point hover outline, black (the label color) in light and
-  /// white in dark. Without Increase Contrast: the 1-point white outline at 70% opacity.
-  func testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast() throws {
-    continueAfterFailure = true
-    for appearance in Self.appearances {
-      launch(appearance: appearance)
-      let tile = app.buttons["map-file-large-file"]
-      XCTAssertTrue(tile.waitForExistence(timeout: 8))
-      tile.hover()
-      hovered("large-file")
-      screenshot("hover-stroke-\(appearance)")
-      let p = try windowPixels()
-      // Backing pixels from the left and the top edge. With 2 points (4 backing pixels), the
-      // first three are fully covered and the sixth is inside the tile.
-      let left = Int(((tile.frame.minX - p.origin.x) * p.scale).rounded(.up))
-      let top = Int(((tile.frame.minY - p.origin.y) * p.scale).rounded(.up))
-      let midX = p.x(tile.frame.midX)
-      let midY = p.y(tile.frame.midY)
-      let edge =
-        (0..<3).map { p.rgb(left + $0, midY) } + (0..<3).map { p.rgb(midX, top + $0) }
-      let inside = [p.rgb(left + 5, midY), p.rgb(midX, top + 5)]
-      print("HOVER \(appearance) edge=\(edge) inside=\(inside)")
-      for (pixel, interior) in zip([edge[0], edge[3]], inside) {
-        switch appearance {
-        case "light-contrast":
-          XCTAssertLessThanOrEqual(pixel.max()!, 10, "\(appearance): opaque black \(pixel)")
-        case "dark-contrast":
-          XCTAssertGreaterThanOrEqual(pixel.min()!, 250, "\(appearance): opaque white \(pixel)")
-        default:
-          // White at 70% over the tile: lighter than the tile, but not opaque white.
-          XCTAssertGreaterThan(pixel.min()!, interior.max()!, "\(appearance): white outline")
-          XCTAssertLessThan(pixel.min()!, 250, "\(appearance): 70% opacity \(pixel)")
-        }
-      }
-      if appearance.hasSuffix("contrast") {
-        for pixel in edge {
-          XCTAssertLessThanOrEqual(
-            zip(pixel, edge[0]).map { abs($0 - $1) }.max()!, 3, "\(appearance): solid 2 points")
-        }
-        for pixel in inside {
-          XCTAssertGreaterThan(
-            zip(pixel, edge[0]).map { abs($0 - $1) }.max()!, 40, "\(appearance): 2 points wide")
-        }
-      }
-      app.terminate()
-    }
-  }
-  /// Map pixels by type color: for each colored kind of the prototype palette, the share of
-  /// sampled map pixels whose hue is nearest to that kind. Gray pixels count as neutral.
-  func kindShares(_ p: WindowPixels, map frame: CGRect) -> (
-    shares: [String: Double], neutral: Double
-  ) {
-    let kinds: [(String, [Int])] = [
-      ("video", [79, 138, 198]), ("image", [81, 153, 98]), ("audio", [171, 109, 166]),
-      ("archive", [173, 124, 47]), ("app", [133, 122, 196]), ("code", [0, 153, 160]),
-      ("cache", [190, 110, 82]), ("data", [138, 140, 52]),
-    ]
-    // The tint, the shade and the seam mix with white or black, which keeps the HSV hue.
-    func hue(_ c: [Int]) -> (hue: Double, saturation: Double) {
-      let (r, g, b) = (Double(c[0]), Double(c[1]), Double(c[2]))
-      let high = max(r, g, b)
-      let span = high - min(r, g, b)
-      guard span > 0 else { return (0, 0) }
-      let h: Double =
-        high == r ? (g - b) / span : high == g ? 2 + (b - r) / span : 4 + (r - g) / span
-      return ((h * 60 + 360).truncatingRemainder(dividingBy: 360), span / high)
-    }
-    let kindHues = kinds.map { ($0.0, hue($0.1).hue) }
-    var counts: [String: Int] = [:]
-    var (neutral, total) = (0, 0)
-    for y in stride(from: p.y(frame.minY) + 2, to: p.y(frame.maxY) - 2, by: 3) {
-      for x in stride(from: p.x(frame.minX) + 2, to: p.x(frame.maxX) - 2, by: 3) {
-        total += 1
-        let pixel = hue(p.rgb(x, y))
-        guard pixel.saturation > 0.25 else {
-          neutral += 1
-          continue
-        }
-        var nearest = (kind: "", distance: 360.0)
-        for (kind, kindHue) in kindHues {
-          let d = abs(kindHue - pixel.hue)
-          if min(d, 360 - d) < nearest.distance { nearest = (kind, min(d, 360 - d)) }
-        }
-        counts[nearest.kind, default: 0] += 1
-      }
-    }
-    return (
-      counts.mapValues { Double($0) / Double(total) }, Double(neutral) / Double(max(total, 1))
-    )
-  }
-  /// `prototype-home` rebuilds the prototype's data with real extensions, so the map shows
-  /// every colored kind of the palette. `presentation` stays unchanged: files without an
-  /// extension draw a gray map.
-  func testPrototypeHomeMapShowsEveryKindColorAndPresentationStaysGray() throws {
-    continueAfterFailure = true
-    for (scenario, appearance) in [
-      ("prototype-home", "dark"), ("prototype-home", "light"), ("presentation", "dark"),
-      ("presentation", "light"),
-    ] {
-      launch(scenario, appearance: appearance)
-      let probe = app.descendants(matching: .any)["map-appearance"]
-      guard probe.waitForExistence(timeout: 8) else {
-        XCTFail("\(scenario) \(appearance): no map")
-        app.terminate()
-        continue
-      }
-      XCTAssertEqual(probe.label, appearance)
-      let largest = scenario == "presentation" ? "large-file" : "Interview raw.mov"
-      XCTAssertTrue(app.buttons["map-file-\(largest)"].waitForExistence(timeout: 8))
-      row(scenario == "presentation" ? "zero-byte" : "Documents").hover()
-      hovered("none")
-      screenshot("\(scenario)-\(appearance)")
-      // The map view is not an accessibility element. Its padded area starts at the probe,
-      // right of the tree, and ends above the status bar; 20 points inside that area is map.
-      let left = app.outlines["entry-tree"].frame.maxX + 20
-      let top = probe.frame.minY + 20
-      let map = CGRect(
-        x: left, y: top, width: app.windows.firstMatch.frame.maxX - 20 - left,
-        height: statusBarTop() - 20 - top)
-      let result = kindShares(try windowPixels(), map: map)
-      let report = result.shares.sorted { $0.key < $1.key }
-        .map { "\($0.key)=\(String(format: "%.3f", $0.value))" }.joined(separator: " ")
-      print(
-        "KINDS \(scenario) \(appearance) map=\(map) neutral=\(String(format: "%.3f", result.neutral)) \(report)"
-      )
-      let shown = result.shares.filter { $0.value >= 0.005 }.keys.sorted()
-      if scenario == "prototype-home" {
-        XCTAssertEqual(
-          shown, ["app", "archive", "audio", "cache", "code", "data", "image", "video"],
-          "\(appearance): every colored kind covers at least 0.5% of the map")
-        XCTAssertGreaterThanOrEqual(result.neutral, 0.005, "\(appearance): gray documents")
-      } else {
-        XCTAssertEqual(shown, [], "\(appearance): presentation files have no extension")
-      }
-      app.terminate()
-    }
-  }
-  /// `file-type-colors`: each tile's sampled pixels have the hue of its kind, or are neutral
-  /// for the gray controls. The old table drew every colored file here gray.
-  func checkFileTypes(_ appearance: String, _ scene: String, _ kinds: [(String, String)]) throws {
-    let pixels = try windowPixels(srgb: true)
-    let window = app.windows.firstMatch.frame
-    for (name, kind) in kinds {
-      let tile = app.buttons["map-file-\(name)"]
-      guard tile.exists else {
-        XCTFail("\(appearance) \(scene): no map tile for \(name)")
-        continue
-      }
-      let f = tile.frame
-      let result = kindShares(pixels, map: f.insetBy(dx: 3, dy: 3))
-      let share = kind == "gray" ? result.neutral : result.shares[kind] ?? 0
-      print(
-        "FILE TYPE \(appearance) \(scene) \(name) \(kind) share=\(String(format: "%.3f", share))"
-          + " frame=\(Int(f.minX - window.minX)),\(Int(f.minY - window.minY)),\(Int(f.width)),\(Int(f.height))"
-      )
-      XCTAssertGreaterThanOrEqual(share, 0.9, "\(appearance) \(scene): \(name) must be \(kind)")
-    }
-  }
-  func testNewExtensionsAndContextFoldersReplaceGrayTilesWithTypeColors() throws {
-    continueAfterFailure = true
-    let expected = [
-      ("7c91d04e", "archive"), ("pack-1f2e.pack", "archive"), ("pack-1f2e.idx", "archive"),
-      ("libcore.dylib", "code"), ("index.ts", "code"), ("5C1D27", "cache"),
-      ("9f86d081", "cache"), ("cd34ef", "cache"), ("1a2b3c", "cache"),
-      ("events.jsonl", "data"), ("table.csv", "data"), ("clip.webm", "video"),
-      ("voice.opus", "audio"), ("sketch.psd", "image"), ("tool.whl", "archive"),
-      // Objects of a submodule, a nested submodule, a submodule named after its path
-      // `vendor/lib` and a bare repository.
-      ("a1b2c3d4", "archive"), ("0d9e8f7a", "archive"), ("f0e1d2c3", "archive"),
-      ("cdef0123", "archive"),
-      // Gray controls: a document, `objects` outside `.git`, no extension, a numbered file,
-      // `modules/<name>/objects` outside `.git`.
-      ("report.pdf", "gray"), ("b4e0aa", "gray"), ("notes", "gray"), ("segment.1", "gray"),
-      ("e9d8c7", "gray"),
-    ]
-    for appearance in ["light", "dark"] {
-      launch("file-type-colors", appearance: appearance)
-      XCTAssertTrue(app.buttons["map-file-7c91d04e"].waitForExistence(timeout: 8))
-      offMap()
-      screenshot("file-types-\(appearance)-home")
-      try checkFileTypes(appearance, "home", expected)
-      // A focus inside Git object storage keeps the archive color for loose objects.
-      for folder in ["Projects", "atlas", ".git", "objects"] {
-        row(folder).doubleClick()
-        text("focus-name", contains: folder)
-      }
-      XCTAssertTrue(app.buttons["map-file-7c91d04e"].waitForExistence(timeout: 8))
-      offMap()
-      screenshot("file-types-\(appearance)-objects")
-      try checkFileTypes(
-        appearance, "objects",
-        [("7c91d04e", "archive"), ("pack-1f2e.pack", "archive"), ("pack-1f2e.idx", "archive")])
-      // So does a focus inside the objects of a nested submodule, a submodule named
-      // `vendor/lib` and a bare repository.
-      for (scene, path, file) in [
-        (
-          "submodule",
-          ["Projects", "atlas", ".git", "modules", "vendor-lib", "modules", "deep-dep", "objects"],
-          "0d9e8f7a"
-        ),
-        (
-          "slash-submodule",
-          ["Projects", "atlas", ".git", "modules", "vendor", "lib", "objects"],
-          "f0e1d2c3"
-        ),
-        ("bare", ["Projects", "mirror.git", "objects"], "cdef0123"),
-      ] {
-        app.buttons["breadcrumb-0"].click()
-        text("focus-name", contains: "ana")
-        for folder in path {
-          row(folder).doubleClick()
-          text("focus-name", contains: folder)
-        }
-        XCTAssertTrue(app.buttons["map-file-\(file)"].waitForExistence(timeout: 8))
-        offMap()
-        screenshot("file-types-\(appearance)-\(scene)")
-        try checkFileTypes(appearance, scene, [(file, "archive")])
-      }
       app.terminate()
     }
   }
@@ -1431,126 +1062,34 @@ import XCTest
     }
     return (count, deep, mean(plain), mean(striped))
   }
-  /// The `.Trash` at the root is one striped region with the design's TRASH fill that selects
-  /// the Trash directory. Focused, the Trash shows its files with type colors.
-  func testRootTrashShowsTrashStripesAndSelectsTheTrashUntilFocused() throws {
-    continueAfterFailure = true
-    for appearance in Self.appearances {
-      launch("prototype-home", appearance: appearance)
-      let probe = app.descendants(matching: .any)["map-appearance"]
-      XCTAssertTrue(probe.waitForExistence(timeout: 8))
-      offMap()
-      screenshot("trash-\(appearance)-home")
-      let trash = trashPixels(try windowPixels(srgb: true), map: mapArea(), appearance: appearance)
-      let ratio =
-        trash.plain.isEmpty || trash.striped.isEmpty
-        ? 0 : Self.contrast(trash.plain, trash.striped)
-      print(
-        "TRASH \(appearance) pixels=\(trash.count) deep=\(trash.deep.count) plain=\(trash.plain) striped=\(trash.striped) ratio=\(ratio)"
-      )
-      guard trash.count > 500, trash.deep.count > 20 else {
-        XCTFail("\(appearance): no Trash stripes on the home map")
-        app.terminate()
-        continue
-      }
-      XCTAssertGreaterThan(
-        ratio, appearance.hasSuffix("contrast") ? 1.4 : 1.1, "\(appearance): visible stripes")
-      // One hit region: every point selects the Trash directory, not a file inside it.
-      let deep = trash.deep
-      for point in [deep[0], deep[deep.count / 2], deep[deep.count - 1]] {
-        click(point)
-        text("selected-name", contains: ".Trash")
-        XCTAssertEqual(statusPath(), "/Users/ana/.Trash", appearance)
-      }
-      screenshot("trash-\(appearance)-selected")
-      click(deep[deep.count / 2], double: true)
-      text("focus-name", contains: ".Trash")
-      XCTAssertTrue(app.buttons["map-file-Old clip 01.mov"].waitForExistence(timeout: 8))
-      offMap()
-      let pixels = try windowPixels(srgb: true)
-      let inside = trashPixels(pixels, map: mapArea(), appearance: appearance)
-      let video = kindShares(pixels, map: mapArea()).shares["video"] ?? 0
-      print(
-        "TRASH \(appearance) focused pixels=\(inside.count) deep=\(inside.deep.count) video=\(video)"
-      )
-      XCTAssertEqual(inside.deep.count, 0, "\(appearance): focused Trash has no striped region")
-      XCTAssertGreaterThan(video, 0.3, "\(appearance): focused Trash shows video colors")
-      screenshot("trash-\(appearance)-focused")
-      app.terminate()
-    }
-  }
-  /// A `.Trash` at any depth is one striped block at its parent's level. The block selects
-  /// that `.Trash`, and on hover the status bar names its path. Focused, the `.Trash` shows its
-  /// files in type colors.
-  func testNestedTrashIsStripedAtItsParentLevelAndColoredWhenFocused() throws {
-    continueAfterFailure = true
-    for appearance in ["dark", "light"] {
-      launch("prototype-home-nested-trash", appearance: appearance)
-      row("Projects").doubleClick()
-      text("focus-name", contains: "Projects")
-      let renders = app.buttons.matching(
-        NSPredicate(format: "identifier BEGINSWITH %@", "map-file-Render "))
-      XCTAssertTrue(renders.firstMatch.waitForExistence(timeout: 8), "\(appearance): Projects map")
-      offMap()
-      screenshot("nested-trash-\(appearance)-projects")
-      let trash = trashPixels(try windowPixels(srgb: true), map: mapArea(), appearance: appearance)
-      print("NESTED TRASH \(appearance) pixels=\(trash.count) deep=\(trash.deep.count)")
-      guard trash.count > 500, trash.deep.count > 20 else {
-        XCTFail("\(appearance): no Trash stripes for Projects/.Trash")
-        app.terminate()
-        continue
-      }
-      let middle = trash.deep[trash.deep.count / 2]
-      click(middle)
-      text("selected-name", contains: ".Trash")
-      text("selected-path", contains: "/Users/ana/Projects/.Trash")
-      hovered("/Users/ana/Projects/.Trash")
-      XCTAssertEqual(statusPath(), "/Users/ana/Projects/.Trash", appearance)
-      XCTAssertFalse(app.buttons["map-file-Old render 01.mov"].exists, "children are not drawn")
-      screenshot("nested-trash-\(appearance)-selected")
-      click(middle, double: true)
-      text("focus-name", contains: ".Trash")
-      XCTAssertTrue(app.buttons["map-file-Old render 01.mov"].waitForExistence(timeout: 8))
-      offMap()
-      let pixels = try windowPixels(srgb: true)
-      let inside = trashPixels(pixels, map: mapArea(), appearance: appearance)
-      let video = kindShares(pixels, map: mapArea()).shares["video"] ?? 0
-      print("NESTED TRASH \(appearance) focused deep=\(inside.deep.count) video=\(video)")
-      XCTAssertEqual(inside.deep.count, 0, "\(appearance): focused .Trash has no striped region")
-      XCTAssertGreaterThan(video, 0.3, "\(appearance): focused .Trash shows video colors")
-      screenshot("nested-trash-\(appearance)-focused")
-      app.terminate()
-    }
-  }
-  /// Contrast of the seam pixel against the next pixel inside the same tile on the left, top,
-  /// right and bottom edge, each the minimum over three points along the edge. The seam is the
-  /// first or second backing pixel inside the edge (the larger contrast counts), so the seam
-  /// of a neighbor outside the tile never counts.
-  func edgeContrasts(_ tile: CGRect, _ p: WindowPixels) -> [Double] {
-    func first(_ point: CGFloat, _ origin: CGFloat) -> Int {
-      Int(((point - origin) * p.scale - 0.5).rounded(.up))
-    }
-    let (x0, y0) = (first(tile.minX, p.origin.x), first(tile.minY, p.origin.y))
-    let (x1, y1) = (first(tile.maxX, p.origin.x), first(tile.maxY, p.origin.y))
-    var sides: [Double] = []
-    for side in 0..<4 {
-      var ratios: [Double] = []
-      for fraction in [0.25, 0.5, 0.75] {
-        let x = x0 + Int(Double(x1 - x0) * fraction)
-        let y = y0 + Int(Double(y1 - y0) * fraction)
-        let pairs: [((Int, Int), (Int, Int))] =
-          switch side {
-          case 0: [((x0, y), (x0 + 1, y)), ((x0 + 1, y), (x0 + 2, y))]
-          case 1: [((x, y0), (x, y0 + 1)), ((x, y0 + 1), (x, y0 + 2))]
-          case 2: [((x1 - 1, y), (x1 - 2, y)), ((x1 - 2, y), (x1 - 3, y))]
-          default: [((x, y1 - 1), (x, y1 - 2)), ((x, y1 - 2), (x, y1 - 3))]
-          }
-        ratios.append(
-          pairs.map { Self.contrast(p.rgb($0.0.0, $0.0.1), p.rgb($0.1.0, $0.1.1)) }.max()!)
-      }
-      sides.append(ratios.min()!)
-    }
-    return sides
+  /// Real clicks on a nested `.Trash`, one block at its parent's level: a click selects that
+  /// `.Trash`, the hover names its path and a double click focuses it. Its stripes and colors
+  /// are Rust pixel tests in src/bridge/tests/map_pixels.rs.
+  func testNestedTrashBlockSelectsOnClickNamesItsPathAndFocusesOnDoubleClick() throws {
+    launch("prototype-home-nested-trash", appearance: "dark")
+    row("Projects").doubleClick()
+    text("focus-name", contains: "Projects")
+    let renders = app.buttons.matching(
+      NSPredicate(format: "identifier BEGINSWITH %@", "map-file-Render "))
+    XCTAssertTrue(renders.firstMatch.waitForExistence(timeout: 8), "Projects map")
+    offMap()
+    screenshot("nested-trash-dark-projects")
+    // The stripes locate the block on screen.
+    let trash = trashPixels(try windowPixels(srgb: true), map: mapArea(), appearance: "dark")
+    let middle = try XCTUnwrap(
+      trash.deep.count > 20 ? trash.deep[trash.deep.count / 2] : nil,
+      "no Trash stripes for Projects/.Trash")
+    click(middle)
+    text("selected-name", contains: ".Trash")
+    text("selected-path", contains: "/Users/ana/Projects/.Trash")
+    hovered("/Users/ana/Projects/.Trash")
+    XCTAssertEqual(statusPath(), "/Users/ana/Projects/.Trash")
+    XCTAssertFalse(app.buttons["map-file-Old render 01.mov"].exists, "children are not drawn")
+    screenshot("nested-trash-dark-selected")
+    click(middle, double: true)
+    text("focus-name", contains: ".Trash")
+    XCTAssertTrue(app.buttons["map-file-Old render 01.mov"].waitForExistence(timeout: 8))
+    screenshot("nested-trash-dark-focused")
   }
   /// Up to six of the largest file tiles with an accessibility target and a unique name,
   /// each at least 40 points wide and high.
@@ -1571,33 +1110,6 @@ import XCTest
       tiles.filter { seen[$0.name] == 1 }
         .sorted { $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height }
         .prefix(6))
-  }
-  /// Every tile has the design's seam on all four sides: one backing pixel at x0.55
-  /// (the 0.5-point inset at 45% black). Increase Contrast keeps at least 3:1 on each side.
-  func testMapTilesHaveTheDesignSeamOnAllFourSides() throws {
-    continueAfterFailure = true
-    for appearance in Self.appearances {
-      launch("prototype-home", appearance: appearance)
-      XCTAssertTrue(app.buttons["map-file-Interview raw.mov"].waitForExistence(timeout: 8))
-      offMap()
-      let p = try windowPixels()
-      var minimum = [Double](repeating: 99, count: 4)
-      var measured = 0
-      for (name, frame) in largeTiles() {
-        measured += 1
-        let sides = edgeContrasts(frame, p)
-        print("SEAMS \(appearance) \(name) left/top/right/bottom=\(sides)")
-        minimum = zip(minimum, sides).map { min($0, $1) }
-      }
-      XCTAssertGreaterThanOrEqual(measured, 3, appearance)
-      print("SEAMS \(appearance) minimum left/top/right/bottom=\(minimum)")
-      let floor = appearance.hasSuffix("contrast") ? 3.0 : 1.8
-      for (side, ratio) in zip(["left", "top", "right", "bottom"], minimum) {
-        XCTAssertGreaterThanOrEqual(ratio, floor, "\(appearance) \(side) seam")
-      }
-      screenshot("seams-\(appearance)")
-      app.terminate()
-    }
   }
   /// Dark prototype-home against the design: tile interiors equal the CSS gradient over the
   /// kind color, and the seam darkens one backing pixel on each edge to 0.55 of the interior
@@ -1659,48 +1171,6 @@ import XCTest
     XCTAssertGreaterThanOrEqual(edgeRatios.count, 12)
     XCTAssertEqual(mean, 0.55, accuracy: 0.04, "design seam on every edge")
     screenshot("brightness-dark")
-  }
-  /// The selection dims the rest of the map by 12% black (the design uses 28%). Every
-  /// unselected seam stays visible, and the selected block keeps its white ring.
-  func testSelectionDimIsLightAndKeepsUnselectedSeamsVisible() throws {
-    continueAfterFailure = true
-    for appearance in ["dark", "light"] {
-      launch("prototype-home", appearance: appearance)
-      XCTAssertTrue(app.buttons["map-file-Interview raw.mov"].waitForExistence(timeout: 8))
-      let tiles = largeTiles()
-      guard tiles.count >= 3 else {
-        XCTFail("\(appearance): large tiles \(tiles.map(\.name))")
-        app.terminate()
-        continue
-      }
-      let (selected, others) = (tiles[0], tiles.dropFirst())
-      offMap()
-      let before = try windowPixels(srgb: true)
-      app.buttons["map-file-\(selected.name)"].click()
-      text("selected-name", contains: selected.name)
-      offMap()
-      let after = try windowPixels(srgb: true)
-      var factors: [Double] = []
-      var (seamsBefore, seamsAfter) = (99.0, 99.0)
-      for other in others {
-        let point = CGPoint(x: other.frame.midX, y: other.frame.midY)
-        let (a, b) = (after.mean(point), before.mean(point))
-        factors.append((0..<3).map { a[$0] / b[$0] }.reduce(0, +) / 3)
-        seamsBefore = min(seamsBefore, edgeContrasts(other.frame, before).min()!)
-        seamsAfter = min(seamsAfter, edgeContrasts(other.frame, after).min()!)
-      }
-      let dim = factors.reduce(0, +) / Double(factors.count)
-      // The ring: 2 points of white centered 1.5 points inside the selected block's edge.
-      let ring = after.mean(CGPoint(x: selected.frame.midX, y: selected.frame.minY + 1.5))
-      print(
-        "DIM \(appearance) factor=\(dim) per-tile=\(factors) seam-minimum-before=\(seamsBefore) seam-minimum-after=\(seamsAfter) ring=\(ring)"
-      )
-      XCTAssertEqual(dim, 0.88, accuracy: 0.03, "\(appearance): 12% dim")
-      XCTAssertGreaterThanOrEqual(seamsAfter, 1.8, "\(appearance): unselected seams stay visible")
-      XCTAssertGreaterThan(ring.min()!, 235, "\(appearance): white selection ring")
-      screenshot("selection-dim-\(appearance)")
-      app.terminate()
-    }
   }
   /// Esc clears a tree or map selection: no card, no tree highlight, no dim, no status path.
   /// An open confirmation keeps its own Esc (Cancel) and the selection.
@@ -1776,38 +1246,6 @@ import XCTest
     screenshot("status-bar-outcome-banner")
     app.buttons["dismiss-banner"].click()
     XCTAssertTrue(outcome.waitForNonExistence(timeout: 8))
-  }
-  /// Both confirmation sheets name what they remove and how, without a space disclaimer. Only
-  /// Delete says that it cannot be undone.
-  func testConfirmationSheetsKeepSafetyTextWithoutSpaceDisclaimers() {
-    launch()
-    for (target, scope) in [("large-file", "File"), ("small-files", "Directory and its contents")] {
-      for action in ["trash", "delete"] {
-        prepare(action, target: target)
-        text("confirmation-scope", contains: scope)
-        text("confirmation-path", contains: "/Workspace/\(target)")
-        for sentence in [
-          "Trash may not free space until emptied.", "Deleting may free less space than shown.",
-        ] {
-          XCTAssertFalse(anyText(containing: sentence).exists, "\(action) \(target): \(sentence)")
-        }
-        if action == "trash" {
-          text("confirmation-title", contains: "Move “\(target)” to the Trash?")
-          XCTAssertEqual(app.buttons["confirm-action"].title, "Move to Trash")
-          XCTAssertFalse(anyText(containing: "cannot be undone").exists, "Trash can be undone")
-        } else {
-          text("confirmation-title", contains: "Delete “\(target)” immediately?")
-          XCTAssertEqual(app.buttons["confirm-action"].title, "Delete Immediately")
-          text("confirmation-warning", contains: "This cannot be undone.")
-          if scope != "File" {
-            text("confirmation-warning", contains: "An error may leave some contents undeleted.")
-          }
-        }
-        screenshot("sheet-\(action)-\(target)")
-        app.buttons["cancel-action"].click()
-        XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
-      }
-    }
   }
   /// Refresh shows the scan's progress with the folder name, a live counter and Stop. Stop
   /// keeps the previous data and says so; a complete refresh applies the live change.
@@ -1908,24 +1346,6 @@ import XCTest
     XCTAssertTrue(row("Library").exists, "the survivors stay")
     screenshot("delete-stopped")
   }
-  func testTrashNamesItsPhasesAndOffersNoStop() throws {
-    launch("operation-slow")
-    row("Library").click()
-    app.buttons["trash"].click()
-    phase("Checking “Library”…")
-    XCTAssertFalse(app.buttons["stop-scan"].exists)
-    screenshot("trash-checking")
-    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
-    app.buttons["confirm-action"].click()
-    phase("Moving “Library” to the Trash…")
-    XCTAssertFalse(app.buttons["stop-scan"].exists, "Trash cannot stop")
-    XCTAssertFalse(app.staticTexts["scan-items"].exists)
-    screenshot("trash-moving")
-    phase("Updating view…", timeout: 8)
-    screenshot("trash-updating")
-    outcome(is: "Moved to Trash.", timeout: 12)
-    XCTAssertFalse(row("Library").exists)
-  }
   func testSkippedItemsShowACountAndTheirReasonsInDetails() throws {
     launch("operation-skip")
     prepare("delete", target: "Library")
@@ -1943,6 +1363,51 @@ import XCTest
     XCTAssertTrue(
       anyText(containing: "cache 02.cache: not permitted, for example locked").exists)
     screenshot("delete-skipped-details")
+  }
+  /// The names of the tree rows whose centers lie inside the tree, from one snapshot. The table
+  /// creates row views only near the visible rows.
+  func visibleRows() -> Set<String> {
+    guard let tree = try? app.outlines["entry-tree"].snapshot() else { return [] }
+    var names: Set<String> = []
+    func visit(_ element: XCUIElementSnapshot) {
+      if element.identifier.hasPrefix("entry-"), element.elementType == .staticText,
+        tree.frame.contains(CGPoint(x: element.frame.midX, y: element.frame.midY))
+      {
+        names.insert(String(element.identifier.dropFirst("entry-".count)))
+      }
+      element.children.forEach(visit)
+    }
+    visit(tree)
+    return names
+  }
+  /// After a Delete with skips, a plain Delete and a Trash, every sibling row stays visible in
+  /// the tree; a surviving selection is revealed, never scrolled past the last row.
+  func testSiblingRowsStayVisibleAfterDeleteWithSkipsDeleteAndTrash() throws {
+    continueAfterFailure = true
+    let siblings: Set = [
+      "Movies", "Downloads", "Pictures", "Projects", "Music", ".Trash", "Documents",
+    ]
+    for (scenario, action, expected, survives) in [
+      ("operation-skip", "delete", "Deleted. 3 items skipped.", true),
+      ("operation-quick", "delete", "Deleted.", false),
+      ("operation-quick", "trash", "Moved to Trash.", false),
+    ] {
+      launch(scenario)
+      prepare(action, target: "Library")
+      app.buttons["confirm-action"].click()
+      outcome(is: expected)
+      let want = survives ? siblings.union(["Library"]) : siblings
+      let deadline = Date().addingTimeInterval(8)
+      var shown = visibleRows()
+      while shown != want, Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.1)
+        shown = visibleRows()
+      }
+      screenshot("siblings-\(scenario)-\(action)")
+      XCTAssertEqual(shown, want, "\(scenario) \(action): every remaining row is visible")
+      if survives { text("selected-name", contains: "Library") }
+      app.terminate()
+    }
   }
   /// Frame sampling across repeated map clicks: the fixture-only `map-selection-gaps` probe
   /// records every drawn map frame. No frame may lose the selection dim between the old
@@ -1987,7 +1452,9 @@ import XCTest
     row("hardlink-b").click()
     text("selected-path", contains: "/Workspace/hardlink-b")
     XCTAssertFalse(app.staticTexts["sharing-note"].exists, "hard link card")
-    XCTAssertFalse(anyText(containing: "Shared space counted elsewhere").exists)
+    for note in ["Shared space counted elsewhere", "Shared or unknown size"] {
+      XCTAssertFalse(anyText(containing: note).exists, note)
+    }
     row("small-files").click()
     text("selected-path", contains: "/Workspace/small-files")
     let count = anyText(containing: " direct items")

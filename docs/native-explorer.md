@@ -128,12 +128,7 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
   position while the selected directory remains above the visible viewport.
 - "testConfirmationCancelDeleteAndStaleHandleRecovery": cancellation, confirmed
   deletion, disappeared target, dirty inventory and root protection.
-- "testTrashInsideAndOutside": real prepared Trash, the plain outcome, changed views and totals.
-- "testFailuresPartialUnknownAndSavedOnlySelection": failed/indeterminate/partial outcomes,
-  the unknown Trash scope in Details, survivors, incomplete state and selection despite
-  unavailable live metadata.
-- "testChangedTargetAndUnknownAllocation": stale target preparation and unknown
-  allocations after explicit refresh, with no sharing note.
+- "testUnknownTrashScopeIssueOpensFromTheDetailsChevron": only the chevron opens Details.
 - "testImmediateSavedOnlySelection": later selection during the
   latency scenario; XCUITest timing includes automation waits, not paint latency.
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.
@@ -147,8 +142,11 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
 - "testLongDirectoryPathAndSimpleConfirmationAtMinimumWindow": direct double-click
   from an unselected row, full long target and fixed controls at minimum window size.
 - "testLocalizedStorageInTreeSelectionAndConfirmation": en_US and pt_BR storage presentation.
-- "testResultMotionStylesTravelPoofAndReduceMotionFade": asserts travel, poof and fade
-  through the fixture-only `motion-style` probe. A probe pass does not verify rendered motion.
+
+[OperationOutcomeModelTests.swift](../native/ExplorerModelTests/OperationOutcomeModelTests.swift)
+checks Trash totals, failed, indeterminate and partial outcomes, the unknown Trash scope,
+stale targets, unknown allocations, saved-only selection and the poof. Rendered motion is
+untested; the fixture-only `motion-style` probe stays for manual checks.
 
 Fixture mode shows "SIMULATED" only in the window title; other content matches production.
 "testFixtureModeNamesSimulationOnlyInWindowTitle" checks the window and its confirmation.

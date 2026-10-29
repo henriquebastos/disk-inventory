@@ -6,20 +6,10 @@ import XCTest
 /// Dogfood feedback: the status bar hover, the Trash region, Esc, the outcome banner, refresh progress and Stop,
 /// and the selection region that caused the click flicker.
 @MainActor final class FeedbackModelTests: XCTestCase {
-  func wait(
-    _ condition: @escaping @MainActor () -> Bool, seconds: Int = 8,
-    file: StaticString = #filePath, line: UInt = #line
-  ) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(seconds))
-    while !condition(), ContinuousClock.now < deadline {
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    XCTAssertTrue(condition(), file: file, line: line)
-  }
   func load(_ scenario: String) async throws -> ExplorerModel {
     let model = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await wait { model.records != nil && !model.loading && !model.replacingSession }
+    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
     return model
   }
   func row(_ model: ExplorerModel, _ name: String) throws -> OutlineRow {
@@ -29,13 +19,13 @@ import XCTest
   func testSelectionRegionNeverClearsWhileTheNextRegionLoads() async throws {
     let model = try await load("presentation")
     model.select(try row(model, "large-file").entry)
-    try await wait { model.selectedRegion != nil }
+    try await waitUntil { model.selectedRegion != nil }
     let first = try XCTUnwrap(model.selectedRegion)
     // A tree selection keeps the shown region until the new one arrives: no frame without dim.
     model.select(try row(model, "small-files").entry)
     XCTAssertEqual(model.selectedRegion?.x, first.x)
     XCTAssertEqual(model.selectedRegion?.width, first.width)
-    try await wait { model.selectedRegion.map { $0.width != first.width } == true }
+    try await waitUntil { model.selectedRegion.map { $0.width != first.width } == true }
     // A map click publishes the clicked tile's rectangle with the selection, synchronously.
     let frame = try XCTUnwrap(model.picture?.frame)
     let hit = try XCTUnwrap(try frame.hit(x: UInt32(first.x + 2), y: UInt32(first.y + 2)))
@@ -49,18 +39,18 @@ import XCTest
     let model = try await load("prototype-home")
     let session = try XCTUnwrap(model.session)
     model.select(try row(model, "Movies").entry)
-    try await wait { model.selectedDisplayPath == "/Users/ana/Movies" }
+    try await waitUntil { model.selectedDisplayPath == "/Users/ana/Movies" }
     XCTAssertEqual(model.statusText, "", "no hover: the status bar is empty")
     let frame = try XCTUnwrap(model.picture?.frame)
     let (builds, picture) = (model.diagramBuilds, model.picture)
     let queries = session.selectionQueryCount()
     let trash = try XCTUnwrap(try frame.region(key: try row(model, ".Trash").entry.key))
     model.point(UInt32(trash.x + trash.width / 2), UInt32(trash.y + trash.height / 2))
-    try await wait { model.hover?.entry.displayName == ".Trash" }
+    try await waitUntil { model.hover?.entry.displayName == ".Trash" }
     XCTAssertEqual(model.statusText, "/Users/ana/.Trash")
     let target = try XCTUnwrap(model.picture?.targets.first { $0.entry.kind == .file })
     model.point(UInt32(target.rect.x + 2), UInt32(target.rect.y + 2))
-    try await wait { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
+    try await waitUntil { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
     XCTAssertEqual(model.statusText, "/Users/ana/" + displayPath(target.relativePath))
     // The selection, its path, the picture and the session stay: a hover is not a selection.
     XCTAssertEqual(model.selected?.displayName, "Movies")
@@ -85,7 +75,7 @@ import XCTest
     for (fx, fy) in [(0.2, 0.3), (0.5, 0.5), (0.8, 0.7)] {
       model.point(
         UInt32(region.x + region.width * fx), UInt32(region.y + region.height * fy), click: true)
-      try await wait { model.selected?.displayName == ".Trash" }
+      try await waitUntil { model.selected?.displayName == ".Trash" }
       XCTAssertNil(model.aggregate, "the Trash region is not an aggregate")
       model.clearSelection()
     }
@@ -93,7 +83,7 @@ import XCTest
     model.point(
       UInt32(region.x + region.width / 2), UInt32(region.y + region.height / 2),
       click: true, doubleClick: true)
-    try await wait { model.records?.focus.displayName == ".Trash" && !model.loading }
+    try await waitUntil { model.records?.focus.displayName == ".Trash" && !model.loading }
     let inside = try XCTUnwrap(model.picture?.frame)
     let clip = try XCTUnwrap(try inside.hit(x: 4, y: 4))
     XCTAssertTrue(clip.actionable)
@@ -103,7 +93,7 @@ import XCTest
   func testClearSelectionResetsItemRegionCardAndRowOnly() async throws {
     let model = try await load("presentation")
     model.select(try row(model, "large-file").entry)
-    try await wait { model.selectedRegion != nil && model.selectionPath == "large-file" }
+    try await waitUntil { model.selectedRegion != nil && model.selectionPath == "large-file" }
     let (focus, builds, tree) = (model.records?.focus.key, model.diagramBuilds, model.tree)
     XCTAssertTrue(model.canClearSelection)
     model.clearSelection()
@@ -151,7 +141,7 @@ import XCTest
   func testControlledRefreshNamesTheFolderCountsAndStopKeepsTheView() async throws {
     let model = try await load("prototype-home-refresh")
     model.focus(try row(model, "Library").entry.key)
-    try await wait { model.records?.focus.displayName == "Library" && !model.loading }
+    try await waitUntil { model.records?.focus.displayName == "Library" && !model.loading }
     let (picture, tree, builds) = (model.picture?.frame, model.tree, model.diagramBuilds)
     let total = model.records?.focus.subtreeBytes
     XCTAssertTrue(ExplorerCommand.refreshDirectory.isEnabled(in: model))
@@ -159,12 +149,12 @@ import XCTest
     XCTAssertTrue(model.working)
     XCTAssertEqual(model.scan.label, "Refreshing “Library”…")
     // The 300 ms fixture latency per directory gives a live counter.
-    try await wait { (model.scan.progress?.itemsExamined ?? 0) > 0 }
+    try await waitUntil { (model.scan.progress?.itemsExamined ?? 0) > 0 }
     let first = try XCTUnwrap(model.scan.progress?.itemsExamined)
-    try await wait { (model.scan.progress?.itemsExamined ?? 0) > first }
+    try await waitUntil { (model.scan.progress?.itemsExamined ?? 0) > first }
     XCTAssertTrue(ExplorerCommand.stopScan.isEnabled(in: model))
     ExplorerCommand.stopScan.perform(in: model)
-    try await wait { !model.working }
+    try await waitUntil { !model.working }
     XCTAssertEqual(model.outcome, "Refresh of “Library” stopped. The previous data is unchanged.")
     XCTAssertNil(model.error)
     XCTAssertNil(model.scan.progress)
@@ -180,13 +170,13 @@ import XCTest
   func testControlledRefreshAppliesLiveChangesAndRebuilds() async throws {
     let model = try await load("prototype-home-refresh")
     model.focus(try row(model, "Library").entry.key)
-    try await wait { model.records?.focus.displayName == "Library" && !model.loading }
+    try await waitUntil { model.records?.focus.displayName == "Library" && !model.loading }
     model.select(try row(model, "Caches").entry)
-    try await wait { model.selectedRegion != nil }
+    try await waitUntil { model.selectedRegion != nil }
     let total = try XCTUnwrap(model.records?.focus.subtreeBytes)
     let builds = model.diagramBuilds
     model.refresh()
-    try await wait({ !model.working && !model.loading }, seconds: 20)
+    try await waitUntil({ !model.working && !model.loading }, seconds: 20)
     XCTAssertEqual(model.outcome, "Refreshed “Library”.")
     XCTAssertEqual(model.records?.focus.subtreeBytes, total + 2_000_000_000)
     XCTAssertEqual(model.diagramBuilds, builds + 1)

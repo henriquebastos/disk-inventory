@@ -3,13 +3,6 @@ import XCTest
 @testable import DiskInventory
 
 @MainActor final class ExplorerModelTests: XCTestCase {
-  func waitUntil(_ predicate: @escaping () -> Bool) async throws {
-    for _ in 0..<1000 {
-      if predicate() { return }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    XCTFail("Timed out waiting for real bridge work")
-  }
   func model(_ scenario: String) async throws -> ExplorerModel {
     let model = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
@@ -23,7 +16,7 @@ import XCTest
     let session = try XCTUnwrap(model.session)
     let key = try entry("large-file", model).key
     let task = Task.detached { try session.liveMetadata(key: key) }
-    try await waitUntil { session.isBusy() }
+    try await pollUntil { session.isBusy() }
     return task
   }
   func testImmediateSelectionWhileRustBusyDiscardsObsoletePath() async throws {
@@ -200,7 +193,7 @@ import XCTest
     // isBusy below belongs to explicit preparation, not saved-data selection.
     model.selected = try entry("large-file", model)
     let preparation = try XCTUnwrap(model.prepare(.trash))
-    try await waitUntil { oldSession.isBusy() }
+    try await pollUntil { oldSession.isBusy() }
     model.load { try ExplorerSession.fixture(scenario: "ordinary") }
     try await waitUntil { model.session !== oldSession && model.records != nil && !model.loading }
     await preparation.value
@@ -225,7 +218,7 @@ import XCTest
     let token = model.outlineToken
     let blocker = try await holdBridge(model)
     let recovery = Task { await model.recoverView(session, preserving: removed.key) }
-    try await waitUntil { model.tree == nil && session.activeCallCount() >= 2 }
+    try await pollUntil { model.tree == nil && session.activeCallCount() >= 2 }
     let size = CGSize(width: model.viewport.width + 80, height: model.viewport.height + 60)
     model.resize(size)
     // Cross the actual 180 ms debounce while the fixture still holds its one-second lock.
@@ -259,7 +252,7 @@ import XCTest
     let blocker = try await holdBridge(model)
     // Observe invalidation while the metadata lock still blocks recovery, not its later publication.
     let recovery = Task { await model.recoverView(session) }
-    try await waitUntil { model.tree == nil && model.loading && session.activeCallCount() >= 2 }
+    try await pollUntil { model.tree == nil && model.loading && session.activeCallCount() >= 2 }
     XCTAssertTrue(session.isBusy())
     XCTAssertNotNil(model.selected)
     model.focus(directory)

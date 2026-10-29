@@ -174,9 +174,9 @@ Discover entries through bounded queries: `small-files/small-00` through
   236,900,003,996 bytes, and a path-and-size checksum equal to the prototype's own `data()`.
 - "prototype_home_extensions_get_the_prototype_kind_colors": every file gets its kind color.
 
-The UI test "testPrototypeHomeMapShowsEveryKindColorAndPresentationStaysGray" in
-[ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift) measures all eight
-colored kinds on the `prototype-home` map, and a gray `presentation` map, in light and dark.
+"prototype_home_map_shows_every_kind_color_and_presentation_stays_gray" in
+[map_pixels.rs](../src/bridge/tests/map_pixels.rs) measures all eight colored kinds on the
+`prototype-home` map, and a gray `presentation` map, in light and dark.
 
 The Swift smoke exercises these conversions and operation flows, plus one owned
 one-file create followed by unavailable-source open, never native Trash or deletion. Native GUI/XCUITest behavior

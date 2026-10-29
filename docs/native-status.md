@@ -125,19 +125,18 @@ real runner:
 - "testStatusBarShowsTheHoveredBlockAlsoWhileAnItemIsSelected": empty with the pointer off the
   map, also with a selection; the hovered file path while another item is selected; "Grouped
   in" for a grouped block; no old default text; the outcome in the banner over the map; Dismiss.
-- "testNestedTrashIsStripedAtItsParentLevelAndColoredWhenFocused" includes the status bar path
-  of a hovered `.Trash` block.
-- "testSelectionDimIsLightAndKeepsUnselectedSeamsVisible": the 0.88 dim factor, seams of at
-  least 1.8:1 after selection, and the white ring, in dark and light.
+- "testNestedTrashBlockSelectsOnClickNamesItsPathAndFocusesOnDoubleClick": a click selects a
+  nested `.Trash`, its hover names its path, a double click focuses it.
 - "testRepeatedMapClicksNeverDrawAFrameWithoutTheSelectionDim": 40 map clicks, zero gaps.
 - "testEscapeClearsTheSelectionInTreeAndMap": Esc after a tree and a map selection, no dim
   after Esc, and the sheet's Esc priority.
 - "testRefreshShowsNamedProgressWithCounterAndStopKeepsData": the named phase, a rising
   counter, Stop with unchanged data, then a complete refresh with the new file.
-- "testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop",
-  "testTrashNamesItsPhasesAndOffersNoStop" and
-  "testSkippedItemsShowACountAndTheirReasonsInDetails": each named phase without
-  "Working…", a rising removed counter, Stop on Delete only, the stopped and skipped banners.
+- "testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop" and
+  "testSkippedItemsShowACountAndTheirReasonsInDetails": each named phase without "Working…", a
+  rising removed counter, Stop, the stopped and skipped banners.
+- "testSiblingRowsStayVisibleAfterDeleteWithSkipsDeleteAndTrash": after each outcome every
+  remaining tree row is visible; a surviving selection never scrolls past the last row.
 - "testHeaderAndCardShowOnlySizesAndCountsWithoutAccountingNotes": the header size alone; file,
   hard-link, directory and grouped cards without accounting or sharing notes.
 - "testRefreshHelpTagHasNoSnapshotNoteAndBadgesHaveNoHelpTags": the Incomplete and Not saved
@@ -156,8 +155,11 @@ the session selection-query count stay during a hover),
 "testTrashRegionSelectsTheTrashDirectory", and, held at each stage by the
 `operation-paused` gate, "testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop",
 "testStopDuringDeleteSaysHowManyWereDeletedAndStopBeforeChangesNothing",
-"testTrashNamesItsPhasesAndOffersNoStop" and
+"testTrashNamesItsPhasesAndOffersNoStop" (no Stop for a Trash) and
 "testSkippedItemsReadAsDeletedWithACountAndReasonsInDetails".
+[MapDrawingModelTests.swift](../native/ExplorerModelTests/MapDrawingModelTests.swift):
+"testSelectionDimIsLightAndKeepsUnselectedSeamsVisible" draws the 0.88 dim factor, seams of at
+least 1.8:1 after selection and the white ring offscreen, in dark and light.
 
 The `prototype-home-refresh` fixture in [fixture.rs](../src/bridge/fixture.rs) adds 300 ms to
 each directory metadata request and one live file, `Library/Caches/new cache.db`. The

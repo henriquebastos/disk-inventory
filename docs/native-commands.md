@@ -135,14 +135,12 @@ permanent-delete Undo.
 - "testTrashConfirmationReturnConfirmsWithCancelBelowAction": Return trashes.
 - "testPermanentConfirmationHasNoDefaultAndEscapeCancels": Return does nothing, Esc
   cancels, then deletion succeeds.
-- "testConfirmationSheetsKeepSafetyTextWithoutSpaceDisclaimers": for a file and a directory,
-  both alerts show the scope and the path and no space sentence. Trash names the Trash in the
-  title and the button. Delete says "This cannot be undone." and, for a directory, the error
-  sentence.
 
 "testConfirmationPresentationNamesItemAndAssignsAlertRoles" in
-[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift)
-checks confirmation text and button roles.
+[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift) builds both
+alerts for a file and a directory: the scope, the path and no space sentence; Trash names the
+Trash in the title and the button; Delete says "This cannot be undone." and, for a directory,
+the error sentence; and the button roles.
 
 Untested limits: the header menu in the GUI (fixture mode disables it), Command-Period
 during a live scan in the GUI (fixture mode cannot

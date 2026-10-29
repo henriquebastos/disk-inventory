@@ -128,27 +128,35 @@ Model tests in
   session, tree query, rows and selection stay.
 - "testTreeUsesInsetContentStyleAndAdaptiveDirectorySwatch".
 
+Rust pixel tests in [map_pixels.rs](../src/bridge/tests/map_pixels.rs) measure the bitmap at the
+size of the map in the default window, in all four values unless noted:
+
+- "presentation_hatch_follows_appearance_and_increase_contrast_strengthens_its_stripes": light
+  stripes on a light window, dark stripes on a dark window, stronger with a contrast value.
+- "presentation_large_file_seam_is_the_design_inset_and_darker_with_increase_contrast": at least
+  3:1 with a contrast value, 1.8 to 3:1 without.
+- "prototype_home_tiles_have_the_design_seam_on_all_four_sides": each edge of the largest tiles.
+- "prototype_home_root_trash_is_one_striped_region_until_focused" and
+  "prototype_home_nested_trash_is_striped_at_its_parent_level_until_focused": visible TRASH
+  stripes in one region; focused, no `.Trash` pixel and over 30% video colors.
+- "prototype_home_map_shows_every_kind_color_and_presentation_stays_gray" (light and dark).
+- "file_type_colors_fixture_keeps_type_colors_in_light_and_dark_and_inside_object_folders": each
+  tile has its kind's hue and the controls stay gray, also with the focus on `.git/objects`, a
+  nested or slash-named submodule's `objects` or a bare repository's `objects`.
+
+[MapDrawingModelTests.swift](../native/ExplorerModelTests/MapDrawingModelTests.swift) draws the
+map view offscreen at 2x: "testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast"
+(black in light contrast, white in dark contrast, 70% white without) and
+"testSelectionDimIsLightAndKeepsUnselectedSeamsVisible" (in [native-status.md](native-status.md)).
+
 UI tests in [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift) read the
 real runner's screenshots:
 
 - "testAppearanceVariantsRenderMapChromeAndSheets": the probe for each value, with overview,
   selection, hover and both alert sheets.
-- "testMapHatchFollowsAppearance": light stripes on a light window, dark stripes on a dark
-  window, stronger stripes with a contrast value.
-- "testIncreasedContrastDarkensMapSeams": at least 3:1 with a contrast value, 1.8 to 3:1 without.
-- "testMapTilesHaveTheDesignSeamOnAllFourSides": each edge of the largest tiles, all four values.
-- "testRootTrashShowsTrashStripesAndSelectsTheTrashUntilFocused": TRASH stripes in all four
-  values, one region that selects `.Trash`, and type colors after a Trash focus.
-- "testNestedTrashIsStripedAtItsParentLevelAndColoredWhenFocused": `Projects/.Trash` is
-  striped at the `Projects` focus and selects that `.Trash`; focused, it shows video colors.
 - "testPrototypeHomeDarkMapMatchesTheDesignBrightness": CSS-gradient interiors and a 0.55 edge
-  ratio.
-- "testNewExtensionsAndContextFoldersReplaceGrayTilesWithTypeColors": in `file-type-colors`, light
-  and dark, each tile has its kind's hue and the controls stay gray, also with the focus on
-  `.git/objects`, a nested or slash-named submodule's `objects` or a bare repository's `objects`.
-- "testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast": black in light
-  contrast, white in dark contrast, 70% white without contrast.
-- "testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch".
+  ratio, which shows that the window draws the bitmap 1:1.
+- "testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch" runs in all four values.
 - "testMapTileBaseColorMatchesTreeSwatchOnScreen": the sRGB map shows the swatch color exactly.
 - "testCaptionAndSecondaryTextMeetFourAndAHalfToOne": card count, path and grouped size,
   status bar and start-screen text.

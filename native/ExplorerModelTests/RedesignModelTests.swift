@@ -5,13 +5,6 @@ import XCTest
 @testable import DiskInventory
 
 @MainActor final class RedesignModelTests: XCTestCase {
-  func wait(_ predicate: @escaping () -> Bool) async throws {
-    for _ in 0..<1000 {
-      if predicate() { return }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    XCTFail("Timed out waiting for redesign state")
-  }
   func ownedRoot() throws -> URL {
     let base = try XCTUnwrap(
       ProcessInfo.processInfo.environment["DI_TEST_ROOT"],
@@ -26,7 +19,7 @@ import XCTest
   func fixture(_ scenario: String = "dix") async throws -> ExplorerModel {
     let model = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await wait { !model.loading && !model.replacingSession && model.records != nil }
+    try await waitUntil { !model.loading && !model.replacingSession && model.records != nil }
     return model
   }
   func entry(_ name: String, in model: ExplorerModel) throws -> EntryRecord {
@@ -53,7 +46,7 @@ import XCTest
     }
     let map = try XCTUnwrap(map(in: host))
     func assertSettled() async throws {
-      try await wait {
+      try await waitUntil {
         host.layoutSubtreeIfNeeded()
         let scale = window.backingScaleFactor
         return !model.loading && !model.replacingSession
@@ -83,7 +76,7 @@ import XCTest
         windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
     )
     map.mouseDown(with: click)
-    try await wait { model.selected?.key.sameEntry(other: target.entry.key) == true }
+    try await waitUntil { model.selected?.key.sameEntry(other: target.entry.key) == true }
     let tiny = try entry("Tiny files", in: model)
     model.focus(tiny.key)
     try await assertSettled()
@@ -115,7 +108,7 @@ import XCTest
       try FileManager.default.moveItem(
         at: source, to: root.appendingPathComponent(name + "-unavailable"))
       model.load { try ExplorerSession.openSnapshot(snapshotPath: snapshotBytes) }
-      try await wait { !model.replacingSession }
+      try await waitUntil { !model.replacingSession }
       let records = try XCTUnwrap(model.records)
       XCTAssertEqual(records.breadcrumbName(records.focus), name)
       XCTAssertEqual(records.breadcrumbHelp(records.focus), source.path)
@@ -125,7 +118,7 @@ import XCTest
       XCTAssertEqual(rootRecords.breadcrumbName(rootRecords.focus), "/")
       XCTAssertEqual(rootRecords.breadcrumbHelp(rootRecords.focus), "/")
       model.focus(try entry("same-child", in: model).key)
-      try await wait { !model.loading }
+      try await waitUntil { !model.loading }
       let nested = try XCTUnwrap(model.records)
       let ancestor = try XCTUnwrap(nested.ancestors.first)
       XCTAssertEqual(nested.breadcrumbName(ancestor), name)
@@ -143,9 +136,9 @@ import XCTest
     let model = ExplorerModel(
       arguments: [], environment: [:], storage: ManagedInventoryStorage(root: root))
     model.load { try ExplorerSession.fixture(scenario: "presentation") }
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     model.select(try entry("large-file", in: model))
-    try await wait { model.selectionRawPath != nil }
+    try await waitUntil { model.selectionRawPath != nil }
     let relative = Data("folder/name % é".utf8)
     model.selectionRawPath = relative
     var expected = model.records!.status.rootPath
@@ -199,7 +192,7 @@ import XCTest
     let storage = ManagedInventoryStorage(root: root.appendingPathComponent("support"))
     let model = ExplorerModel(arguments: [], environment: [:], storage: storage)
     model.createManaged(root: source)
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     XCTAssertNil(model.error)
     let first = try XCTUnwrap(model.lastInventory)
     XCTAssertNotNil(model.scanDate)
@@ -209,7 +202,7 @@ import XCTest
     let foreign = root.appendingPathComponent("foreign.dmap")
     try FileManager.default.copyItem(at: storage.url(for: first), to: foreign)
     model.createManaged(root: source)
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     let last = try XCTUnwrap(model.lastInventory)
     XCTAssertNotEqual(first.filename, last.filename)
     XCTAssertFalse(FileManager.default.fileExists(atPath: storage.url(for: first).path))
@@ -220,7 +213,7 @@ import XCTest
     XCTAssertTrue(FileManager.default.fileExists(atPath: storage.url(for: last).path))
     try FileManager.default.moveItem(at: source, to: root.appendingPathComponent("offline-source"))
     model.reopenLastFolder()
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     XCTAssertNil(model.error)
     XCTAssertEqual(model.scanDate, last.scannedAt)
     XCTAssertNotNil(try entry("owned.txt", in: model))
@@ -299,7 +292,7 @@ import XCTest
     let fixture = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", "presentation"], environment: environment)
     defer { fixture.shutdown() }
-    try await wait {
+    try await waitUntil {
       fixture.lastInventory != nil && fixture.records != nil && !fixture.replacingSession
     }
     XCTAssertEqual(fixture.lastInventory?.filename, record.filename)
@@ -320,7 +313,7 @@ import XCTest
     let injected = ManagedInventoryStorage(root: other)
     let production = ExplorerModel(arguments: [], environment: environment, storage: injected)
     defer { production.shutdown() }
-    try await wait { plain.records != nil && !plain.replacingSession }
+    try await waitUntil { plain.records != nil && !plain.replacingSession }
     try await Task.sleep(for: .milliseconds(200))
     XCTAssertNil(plain.lastInventory)
     XCTAssertNil(production.lastInventory)
@@ -336,14 +329,14 @@ import XCTest
     let storage = ManagedInventoryStorage(root: root.appendingPathComponent("support"))
     let model = ExplorerModel(arguments: [], environment: [:], storage: storage)
     model.createManaged(root: source)
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     let first = try XCTUnwrap(model.lastInventory)
     let bytes = try Data(contentsOf: storage.url(for: first))
     let previousSession = model.session
     let control = ScanControl()
     XCTAssertTrue(control.cancel())  // Deterministic cancellation before constructor dispatch.
     model.createManaged(root: source, control: control)
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     XCTAssertEqual(control.progress().phase, .cancelled)
     XCTAssertTrue(model.error?.contains("cancelled") == true)
     XCTAssertTrue(model.session === previousSession)
@@ -351,7 +344,7 @@ import XCTest
     XCTAssertEqual(try Data(contentsOf: storage.url(for: first)), bytes)
     XCTAssertFalse(model.scan.polling)
     model.createManaged(root: root.appendingPathComponent("missing"))
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     XCTAssertNotNil(model.error)
     XCTAssertEqual(try Data(contentsOf: storage.url(for: first)), bytes)
     XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: storage.root.path).count, 2)
@@ -386,7 +379,7 @@ import XCTest
     model.scan.begin(control)
     model.load { try ExplorerSession.fixture(scenario: "ordinary") }
     XCTAssertEqual(control.progress().phase, .stopping)
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     XCTAssertFalse(model.scan.polling)
   }
 
@@ -395,35 +388,35 @@ import XCTest
     let root = model.records!.focus.key
     let projects = try entry("Projects", in: model)
     model.expand(projects, expanded: true)
-    try await wait { !model.treeEditing }
+    try await waitUntil { !model.treeEditing }
     let child = try XCTUnwrap(model.outline?.rows.first { $0.depth == 1 }?.entry)
     model.select(child)
-    try await wait { model.selectedRow != nil && model.selectionPath != nil }
+    try await waitUntil { model.selectedRow != nil && model.selectionPath != nil }
     model.expand(projects, expanded: false)
-    try await wait { !model.treeEditing }
+    try await waitUntil { !model.treeEditing }
     XCTAssertNil(model.selectedRow)
     let tree = model.tree
     model.scrollRow = 1
     model.focus(projects.key)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     let inside = try XCTUnwrap(model.outline?.rows.first?.entry)
     model.select(inside)
-    try await wait { model.selectedRow != nil }
+    try await waitUntil { model.selectedRow != nil }
     model.scrollRow = 250
     model.focus(root)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     XCTAssertTrue(model.tree === tree)
     XCTAssertTrue(model.selected!.key.sameEntry(other: child.key))
     XCTAssertNil(model.selectedRow)
     XCTAssertEqual(model.restoredScrollRow, 1)
     model.focus(projects.key)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     XCTAssertTrue(model.selected!.key.sameEntry(other: inside.key))
     XCTAssertEqual(model.restoredScrollRow, 250)
     model.focus(root)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     model.revealSelection()
-    try await wait { model.selectedRow != nil }
+    try await waitUntil { model.selectedRow != nil }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
     XCTAssertLessThanOrEqual(model.outline!.rows.count, 256)
     XCTAssertLessThanOrEqual(model.history.count, 64)
@@ -438,13 +431,13 @@ import XCTest
     let storage = ManagedInventoryStorage(root: root.appendingPathComponent("support"))
     let model = ExplorerModel(arguments: [], environment: [:], storage: storage)
     model.createManaged(root: source)
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     let record = try XCTUnwrap(model.lastInventory)
     let bytes = try Data(contentsOf: storage.url(for: record))
     model.select(try entry("nested", in: model))
     try Data([4]).write(to: source.appendingPathComponent("new-sibling"))
     model.refresh()
-    try await wait { !model.working }
+    try await waitUntil { !model.working }
     XCTAssertNotNil(try entry("new-sibling", in: model))
     XCTAssertTrue(model.records?.status.dirty == true)
     XCTAssertEqual(
@@ -487,11 +480,11 @@ import XCTest
     let previous = model.picture!
     let motionPlan = try XCTUnwrap(plan(.removed))
     let animation = Task { await model.motion.play(previous: previous, plan: motionPlan) }
-    try await wait { model.motion.active }
+    try await waitUntil { model.motion.active }
     model.load { try ExplorerSession.fixture(scenario: "ordinary") }
     XCTAssertFalse(model.motion.active)
     await animation.value
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     XCTAssertFalse(model.motion.active)
     XCTAssertNil(model.motion.previous)
   }
@@ -499,19 +492,19 @@ import XCTest
   func testSuccessfulRemovalHoldsOnlyOneOldFrameAndReplacementCancelsMotion() async throws {
     let model = try await fixture("presentation")
     model.select(try entry("large-file", in: model))
-    try await wait { model.selectedRegion != nil }
+    try await waitUntil { model.selectedRegion != nil }
     let old = model.picture!.frame
     model.prepare(.permanentlyDelete)
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     model.execute()
-    try await wait { model.motion.active }
+    try await waitUntil { model.motion.active }
     XCTAssertEqual(model.outcome, "Deleted.")
     XCTAssertTrue(model.motion.previous?.frame === old)
     XCTAssertTrue(model.working)
     model.point(0, 0, click: true)
     model.load { try ExplorerSession.fixture(scenario: "ordinary") }
     XCTAssertFalse(model.motion.active)
-    try await wait { !model.replacingSession }
+    try await waitUntil { !model.replacingSession }
     try await Task.sleep(for: .milliseconds(300))
     XCTAssertNil(model.motion.previous)
     XCTAssertNil(model.selected)
@@ -525,10 +518,23 @@ import XCTest
       model.select(try entry(name, in: model))
       for action in [ActionKind.trash, .permanentlyDelete] {
         model.prepare(action)
-        try await wait { model.pending != nil }
+        try await waitUntil { model.pending != nil }
         let pending = try XCTUnwrap(model.pending)
         XCTAssertEqual(pending.name, name)
         XCTAssertEqual(pending.scope, scope)
+        XCTAssertEqual(displayPath(pending.details.rawPath), "/Workspace/\(name)")
+        // The sheet shows these texts and names what it removes, without a space disclaimer.
+        let alert = ConfirmationAlert.Coordinator.alert(for: pending)
+        XCTAssertEqual(alert.messageText, pending.title)
+        XCTAssertEqual(alert.informativeText, pending.warning ?? "")
+        XCTAssertEqual(alert.buttons.map(\.title), [pending.actionTitle, "Cancel"])
+        let texts = [alert.messageText, alert.informativeText, pending.scope, pending.actionTitle]
+        for sentence in [
+          "Trash may not free space until emptied.", "Deleting may free less space than shown.",
+          "If Trash fails",
+        ] {
+          XCTAssertFalse(texts.contains { $0.contains(sentence) }, "\(name): \(sentence)")
+        }
         if action == .trash {
           XCTAssertEqual(pending.title, "Move “\(name)” to the Trash?")
           XCTAssertEqual(pending.actionTitle, "Move to Trash")
@@ -551,7 +557,7 @@ import XCTest
         }
         model.cancelConfirmation()
         XCTAssertNil(model.pending)
-        try await wait { model.canAct }
+        try await waitUntil { model.canAct }
       }
     }
   }
@@ -560,9 +566,9 @@ import XCTest
     let model = try await fixture("partial-deletion")
     model.select(try entry("small-files", in: model))
     model.prepare(.permanentlyDelete)
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     model.execute()
-    try await wait { !model.working }
+    try await waitUntil { !model.working }
     XCTAssertTrue(model.outcome?.contains("Partial") == true)
     XCTAssertEqual(model.selected?.displayName, "small-files")
     XCTAssertFalse(model.motion.active)
@@ -589,15 +595,16 @@ import XCTest
       environment: ["DI_REDUCE_MOTION": "1"])
     XCTAssertTrue(model.fixtureReduceMotion)
     XCTAssertTrue(model.reduceMotion)
-    try await wait { !model.loading && !model.replacingSession && model.records != nil }
+    try await waitUntil { !model.loading && !model.replacingSession && model.records != nil }
     model.select(try entry("large-file", in: model))
-    try await wait { model.selectedRegion != nil }
+    try await waitUntil { model.selectedRegion != nil }
     model.prepare(.permanentlyDelete)
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     model.execute()
-    try await wait { !model.working }
+    try await waitUntil { !model.working }
     XCTAssertEqual(model.motion.lastStyle, .fade)
-    XCTAssertGreaterThan(model.motion.lastTicks, 1)
+    // A 200 ms clock ticks about every 16 ms; one tick would be a jump, not motion.
+    XCTAssertGreaterThanOrEqual(model.motion.lastTicks, 4)
   }
 
   func testRecoveryPublishesBoundedSliceAndScrollForLateSurvivor() async throws {
@@ -633,7 +640,7 @@ import XCTest
     XCTAssertLessThanOrEqual(slice.rows.count, 256)
     XCTAssertGreaterThan(slice.offset, 0)
     XCTAssertTrue(slice.rows.contains { $0.entry.key.sameEntry(other: survivor.key) })
-    try await wait {
+    try await pollUntil {
       host.layoutSubtreeIfNeeded()
       return table.selectedRow == row && table.visibleRect.intersects(table.rect(ofRow: row))
     }
@@ -649,7 +656,7 @@ import XCTest
     let movie = try entry("Movie.mov", in: model)
     let tiny = try entry("Tiny files", in: model)
     model.focus(tiny.key)
-    try await wait { !model.loading }
+    try await waitUntil { !model.loading }
     let serial = model.revealSerial
     await model.recoverView(session, preserving: movie.key)
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: tiny.key))
@@ -665,14 +672,14 @@ import XCTest
     let model = try await fixture("metadata-delay")
     let target = try entry("large-file", in: model)
     model.select(target)
-    try await wait { model.selectedRow != nil && model.selectionRawPath != nil }
+    try await waitUntil { model.selectedRow != nil && model.selectionRawPath != nil }
     let session = try XCTUnwrap(model.session)
     let token = model.outlineToken
     let rows = try XCTUnwrap(model.outline).total
     let blocker = Task.detached { try session.liveMetadata(key: target.key) }
-    try await wait { session.isBusy() }
+    try await pollUntil { session.isBusy() }
     let recovery = Task { await model.recoverView(session, preserving: target.key) }
-    try await wait { model.tree == nil && model.loading }
+    try await waitUntil { model.tree == nil && model.loading }
     XCTAssertTrue(model.outlineToken === token)
     XCTAssertEqual(model.outline?.total, rows)
     XCTAssertFalse(model.canAct)
@@ -720,7 +727,7 @@ import XCTest
       }
       host.layoutSubtreeIfNeeded()
       let map = try XCTUnwrap(map(in: host))
-      try await wait {
+      try await waitUntil {
         host.layoutSubtreeIfNeeded()
         return !model.loading && model.picture?.bitmap.height == UInt32(model.viewport.height)
           && model.viewport.height == floor(map.bounds.height * window.backingScaleFactor)
@@ -730,9 +737,9 @@ import XCTest
       let viewport = model.viewport
       let builds = model.diagramBuilds
       model.select(try entry("large-file", in: model))
-      try await wait { model.selectedRegion != nil }
+      try await waitUntil { model.selectedRegion != nil }
       model.prepare(action)
-      try await wait { model.pending != nil }
+      try await waitUntil { model.pending != nil }
       model.execute()
       while model.working {
         host.layoutSubtreeIfNeeded()
@@ -755,11 +762,11 @@ import XCTest
   func testInsideTrashTravelsBetweenMateriallyDistinctRegions() async throws {
     let model = try await fixture("presentation-trash-inside")
     model.select(try entry("large-file", in: model))
-    try await wait { model.selectedRegion != nil }
+    try await waitUntil { model.selectedRegion != nil }
     model.prepare(.trash)
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     model.execute()
-    try await wait { model.motion.plan != nil || !model.working }
+    try await waitUntil { model.motion.plan != nil || !model.working }
     let plan = try XCTUnwrap(model.motion.plan)
     XCTAssertEqual(plan.style, .travel)
     let destination = try XCTUnwrap(plan.destination)
@@ -767,23 +774,24 @@ import XCTest
       hypot(
         destination.x + destination.width / 2 - plan.source.x - plan.source.width / 2,
         destination.y + destination.height / 2 - plan.source.y - plan.source.height / 2), 80)
-    try await wait { !model.working }
+    try await waitUntil { !model.working }
     XCTAssertEqual(model.motion.lastStyle, .travel)
+    XCTAssertGreaterThanOrEqual(model.motion.lastTicks, 4)
     XCTAssertEqual(model.selected?.displayName, "moved")
   }
 
   func testInsideTrashTravelsToTheMovedTileBeyondAccessibilityTargets() async throws {
     let model = try await fixture("presentation-trash-late-target")
     model.select(try entry("large-file", in: model))
-    try await wait { model.selectedRegion != nil }
+    try await waitUntil { model.selectedRegion != nil }
     model.prepare(.trash)
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     model.execute()
-    try await wait { model.motion.plan != nil || !model.working }
+    try await waitUntil { model.motion.plan != nil || !model.working }
     XCTAssertEqual(try XCTUnwrap(model.motion.plan).style, .travel)
     // This fixture places the destination after 128 small files, outside the 24 targets.
     XCTAssertFalse(model.picture!.targets.contains { $0.relativePath == Data("trash/moved".utf8) })
-    try await wait { !model.working }
+    try await waitUntil { !model.working }
     XCTAssertEqual(model.motion.lastStyle, .travel)
     XCTAssertEqual(model.selected?.displayName, "moved")
   }

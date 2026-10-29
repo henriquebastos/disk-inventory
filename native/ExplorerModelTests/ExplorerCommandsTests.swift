@@ -5,19 +5,10 @@ import XCTest
 @testable import DiskInventory
 
 @MainActor final class ExplorerCommandsTests: XCTestCase {
-  func wait(
-    _ condition: @escaping @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line
-  ) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-    while !condition(), ContinuousClock.now < deadline {
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    XCTAssertTrue(condition(), file: file, line: line)
-  }
   func fixture(_ scenario: String = "presentation") async throws -> ExplorerModel {
     let model = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await wait { model.records != nil && !model.loading && !model.replacingSession }
+    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
     return model
   }
   func entry(_ name: String, in model: ExplorerModel) throws -> EntryRecord {
@@ -136,10 +127,10 @@ import XCTest
       enabled: [.refreshDirectory, .moveToTrash, .deleteImmediately, .openSelectedDirectory],
       "directory")
     ExplorerCommand.openSelectedDirectory.perform(in: model)
-    try await wait { !model.loading && model.records?.focus.displayName == "small-files" }
+    try await waitUntil { !model.loading && model.records?.focus.displayName == "small-files" }
     assertCommands(model, enabled: [.refreshDirectory, .enclosingDirectory], "focused")
     ExplorerCommand.enclosingDirectory.perform(in: model)
-    try await wait { !model.loading && model.records?.focus.parent == nil }
+    try await waitUntil { !model.loading && model.records?.focus.parent == nil }
     model.select(try entry("large-file", in: model))
     // Delete edits text in an editable text view; a read-only text view does not take it.
     let editable = NSTextView()
@@ -157,13 +148,13 @@ import XCTest
     ExplorerCommand.moveToTrash.perform(in: model)
     XCTAssertTrue(model.working)
     assertCommands(model, enabled: [], "working")
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     // The alert sheet is modal on the window only; the live menu bar must not act under it.
     model.scan.begin(ScanControl())
     assertCommands(model, enabled: [], "pending confirmation")
     model.scan.stopPolling(cancelScan: true)
     model.cancelConfirmation()
-    try await wait { model.canAct }
+    try await waitUntil { model.canAct }
     model.scan.begin(ScanControl())
     assertCommands(
       model,
@@ -186,7 +177,7 @@ import XCTest
       to: support.appendingPathComponent("last-inventory.json"))
     let later = ExplorerModel(arguments: [], environment: [:], storage: storage)
     defer { later.shutdown() }
-    try await wait { later.lastInventory != nil }
+    try await waitUntil { later.lastInventory != nil }
     assertCommands(later, enabled: [.chooseFolder, .reopenLastFolder], "start with last folder")
   }
 
@@ -219,7 +210,7 @@ import XCTest
       to: support.appendingPathComponent("last-inventory.json"))
     let named = ExplorerModel(arguments: [], environment: [:], storage: storage)
     defer { named.shutdown() }
-    try await wait { named.lastInventory != nil }
+    try await waitUntil { named.lastInventory != nil }
     XCTAssertEqual(ExplorerCommand.reopenLastFolder.title(in: named), "Reopen “Workspace”")
     XCTAssertTrue(ExplorerCommand.reopenLastFolder.isEnabled(in: named))
     // The name is a label only. The reopened file comes from the owned generation name.
@@ -242,7 +233,7 @@ import XCTest
     model.select(file)
     // A live-metadata call holds the core lock for one second; validation must not wait.
     let blocker = Task.detached { try session.liveMetadata(key: file.key) }
-    try await wait { session.isBusy() }
+    try await pollUntil { session.isBusy() }
     let start = ContinuousClock.now
     for command in ExplorerCommand.allCases {
       _ = menu.isEnabled(command)
@@ -256,7 +247,7 @@ import XCTest
 
     // Command-Delete runs the menu-bar command.
     menu.perform(.moveToTrash)
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     let pending = try XCTUnwrap(model.pending)
     XCTAssertEqual(pending.details.action, .trash)
     XCTAssertEqual(pending.name, "large-file")
@@ -269,16 +260,16 @@ import XCTest
     try await Task.sleep(for: .milliseconds(300))
     XCTAssertEqual(model.pending?.id, pending.id)
     model.cancelConfirmation()
-    try await wait { model.canAct }
+    try await waitUntil { model.canAct }
     // The context menu prepares through the same model path.
     target.performCommand(item(.deleteImmediately))
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     XCTAssertEqual(model.pending?.details.action, .permanentlyDelete)
     let permanent = try XCTUnwrap(model.pending?.action)
     model.cancelConfirmation()
     // Replacement awaits pin cancellation, so both retained capabilities must be consumed.
     model.load { try ExplorerSession.fixture(scenario: "presentation") }
-    try await wait { model.session !== session && model.records != nil && !model.loading }
+    try await waitUntil { model.session !== session && model.records != nil && !model.loading }
     for action in [pending.action, permanent] {
       let result = await Task.detached { Result { try session.execute(action: action) } }.value
       guard case .failure(BridgeError.ConsumedAction) = result else {
@@ -345,7 +336,7 @@ import XCTest
     XCTAssertEqual(model.selectedRow, row)
     try assertContext(menu, enabled: [.moveToTrash, .deleteImmediately])
     model.prepare(.trash)
-    try await wait { model.pending != nil }
+    try await waitUntil { model.pending != nil }
     XCTAssertEqual(model.pending?.name, "large-file")
     // Under the alert, a secondary click shows nothing and keeps the target.
     let other = try XCTUnwrap(
@@ -357,7 +348,7 @@ import XCTest
           at: table.convert(NSPoint(x: otherRect.midX, y: otherRect.midY), to: nil))))
     XCTAssertTrue(model.selected?.key.sameEntry(other: file.key) == true)
     model.cancelConfirmation()
-    try await wait { model.canAct }
+    try await waitUntil { model.canAct }
     let directory = try entry("small-files", in: model)
     model.select(directory)
 
@@ -367,7 +358,7 @@ import XCTest
     window.displayIfNeeded()
     let map = try XCTUnwrap(find(DiagramView.MapView.self, in: host))
     try await Task.sleep(for: .milliseconds(250))
-    try await wait { !model.loading && model.picture != nil }
+    try await waitUntil { !model.loading && model.picture != nil }
     let block = try XCTUnwrap(model.picture?.targets.first { $0.entry.displayName == "large-file" })
     let blockRect = map.rect(block.rect)
     let center = map.convert(NSPoint(x: blockRect.midX, y: blockRect.midY), to: nil)
@@ -380,7 +371,7 @@ import XCTest
           with: .mouseMoved, location: center, modifierFlags: [], timestamp: 0,
           windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 0,
           pressure: 0)))
-    try await wait { model.hover?.entry.key.sameEntry(other: block.entry.key) == true }
+    try await waitUntil { model.hover?.entry.key.sameEntry(other: block.entry.key) == true }
     let hovered = try XCTUnwrap(model.hover)
     try assertContext(
       map.menu(for: try rightClick(at: center)), enabled: [.moveToTrash, .deleteImmediately])

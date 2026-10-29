@@ -5,21 +5,12 @@ import XCTest
 @testable import DiskInventory
 
 @MainActor final class AppearanceModelTests: XCTestCase {
-  func wait(
-    _ condition: @escaping @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line
-  ) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(8))
-    while !condition(), ContinuousClock.now < deadline {
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    XCTAssertTrue(condition(), file: file, line: line)
-  }
   func load(_ scenario: String = "presentation", environment: [String: String] = [:])
     async throws -> ExplorerModel
   {
     let model = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", scenario], environment: environment)
-    try await wait { model.records != nil && !model.loading && !model.replacingSession }
+    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
     return model
   }
   func ownedStorage() throws -> (URL, ManagedInventoryStorage) {
@@ -115,14 +106,18 @@ import XCTest
     view.model = model
     // The window reports the view size first; let that resize rebuild finish.
     window.contentView = view
-    try await wait {
+    try await waitUntil {
       model.picture.map { CGFloat($0.bitmap.width) == model.viewport.width } == true
         && !model.loading
     }
     try await Task.sleep(for: .milliseconds(300))
     let large = try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == "large-file" })
     model.select(large.entry)
-    try await wait { model.selectionPath == "large-file" && model.selectedRegion != nil }
+    // The selected row comes with the tree reveal, which replaces the outline slice.
+    try await waitUntil {
+      model.selectionPath == "large-file" && model.selectedRegion != nil
+        && model.selectedRow != nil
+    }
     let session = try XCTUnwrap(model.session)
     let tree = try XCTUnwrap(model.tree)
     let rows = model.outlineToken
@@ -135,7 +130,7 @@ import XCTest
     // AppKit calls viewDidChangeEffectiveAppearance, as for a system appearance change.
     view.appearance = NSAppearance(named: other)
     XCTAssertEqual(model.mapAppearance, expected)
-    try await wait { model.picture?.appearance == expected && !model.loading }
+    try await waitUntil { model.picture?.appearance == expected && !model.loading }
     let elapsed = start.duration(to: .now)
     print("APPEARANCE rebuild after debounce: \(elapsed)")
     XCTAssertLessThan(elapsed, .milliseconds(900))
@@ -147,7 +142,7 @@ import XCTest
     XCTAssertNil(model.scan.progress)
     XCTAssertEqual(model.selected?.displayName, "large-file")
     XCTAssertEqual(model.selectionPath, "large-file")
-    try await wait { model.selectedRegion != nil }
+    try await waitUntil { model.selectedRegion != nil }
     XCTAssertEqual(model.picture?.bitmap.width, before.bitmap.width)
     // The same appearance again, and the workspace notification, build nothing new.
     view.appearance = NSAppearance(named: other)
