@@ -188,6 +188,23 @@ struct ContentsTree: NSViewRepresentable {
       textField = name
     }
     required init?(coder: NSCoder) { nil }
+    /// Shows one row. A row that has not loaded keeps its hidden swatch and bar untouched.
+    func apply(_ state: TreeRowState) {
+      depth = state.depth
+      swatch.isHidden = !state.loaded
+      bar.isHidden = !state.loaded
+      if state.loaded {
+        swatch.show(mapRGB: state.mapRGB)
+        bar.percent = state.percent
+      }
+      name.stringValue = state.name
+      name.setAccessibilityIdentifier(state.nameIdentifier)
+      disclosure.isHidden = !state.expandable
+      disclosure.state = state.expanded ? .on : .off
+      disclosure.setAccessibilityIdentifier(state.disclosureIdentifier)
+      disclosure.setAccessibilityLabel(state.disclosureLabel)
+      needsLayout = true
+    }
     override func layout() {
       super.layout()
       let indent = min(CGFloat(depth) * 14, 120)
@@ -212,6 +229,10 @@ struct ContentsTree: NSViewRepresentable {
       textField = label
     }
     required init?(coder: NSCoder) { nil }
+    func apply(_ state: TreeRowState) {
+      label.stringValue = state.size
+      label.toolTip = state.size
+    }
     override func layout() {
       super.layout()
       label.frame = NSRect(x: 0, y: 4, width: bounds.width, height: 18)
@@ -245,55 +266,40 @@ struct ContentsTree: NSViewRepresentable {
       }
       return p.rows[Int(at)]
     }
+    func rowState(_ row: Int) -> TreeRowState {
+      guard let value = record(row) else { return .loading }
+      return TreeRowState(
+        row: value, focusTotal: model.records?.focus.subtreeBytes ?? 0, numbers: model.numbers)
+    }
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
       let name = column?.identifier.rawValue == "name"
       let id = NSUserInterfaceItemIdentifier(name ? "tree-name" : "tree-size")
-      let value = record(row)
+      let state = rowState(row)
       if name {
         let cell =
           (tableView.makeView(withIdentifier: id, owner: self) as? Cell) ?? Cell(frame: .zero)
         if cell.identifier == nil { (tableView as? Table)?.createdCells += 1 }
         cell.identifier = id
-        cell.depth = value?.depth ?? 0
-        cell.swatch.isHidden = value == nil
-        cell.bar.isHidden = value == nil
-        if let value {
-          cell.swatch.show(mapRGB: value.mapRgb)
-          cell.bar.percent = usageBarPercent(
-            value.entry.subtreeBytes, of: model.records?.focus.subtreeBytes ?? 0)
-        }
-        cell.name.stringValue = value.map { entryName($0.entry) } ?? "Loading…"
-        cell.name.setAccessibilityIdentifier(
-          value.map { "entry-\(entryName($0.entry))" } ?? "loading-row")
-        cell.disclosure.isHidden = value?.entry.kind != .directory || value?.entry.childCount == 0
-        cell.disclosure.state = value?.expanded == true ? .on : .off
+        cell.apply(state)
         cell.disclosure.target = self
         cell.disclosure.action = #selector(toggle(_:))
         cell.disclosure.tag = row
-        cell.disclosure.setAccessibilityIdentifier(
-          value.map { "disclosure-\(entryName($0.entry))" } ?? "loading-disclosure")
-        cell.disclosure.setAccessibilityLabel(
-          value.map { ($0.expanded ? "Collapse " : "Expand ") + entryName($0.entry) } ?? "Loading")
         cell.disclosure.isEnabled =
           !model.loading && !model.working && !model.replacingSession && !model.treeEditing
-        cell.needsLayout = true
         return cell
       }
       let cell =
         (tableView.makeView(withIdentifier: id, owner: self) as? SizeCell) ?? SizeCell(frame: .zero)
       cell.identifier = id
-      cell.label.stringValue = value.map { model.numbers.storage($0.entry.subtreeBytes) } ?? ""
-      cell.label.toolTip = cell.label.stringValue
+      cell.apply(state)
       return cell
     }
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
       let view = NSTableRowView()
-      let item = record(row)
+      let state = rowState(row)
       view.setAccessibilityEnabled(true)
-      view.setAccessibilityDisclosureLevel(Int(item?.depth ?? 0))
-      if let item, item.entry.kind == .directory, item.entry.childCount > 0 {
-        view.setAccessibilityExpanded(item.expanded)
-      }
+      view.setAccessibilityDisclosureLevel(Int(state.depth))
+      if state.expandable { view.setAccessibilityExpanded(state.expanded) }
       return view
     }
     func tableViewSelectionDidChange(_ note: Notification) {

@@ -34,6 +34,7 @@ variant that needs no Rust session.
 | `OutcomeBannerState` | [OutcomeBanner.swift](../native/Explorer/OutcomeBanner.swift) | error, outcome and issues; `outcomeBanner` is nil while hidden |
 | `ProgressBarState` | [ProgressBar.swift](../native/Explorer/ProgressBar.swift) | operation (phase, counter, Stop), checking an item, preparing an inventory, working |
 | `HeaderState` | [ExplorerHeader.swift](../native/Explorer/ExplorerHeader.swift) | menu titles and rules, Partial, Incomplete and Not saved badges, total, scan date, Refresh, breadcrumbs enabled |
+| `TreeRowState` | [TreeRowState.swift](../native/Explorer/TreeRowState.swift), `Cell.apply` and `SizeCell.apply` in [NativeViews.swift](../native/Explorer/NativeViews.swift) | loaded row (name, depth, swatch color, usage percent, size, disclosure and accessibility ids), loading placeholder |
 
 The item variant holds the name, the size (directory subtree or file accounted allocation),
 the direct-item count of a directory, the complete saved path (nil while it loads), root
@@ -75,6 +76,19 @@ model test per variant:
   "testHeaderShowsIncompleteAfterARefreshWithUnknownAllocation" and
   "testHeaderShowsPartialScanErrorsAndTheDateOfAManagedScan", which scans an owned folder with
   a mode-000 directory and skips if the process can still read it.
+
+The tree coordinator builds a `TreeRowState` for each visible row when the table asks for its
+cells, from the cached row page, and keeps none; disclosure targets and the enable rule stay in
+the coordinator. [TreeRowTests.swift](../native/ExplorerModelTests/TreeRowTests.swift) maps
+fixture rows ("testTreeRowStateMapsFixtureRowsAgainstTheFocusTotal") and draws one offscreen
+cell per state, with no table or session: "testCellShowsAFileRowWithItsColorSwatchAndUsageBar",
+"testCellShowsACollapsedDirectoryWithItsDisclosureAndGraySquare",
+"testCellShowsAnExpandedDirectoryAsCollapsible",
+"testCellIndentsByDepthUpToOneHundredTwentyPoints",
+"testCellShowsALoadingRowWithoutSwatchOrBarAfterReuse" and
+"testSizeCellShowsTheSizeWithTheNameFrameAndAHelpTag". The on-screen alignment, selection and
+background checks stay in "testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows" and
+"testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch".
 
 The rendered card (fonts, truncation and the material) stays covered by
 "testHeaderAndCardShowOnlySizesAndCountsWithoutAccountingNotes" and
