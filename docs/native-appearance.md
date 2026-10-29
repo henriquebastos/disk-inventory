@@ -154,10 +154,10 @@ real runner's screenshots:
 
 - "testAppearanceVariantsRenderMapChromeAndSheets": the probe for each value, with overview,
   selection, hover and both alert sheets.
-- "testPrototypeHomeDarkMapMatchesTheDesignBrightness": CSS-gradient interiors and a 0.55 edge
-  ratio, which shows that the window draws the bitmap 1:1.
-- "testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch" runs in all four values.
-- "testMapTileBaseColorMatchesTreeSwatchOnScreen": the sRGB map shows the swatch color exactly.
+- "testWindowShowsTheMapBitmapOneToOneAndTheTreeInSystemColors" (light and dark): the map tile
+  shows the swatch color exactly, the one-pixel seam keeps its 0.55 ratio (the window draws the
+  bitmap 1:1), and the tree shows the opaque content background and the system gray directory
+  swatch. The contrast values change only the map, which Rust pixel tests check.
 - "testCaptionAndSecondaryTextMeetFourAndAHalfToOne": card count, path and grouped size,
   status bar and start-screen text.
 - "testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows" runs in all four values.

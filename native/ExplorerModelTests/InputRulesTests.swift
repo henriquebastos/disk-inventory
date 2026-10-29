@@ -10,15 +10,6 @@ import XCTest
   let commandDown: UInt16 = 125
   let returnKey: UInt16 = 36
 
-  func fixture() async throws -> ExplorerModel {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", "presentation"], environment: [:])
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
-    return model
-  }
-  func entry(_ name: String, in model: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name }?.entry)
-  }
   func row(_ name: String, in model: ExplorerModel) throws -> OutlineRow {
     try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name })
   }
@@ -29,7 +20,7 @@ import XCTest
   }
 
   func testTreeArrowKeysExpandSelectTheFirstItemCollapseAndSelectTheParent() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     let directory = try entry("small-files", in: model)
     try await select("small-files", in: model)
@@ -61,7 +52,7 @@ import XCTest
   }
 
   func testTreeNavigationKeysFocusTheParentAndOpenTheSelectedDirectory() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     try await select("small-files", in: model)
     XCTAssertTrue(model.treeNavigationKey(commandDown))
@@ -79,7 +70,7 @@ import XCTest
   /// While an operation runs or a confirmation is pending, tree keys are consumed and do
   /// nothing.
   func testTreeKeysAreConsumedWithoutActionWhileBusy() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     try await select("small-files", in: model)
     model.prepare(.trash)
@@ -102,7 +93,7 @@ import XCTest
   /// Visible disclosures follow the tree rule; new cells and `expand` ignore a pending
   /// confirmation, and only an expansion in flight blocks them.
   func testTreeInputRulesDifferForVisibleAndNewDisclosures() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     XCTAssertTrue(model.treeInteractive)
     XCTAssertTrue(model.visibleDisclosuresEnabled)
@@ -124,7 +115,7 @@ import XCTest
   }
 
   func testMapContextMenuSelectsTheHoveredBlockOrItsGroup() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     XCTAssertFalse(model.selectHoveredBlockForContextMenu(), "no hover")
     let block = try XCTUnwrap(model.picture?.targets.first { $0.entry.displayName == "large-file" })
@@ -142,7 +133,7 @@ import XCTest
   /// A pending confirmation blocks the map context menu but not pointer hits; a result motion
   /// blocks both.
   func testMapRulesDifferForAPendingConfirmationAndAResultMotion() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     let block = try XCTUnwrap(model.picture?.targets.first { $0.entry.displayName == "large-file" })
     XCTAssertTrue(model.acceptsMapPointer)
@@ -170,7 +161,7 @@ import XCTest
   /// A click on a tree row highlights that row at once; the reveal answers later with the
   /// same row.
   func testSelectRowHighlightsTheClickedRowAtOnce() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     let outline = try XCTUnwrap(model.outline)
     let index = try XCTUnwrap(outline.rows.firstIndex { $0.entry.displayName == "large-file" })
@@ -185,7 +176,7 @@ import XCTest
   /// The tree reports its top row as it scrolls, and focus saves it in the history. No row at
   /// the top (-1) saves row 0.
   func testScrolledSavesTheTopRowAndRowZeroAboveTheFirstRow() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     model.scrolled(toRow: 40)
     XCTAssertEqual(model.scrollRow, 40)

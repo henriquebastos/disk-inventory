@@ -73,6 +73,31 @@ extension XCTestCase {
   }
 }
 
+/// How long a test watches for a change that must not happen when nothing signals that the work
+/// which could cause it has ended. It is longer than the 180 ms rebuild debounce plus one
+/// rebuild of a fixture map.
+let quietPeriod: Duration = .milliseconds(400)
+
+extension XCTestCase {
+  /// Fails if `condition` stops holding during `duration`. It checks every 5 ms, so a change
+  /// that is undone again also fails. Prefer a condition that ends the work, such as
+  /// `settled(_:)` or awaiting the task of the work.
+  @MainActor func stays(
+    _ condition: @MainActor () -> Bool, for duration: Duration,
+    file: StaticString = #filePath, line: UInt = #line
+  ) async throws {
+    let deadline = ContinuousClock.now.advanced(by: duration)
+    repeat {
+      guard condition() else {
+        XCTFail("changed within \(duration)", file: file, line: line)
+        return
+      }
+      try await Task.sleep(for: .milliseconds(5))
+    } while ContinuousClock.now < deadline
+    XCTAssertTrue(condition(), "changed within \(duration)", file: file, line: line)
+  }
+}
+
 extension XCTestCase {
   /// Runs `body` and fails if it does not finish within `seconds`. A stuck body is left
   /// suspended; the test does not hang.

@@ -5,28 +5,10 @@ import XCTest
 /// The model's latest-wins workers drop answers for an obsolete request. The fixture holds the
 /// Rust session lock, so each request waits until the test releases it.
 @MainActor final class WorkerModelTests: XCTestCase {
-  func fixture() async throws -> ExplorerModel {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", "metadata-delay"], environment: [:])
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
-    return model
-  }
-  func entry(_ name: String, in model: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name }?.entry)
-  }
-  /// Holds the session lock for about one second with a live metadata read.
-  func holdBridge(_ model: ExplorerModel) async throws -> Task<MetadataRecord, Error> {
-    let session = try XCTUnwrap(model.session)
-    let key = try entry("large-file", in: model).key
-    let task = Task.detached { try session.liveMetadata(key: key) }
-    try await pollUntil { session.isBusy() }
-    return task
-  }
-
   /// Esc while a region query waits: the running answer is dropped and the waiting one is
   /// discarded, so no region comes back.
   func testObsoleteRegionAnswersDoNotReturnAfterClearSelection() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let session = try XCTUnwrap(model.session)
     let blocker = try await holdBridge(model)
@@ -63,7 +45,7 @@ import XCTest
 
   /// The pointer leaves the map while a hover hit test waits: no hover comes back.
   func testObsoleteHoverAnswersDoNotReturnAfterThePointerLeaves() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let blocker = try await pointWhileHeld(model, "large-file")
     // A second hover waits behind the first.
@@ -77,7 +59,7 @@ import XCTest
 
   /// Esc while a click hit test waits: the click does not select afterwards.
   func testObsoleteClickAnswersDoNotSelectAfterClearSelection() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     model.select(try entry("zero-byte", in: model))
     await settled(model)
@@ -90,7 +72,7 @@ import XCTest
 
   /// A map rebuild while a click hit test waits: the click belongs to the old picture.
   func testClickAnswersDoNotSelectAfterTheViewIsRebuilt() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let root = try XCTUnwrap(model.records?.status.root.key)
     let blocker = try await pointWhileHeld(model, "large-file", click: true)
@@ -104,7 +86,7 @@ import XCTest
 
   /// A result motion starts while a hover hit test waits: the hover is not shown.
   func testHoverAnswersDoNotReturnDuringAResultMotion() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let blocker = try await pointWhileHeld(model, "large-file")
     model.motion.hold(try XCTUnwrap(model.picture))
@@ -128,7 +110,7 @@ import XCTest
   /// A waiting expansion runs before a later reveal, even though the reveal changed the
   /// outline version, so the reveal's rows show the expanded directory and the edit ends.
   func testWaitingExpansionRunsBeforeALaterRevealAndEndsTheEdit() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let rows = try XCTUnwrap(model.outline?.total)
     model.expand(try entry("small-files", in: model), expanded: true)
@@ -142,7 +124,7 @@ import XCTest
   /// An expansion while a reveal waits on the lock: the obsolete reveal publishes no rows and
   /// does not scroll.
   func testObsoleteRevealDoesNotPublishAfterAnExpansion() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let serial = model.revealSerial
     let rows = try XCTUnwrap(model.outline?.total)
@@ -157,7 +139,7 @@ import XCTest
 
   /// Esc while a reveal waits on the lock: the rows arrive, but no row is selected.
   func testRevealAfterClearSelectionSelectsNoRow() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let serial = model.revealSerial
     let blocker = try await selectWhileHeld(model, "large-file")
@@ -171,7 +153,7 @@ import XCTest
   /// A row page asked for after a reveal is served after it, so the page the table asked for
   /// last is the one shown.
   func testRowPageAskedAfterARevealIsServedAfterIt() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     model.expand(try entry("small-files", in: model), expanded: true)
     try await waitUntil { !model.treeEditing }
@@ -189,7 +171,7 @@ import XCTest
   /// returns exactly once; a double resume would trap. Only the newest build publishes.
   func testReplacedViewRequestsResumeTheirCallersOnceAndEarly() async throws {
     @MainActor final class Finished { var names: [String] = [] }
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let session = try XCTUnwrap(model.session)
     let root = try XCTUnwrap(model.records?.focus.key)
@@ -230,7 +212,7 @@ import XCTest
   /// A load makes a waiting view request of the old session obsolete without replacing it.
   /// When it is served, it builds nothing: the old session gets no query for it.
   func testObsoleteWaitingViewRequestBuildsNothingAfterALoad() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let session = try XCTUnwrap(model.session)
     let root = try XCTUnwrap(model.records?.focus.key)

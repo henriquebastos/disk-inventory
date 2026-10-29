@@ -126,8 +126,9 @@ real runner:
 - "testRefreshShowsNamedProgressWithCounterAndStopKeepsData": the named phase, a rising
   counter, Stop with unchanged data, then a complete refresh with the new file.
 - "testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop" and
-  "testSkippedItemsShowACountAndTheirReasonsInDetails": each named phase without "Working…", a
-  rising removed counter, Stop, the stopped and skipped banners.
+  "testSkippedItemsShowACountAndTheirReasonsInDetails": real clicks on Delete, its confirmation
+  and Stop; the Checking and Deleting phases, a rising removed counter, the stopped and skipped
+  banners. The model tests below check every phase, the bar and the outcomes.
 - "testSiblingRowsStayVisibleAfterDeleteWithSkipsDeleteAndTrash": after each outcome every
   remaining tree row is visible; a surviving selection never scrolls past the last row.
 - "testHeaderAndCardShowOnlySizesAndCountsWithoutAccountingNotes": the header size alone; file,
@@ -139,7 +140,7 @@ real runner:
 - "testHelpTagsShowAfterARestOnTheMapAndAfterADelete": help tags after a rest on the map, twice
   for one element, and after a Delete.
 
-Model tests in [FeedbackModelTests.swift](../native/ExplorerModelTests/FeedbackModelTests.swift):
+Model tests in [StatusAndProgressTests.swift](../native/ExplorerModelTests/StatusAndProgressTests.swift):
 "testStatusTextNamesTheHoveredBlockWhileAnotherItemIsSelected" (the selection, the picture and
 the session selection-query count stay during a hover),
 "testSelectionRegionNeverClearsWhileTheNextRegionLoads",

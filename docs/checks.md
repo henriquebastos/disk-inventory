@@ -43,7 +43,7 @@ stages. Without an `-only-testing:` option it runs all of `ExplorerModelTests`.
 
 ```sh
 scripts/check.sh model-only -only-testing:ExplorerModelTests/NativeNumberFormatTests
-scripts/check.sh model-only -only-testing:ExplorerModelTests/DixModelTests/testNativeHundredThousandRowsAreVirtual
+scripts/check.sh model-only -only-testing:ExplorerModelTests/TreeAndMapNavigationTests/testNativeHundredThousandRowsAreVirtual
 ```
 
 UI tests: `ui` builds the GUI and runs the selected UI tests. `ui --no-build` uses the
@@ -82,9 +82,15 @@ them when you do not need them.
 
 ## 1e Known flakes
 
-None known. check.sh does not retry a failed test. To report a flake, run the one test
-again with `-test-iterations 5` (model, UI) or in a loop (Rust), keep the stage logs, and
-add the test name, the failure line and its cause to this list.
+check.sh does not retry a failed test. To report a flake, run the one test again with
+`-test-iterations 5` (model, UI) or in a loop (Rust), keep the stage logs, and add the test
+name, the failure line and its cause to this list.
+
+- StatusAndProgressTests "testSkippedItemsReadAsDeletedWithACountAndReasonsInDetails": failed
+  once in a full model run, `XCTAssertNil(model.error)` got "presentation belongs to an
+  obsolete inventory revision"; it passed 20 of 20 alone. Likely cause, not confirmed: the
+  test prepares and runs the Delete right after `select`, so a query of that selection can
+  run after the Delete changed the revision and set `error`.
 
 ## 1f Disk and time
 
@@ -95,10 +101,10 @@ Measured on an Apple silicon Mac:
 | `fast`, warm Cargo tree | about 20 s |
 | GUI build, no source change | about 10–15 s |
 | GUI build in a new `GUI_ROOT`, warm Cargo tree | about 70 s |
-| all model tests (145) | about 90 s |
+| all model tests (151) | about 85 s |
 | `model`, warm | about 2 min |
 | one short UI test with `ui --no-build` | about 10 s |
-| all UI tests | about 8–9 min |
+| all UI tests (33) | about 7.5 min |
 
 A first build in a new Cargo tree takes longer (not measured). `CARGO_TARGET_DIR` uses about
 2.1 GB (debug, release and bridge builds). `GUI_ROOT` uses about 0.3 GB after its first

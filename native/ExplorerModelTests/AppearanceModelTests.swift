@@ -5,14 +5,6 @@ import XCTest
 @testable import DiskInventory
 
 @MainActor final class AppearanceModelTests: XCTestCase {
-  func load(_ scenario: String = "presentation", environment: [String: String] = [:])
-    async throws -> ExplorerModel
-  {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", scenario], environment: environment)
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
-    return model
-  }
   func ownedStorage() throws -> (URL, ManagedInventoryStorage) {
     let base = try XCTUnwrap(
       ProcessInfo.processInfo.environment["DI_TEST_ROOT"],
@@ -23,7 +15,7 @@ import XCTest
   }
 
   func testDiagramPictureIsSRGBAndCarriesAppearance() async throws {
-    let model = try await load()
+    let model = try await fixtureModel("presentation")
     let session = try XCTUnwrap(model.session)
     let focus = try XCTUnwrap(model.records?.focus.key)
     XCTAssertEqual(model.picture?.image.colorSpace?.name, CGColorSpace.sRGB)
@@ -96,7 +88,7 @@ import XCTest
 
   func testAppearanceChangeRebuildsOnlyTheMapFromSavedData() async throws {
     // This fixture sleeps one second for live metadata, but not for saved queries.
-    let model = try await load("metadata-delay")
+    let model = try await fixtureModel("metadata-delay")
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled],
       backing: .buffered, defer: false)
@@ -110,7 +102,7 @@ import XCTest
       model.picture.map { CGFloat($0.bitmap.width) == model.viewport.width } == true
         && !model.loading
     }
-    try await Task.sleep(for: .milliseconds(300))
+    await bounded("rebuild") { _ = await model.rebuildTask?.value }
     let large = try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == "large-file" })
     model.select(large.entry)
     // The selected row comes with the tree reveal, which replaces the outline slice.
@@ -148,12 +140,11 @@ import XCTest
     view.appearance = NSAppearance(named: other)
     NSWorkspace.shared.notificationCenter.post(
       name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
-    try await Task.sleep(for: .milliseconds(400))
-    XCTAssertEqual(model.diagramBuilds, builds + 1)
+    try await stays({ model.diagramBuilds == builds + 1 }, for: quietPeriod)
   }
 
   func testTreeUsesInsetContentStyleAndAdaptiveDirectorySwatch() async throws {
-    let model = try await load("dix")
+    let model = try await fixtureModel("dix")
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
       backing: .buffered, defer: false)

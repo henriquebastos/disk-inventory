@@ -5,15 +5,10 @@ import XCTest
 /// The outcome banner, the busy bar and the header render `ExplorerModel.outcomeBanner`,
 /// `progressBar`, `startScreenProgressBar` and `header`; one test per variant.
 @MainActor final class StatusComponentTests: XCTestCase {
+  /// A model of `scenario` that formats numbers for en_US.
   func fixture(_ scenario: String = "presentation") async throws -> ExplorerModel {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", scenario], environment: [:],
-      numbers: NativeNumberFormat(locale: Locale(identifier: "en_US")))
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
-    return model
-  }
-  func entry(_ name: String, in model: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name }?.entry)
+    try await fixtureModel(
+      scenario, numbers: NativeNumberFormat(locale: Locale(identifier: "en_US")))
   }
 
   func testBannerIsHiddenWithoutAnErrorOutcomeOrNewIssue() async throws {

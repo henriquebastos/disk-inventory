@@ -156,7 +156,7 @@ reads before/after deep collapse and checks incremental counts against full sums
 large nested-origin sibling prefixes in wide/tall/odd/2× frames, complete raster
 coverage, bounded visits, no source access and revision guards.
 
-[native/ExplorerModelTests/DixModelTests.swift](../native/ExplorerModelTests/DixModelTests.swift):
+[native/ExplorerModelTests/TreeAndMapNavigationTests.swift](../native/ExplorerModelTests/TreeAndMapNavigationTests.swift):
 
 - "testHoverLeavesPreparedSelectionUntouchedAndClickRevealsWithoutZoom".
 - "testAggregatePixelExplainsRecordedBytesWithoutCreatingAnActionTarget".
@@ -188,7 +188,7 @@ coverage, bounded visits, no source access and revision guards.
   "testUnknownAllocationRowKeepsAnEmptyUsageBar": native cells use map colors,
   focus-relative bars and decorative accessibility state.
 
-[IntegrationFixTests.swift](../native/ExplorerModelTests/IntegrationFixTests.swift):
+[StaleWorkRecoveryTests.swift](../native/ExplorerModelTests/StaleWorkRecoveryTests.swift):
 
 - "testRejectedExecutionRecoversCurrentPresentationWithoutRemoval".
 - "testFailedReplacementRestoresOldTreeAndFrameWithoutClearingError".

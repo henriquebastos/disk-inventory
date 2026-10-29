@@ -4,15 +4,10 @@ import XCTest
 
 /// The selection card renders `ExplorerModel.selectionCard`; one test per card variant.
 @MainActor final class SelectionCardTests: XCTestCase {
+  /// A model of `scenario` that formats numbers for en_US.
   func fixture(_ scenario: String = "presentation") async throws -> ExplorerModel {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", scenario], environment: [:],
-      numbers: NativeNumberFormat(locale: Locale(identifier: "en_US")))
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
-    return model
-  }
-  func entry(_ name: String, in model: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name }?.entry)
+    try await fixtureModel(
+      scenario, numbers: NativeNumberFormat(locale: Locale(identifier: "en_US")))
   }
 
   func testCardShowsNothingSelectedWithSelectInventoryRoot() async throws {

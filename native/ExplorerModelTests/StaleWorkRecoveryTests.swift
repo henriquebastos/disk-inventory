@@ -3,27 +3,11 @@ import XCTest
 
 @testable import DiskInventory
 
-@MainActor final class IntegrationFixTests: XCTestCase {
-  func load(_ scenario: String) async throws -> ExplorerModel {
-    let m = ExplorerModel(arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await waitUntil { !m.loading && !m.replacingSession && m.records != nil }
-    return m
-  }
-  func entry(_ name: String, _ m: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(m.outline?.rows.first { $0.entry.displayName == name }?.entry)
-  }
-  func block(_ m: ExplorerModel) async throws -> Task<MetadataRecord, Error> {
-    let s = m.session!
-    let key = try entry("large-file", m).key
-    try await pollUntil { !s.isBusy() }
-    let task = Task.detached { try s.liveMetadata(key: key) }
-    try await pollUntil { s.isBusy() }
-    return task
-  }
+@MainActor final class StaleWorkRecoveryTests: XCTestCase {
   func testRejectedExecutionRecoversCurrentPresentationWithoutRemoval() async throws {
-    let m = try await load("trash-inside")
+    let m = try await fixtureModel("trash-inside")
     let s = m.session!
-    m.select(try entry("large-file", m))
+    m.select(try entry("large-file", in: m))
     m.prepare(.permanentlyDelete)
     try await waitUntil { m.pending != nil }
     let original = m.pending!.action
@@ -52,7 +36,7 @@ import XCTest
     _ = try tree.rows(offset: 0, limit: 1)
     _ = try m.picture!.frame.hit(x: 0, y: 0)
     XCTAssertEqual(m.records!.status.root.subtreeBytes, total)
-    let trash = try entry("trash", m)
+    let trash = try entry("trash", in: m)
     let survivors = try await Task.detached {
       try s.children(parent: trash.key, offset: 0, limit: 10).entries
     }.value
@@ -60,7 +44,7 @@ import XCTest
     _ = try await Task.detached { try s.liveMetadata(key: survivors[0].key) }.value
   }
   func testFailedReplacementRestoresOldTreeAndFrameWithoutClearingError() async throws {
-    let m = try await load("ordinary")
+    let m = try await fixtureModel("ordinary")
     let old = m.session!
     let focus = m.records!.focus.key
     m.load { throw CocoaError(.fileReadCorruptFile) }
@@ -73,17 +57,17 @@ import XCTest
     let tree = try XCTUnwrap(m.tree)
     _ = try tree.rows(offset: 0, limit: 256)
     _ = try m.picture!.frame.hit(x: 0, y: 0)
-    m.select(try entry("large-file", m))
+    m.select(try entry("large-file", in: m))
     try await waitUntil { m.selection.row != nil }
     XCTAssertTrue(m.canAct)
   }
   func testParentRequestsCoalesceActualQueriesAndDropObsoletePendingWork() async throws {
-    let m = try await load("metadata-delay")
+    let m = try await fixtureModel("metadata-delay")
     let s = m.session!
-    let leaf = try entry("large-file", m)
+    let leaf = try entry("large-file", in: m)
     m.select(leaf)
     try await waitUntil { m.selection.row != nil && m.selection.path != nil }
-    let blocker = try await block(m)
+    let blocker = try await holdBridge(m)
     let before = s.selectionQueryCount()
     m.selectParent(leaf)
     try await pollUntil { s.activeCallCount() == 2 }
@@ -98,7 +82,7 @@ import XCTest
       "PARENT_WORK repeated requests=101 actual saved selection queries=\(executed) (includes selected-path publication)"
     )
     XCTAssertLessThanOrEqual(executed, 2)
-    let second = try await block(m)
+    let second = try await holdBridge(m)
     let baseline = s.selectionQueryCount()
     for _ in 0..<100 { m.selectParent(leaf) }  // Leaf is no longer the selected identity.
     _ = try await second.value
@@ -120,12 +104,12 @@ import XCTest
   }
   func testQueuedParentDoesNotExecuteAfterSelectionOrSessionChanges() async throws {
     for replacement in [false, true] {
-      let m = try await load("metadata-delay")
+      let m = try await fixtureModel("metadata-delay")
       let s = m.session!
-      let leaf = try entry("large-file", m)
+      let leaf = try entry("large-file", in: m)
       m.select(leaf)
       try await waitUntil { m.selection.row != nil && m.selection.path != nil }
-      let blocker = try await block(m)
+      let blocker = try await holdBridge(m)
       let before = s.selectionQueryCount()
       m.selectParent(leaf)
       try await pollUntil { s.activeCallCount() == 2 }
@@ -133,7 +117,7 @@ import XCTest
       if replacement {
         m.load { try ExplorerSession.fixture(scenario: "ordinary") }
       } else {
-        m.select(try entry("zero-byte", m))
+        m.select(try entry("zero-byte", in: m))
       }
       _ = try await blocker.value
       try await waitUntil {
@@ -154,8 +138,8 @@ import XCTest
     }
   }
   func testEmptyDirectoryRightDoesNotExpandOrSelectNextSibling() async throws {
-    let m = try await load("presentation")
-    let empty = try entry("trash", m)
+    let m = try await fixtureModel("presentation")
+    let empty = try entry("trash", in: m)
     m.select(empty)
     try await waitUntil { m.selection.row != nil }
     let coordinator = ContentsTree.Coordinator(m)
@@ -173,9 +157,9 @@ import XCTest
         keyCode: 124))
     let total = m.outline!.total
     table.keyDown(with: right)
-    try await Task.sleep(for: .milliseconds(30))
+    await settled(m)
     table.keyDown(with: right)
-    try await Task.sleep(for: .milliseconds(30))
+    await settled(m)
     XCTAssertEqual(m.outline!.total, total)
     XCTAssertFalse(m.outline!.rows.first { $0.entry.key.sameEntry(other: empty.key) }!.expanded)
     XCTAssertTrue(m.selection.entry!.key.sameEntry(other: empty.key))
@@ -187,9 +171,9 @@ import XCTest
       m.outline!.rows.first { $0.entry.key.sameEntry(other: empty.key) }!.expanded
     }
     table.keyDown(with: right)
-    try await Task.sleep(for: .milliseconds(30))
+    await settled(m)
     XCTAssertTrue(m.selection.entry!.key.sameEntry(other: empty.key))
-    let directory = try entry("small-files", m)
+    let directory = try entry("small-files", in: m)
     m.select(directory)
     try await waitUntil { m.selection.row != nil }
     table.keyDown(with: right)
@@ -199,9 +183,9 @@ import XCTest
     XCTAssertTrue(m.selection.entry!.parent!.sameEntry(other: directory.key))
   }
   func testHistorySelectionOutsideSliceRestoresVisibleRowWithoutRevealOrScroll() async throws {
-    let m = try await load("dix")
+    let m = try await fixtureModel("dix")
     let root = m.records!.focus.key
-    let projects = try entry("Projects", m)
+    let projects = try entry("Projects", in: m)
     m.expand(projects, expanded: true)
     try await waitUntil { !m.treeEditing }
     m.select(projects)

@@ -118,15 +118,11 @@ permanent-delete Undo.
 
 [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift):
 
-- "testFileMenuShowsReopenWorkspaceAndNoOpenSnapshot": owned test metadata gives a
-  disabled Reopen “Workspace” after Choose Folder…, and no Open Snapshot….
-- "testStartScreenShowsReopenWorkspace": the fixture start screen shows Reopen
-  “Workspace” and no Open Snapshot… button.
-- "testOldMetadataShowsReopenLastFolder": metadata without a name gives Reopen Last
-  Folder on the start screen and in the File menu.
-- "testFixtureStorageDirectoryStaysUnchanged": after both fixture windows read the
-  metadata, and after Command-O and a click on Reopen, the names, sizes and dates of
-  the owned directory are unchanged.
+- "testReopenNamesTheLastFolderAndFixtureStorageStaysUnchanged": owned test metadata gives a
+  disabled Reopen “Workspace” after Choose Folder… in the File menu and on the start screen,
+  and no Open Snapshot…. After Command-O and a click on Reopen, the names, sizes and dates of
+  the owned directory are unchanged. The generic label for metadata without a name is a model
+  test, "testLastFolderMetadataRoundTripsRootNameAndOldMetadataFallsBack".
 - "testFileMenuCommandsMatchCardAndShortcuts": fixture-disabled panels, root then
   file state with no stale menu, Command-Delete and Option-Command-Delete, no second
   alert, and disabled commands while the About panel is key.
@@ -138,7 +134,7 @@ permanent-delete Undo.
   cancels, then deletion succeeds.
 
 "testConfirmationPresentationNamesItemAndAssignsAlertRoles" in
-[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift) builds both
+[ExplorerLifecycleTests.swift](../native/ExplorerModelTests/ExplorerLifecycleTests.swift) builds both
 alerts for a file and a directory: the scope, the path and no space sentence; Trash names the
 Trash in the title and the button; Delete says "This cannot be undone." and, for a directory,
 the error sentence; and the button roles.

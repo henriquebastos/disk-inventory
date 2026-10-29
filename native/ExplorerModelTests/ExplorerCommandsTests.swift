@@ -5,15 +5,6 @@ import XCTest
 @testable import DiskInventory
 
 @MainActor final class ExplorerCommandsTests: XCTestCase {
-  func fixture(_ scenario: String = "presentation") async throws -> ExplorerModel {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
-    return model
-  }
-  func entry(_ name: String, in model: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name }?.entry)
-  }
   func item(_ command: ExplorerCommand) -> NSMenuItem {
     let item = NSMenuItem(
       title: command.title, action: #selector(ExplorerCommandTarget.performCommand(_:)),
@@ -109,7 +100,7 @@ import XCTest
   }
 
   func testMenuValidationMatchesCardStateForEveryCommand() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     let target = ExplorerCommandTarget(model: model)
     // Fixture mode never opens native panels, and Finder URLs are fixture-locked.
@@ -197,8 +188,8 @@ import XCTest
     let storage = ManagedInventoryStorage(root: support)
     let empty = ExplorerModel(arguments: [], environment: [:], storage: storage)
     defer { empty.shutdown() }
-    try await Task.sleep(for: .milliseconds(200))
-    XCTAssertNil(empty.lastInventory)
+    // The metadata read at launch has no completion signal; it finds no file.
+    try await stays({ empty.lastInventory == nil }, for: quietPeriod)
     XCTAssertEqual(ExplorerCommand.reopenLastFolder.title(in: empty), "Reopen Last Folder")
     XCTAssertFalse(ExplorerCommand.reopenLastFolder.isEnabled(in: empty))
 
@@ -222,7 +213,7 @@ import XCTest
   }
 
   func testMenuTrashAndStopUseModelPathsWithoutLiveMetadata() async throws {
-    let model = try await fixture("metadata-delay")
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
     let target = ExplorerCommandTarget(model: model)
     let menu = ExplorerMenuState()
@@ -232,8 +223,7 @@ import XCTest
     let file = try entry("large-file", in: model)
     model.select(file)
     // A live-metadata call holds the core lock for one second; validation must not wait.
-    let blocker = Task.detached { try session.liveMetadata(key: file.key) }
-    try await pollUntil { session.isBusy() }
+    let blocker = try await holdBridge(model)
     let start = ContinuousClock.now
     for command in ExplorerCommand.allCases {
       _ = menu.isEnabled(command)
@@ -257,8 +247,7 @@ import XCTest
     target.performCommand(item(.moveToTrash))
     target.performCommand(item(.deleteImmediately))
     XCTAssertFalse(model.working)
-    try await Task.sleep(for: .milliseconds(300))
-    XCTAssertEqual(model.pending?.id, pending.id)
+    try await stays({ model.pending?.id == pending.id && !model.working }, for: quietPeriod)
     model.cancelConfirmation()
     try await waitUntil { model.canAct }
     // The context menu prepares through the same model path.
@@ -291,7 +280,7 @@ import XCTest
   }
 
   func testContextMenusSelectClickedRowAndHoveredBlock() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
@@ -357,8 +346,11 @@ import XCTest
     host.layoutSubtreeIfNeeded()
     window.displayIfNeeded()
     let map = try XCTUnwrap(find(DiagramView.MapView.self, in: host))
-    try await Task.sleep(for: .milliseconds(250))
-    try await waitUntil { !model.loading && model.picture != nil }
+    // The layout resized the map; wait for that debounced rebuild.
+    await bounded("rebuild") { _ = await model.rebuildTask?.value }
+    try await waitUntil {
+      !model.loading && model.picture?.bitmap.width == UInt32(model.viewport.width)
+    }
     let block = try XCTUnwrap(model.picture?.targets.first { $0.entry.displayName == "large-file" })
     let blockRect = map.rect(block.rect)
     let center = map.convert(NSPoint(x: blockRect.midX, y: blockRect.midY), to: nil)

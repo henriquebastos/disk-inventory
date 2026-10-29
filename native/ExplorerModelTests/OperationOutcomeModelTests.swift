@@ -5,15 +5,6 @@ import XCTest
 /// Operation outcomes, totals and selection state of the failure and Trash fixtures, checked on
 /// the model that the banner, header and card show. The UI tests keep only the real input.
 @MainActor final class OperationOutcomeModelTests: XCTestCase {
-  func load(_ scenario: String) async throws -> ExplorerModel {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
-    return model
-  }
-  func entry(_ name: String, in model: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name }?.entry, name)
-  }
   func shows(_ name: String, in model: ExplorerModel) -> Bool {
     model.outline?.rows.contains { $0.entry.displayName == name } == true
   }
@@ -35,7 +26,7 @@ import XCTest
       ("permission-failure", "large-file", .permanentlyDelete, "Failed"),
       ("partial-deletion", "small-files", .permanentlyDelete, "Partial"),
     ] {
-      let model = try await load(scenario)
+      let model = try await fixtureModel(scenario)
       defer { model.shutdown() }
       try await run(action, on: target, in: model)
       let outcome = model.outcome ?? ""
@@ -56,7 +47,7 @@ import XCTest
   }
 
   func testSelectionUsesSavedDataWhenLiveMetadataFails() async throws {
-    let model = try await load("metadata-failure")
+    let model = try await fixtureModel("metadata-failure")
     defer { model.shutdown() }
     model.select(try entry("large-file", in: model))
     try await waitUntil { model.selectedDisplayPath?.contains("large-file") == true }
@@ -67,7 +58,7 @@ import XCTest
 
   func testTrashInsideKeepsTheTotalAndTrashOutsideLowersIt() async throws {
     for scenario in ["trash-inside", "trash-outside"] {
-      let model = try await load(scenario)
+      let model = try await fixtureModel(scenario)
       defer { model.shutdown() }
       let before = try XCTUnwrap(model.records?.status.root.subtreeBytes)
       try await run(.trash, on: "large-file", in: model)
@@ -89,7 +80,7 @@ import XCTest
   }
 
   func testChangedTargetFailsPreparationAndRefreshMarksUnknownAllocationIncomplete() async throws {
-    let changed = try await load("changed-target")
+    let changed = try await fixtureModel("changed-target")
     changed.select(try entry("large-file", in: changed))
     try await waitUntil { changed.canAct }
     changed.prepare(.permanentlyDelete)
@@ -98,7 +89,7 @@ import XCTest
     XCTAssertTrue(changed.error?.hasPrefix("Preparation failed") == true, "\(changed.error ?? "")")
     XCTAssertNil(changed.pending)
     changed.shutdown()
-    let model = try await load("unknown-allocation")
+    let model = try await fixtureModel("unknown-allocation")
     defer { model.shutdown() }
     model.refresh()
     try await waitUntil { !model.working && !model.loading }
@@ -110,7 +101,7 @@ import XCTest
 
   /// A plain Delete plays the poof for at least four clock ticks: motion, not a jump.
   func testDeletePlaysThePoofForAtLeastFourTicks() async throws {
-    let model = try await load("presentation")
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     model.select(try entry("large-file", in: model))
     try await waitUntil { model.selection.region != nil }

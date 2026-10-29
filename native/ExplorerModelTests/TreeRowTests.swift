@@ -128,11 +128,9 @@ import XCTest
 
   /// Fixture rows of the focused root and an expanded directory.
   func testTreeRowStateMapsFixtureRowsAgainstTheFocusTotal() async throws {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", "presentation"], environment: [:],
-      numbers: NativeNumberFormat(locale: Locale(identifier: "en_US")))
+    let model = try await fixtureModel(
+      "presentation", numbers: NativeNumberFormat(locale: Locale(identifier: "en_US")))
     defer { model.shutdown() }
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
     let total = try XCTUnwrap(model.records?.focus.subtreeBytes)
     func state(_ name: String) throws -> TreeRowState {
       let row = try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name })
@@ -153,9 +151,7 @@ import XCTest
     XCTAssertEqual(try state("zero-byte").percent, 0)
     // A directory without items has no disclosure.
     XCTAssertFalse(try state("trash").expandable)
-    model.expand(
-      try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == "small-files" }?.entry),
-      expanded: true)
+    model.expand(try entry("small-files", in: model), expanded: true)
     try await waitUntil { !model.treeEditing }
     XCTAssertEqual(try state("small-files").disclosureLabel, "Collapse small-files")
     XCTAssertTrue(try state("small-files").expanded)

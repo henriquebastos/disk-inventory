@@ -5,23 +5,14 @@ import XCTest
 
 @testable import DiskInventory
 
-@MainActor final class DixModelTests: XCTestCase {
-  func load(_ scenario: String = "dix") async throws -> ExplorerModel {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
-    return model
-  }
-  func entry(_ name: String, _ model: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name }?.entry)
-  }
+@MainActor final class TreeAndMapNavigationTests: XCTestCase {
   func center(_ hit: DiagramSelection) -> (UInt32, UInt32) {
     (UInt32(hit.rect.x + hit.rect.width / 2), UInt32(hit.rect.y + hit.rect.height / 2))
   }
   func testHoverLeavesPreparedSelectionUntouchedAndClickRevealsWithoutZoom() async throws {
-    let model = try await load()
+    let model = try await fixtureModel("dix")
     let root = model.records!.focus.key
-    let movie = try entry("Movie.mov", model)
+    let movie = try entry("Movie.mov", in: model)
     let target = try XCTUnwrap(
       model.picture?.targets.first { $0.entry.displayName.hasPrefix("asset-") })
     model.select(movie)
@@ -53,10 +44,10 @@ import XCTest
     XCTAssertEqual(model.diagramBuilds, builds)
   }
   func testDisclosureZoomBreadcrumbAndAncestorRestoreContext() async throws {
-    let model = try await load()
+    let model = try await fixtureModel("dix")
     let root = model.records!.focus.key
-    let projects = try entry("Projects", model)
-    let tiny = try entry("Tiny files", model)
+    let projects = try entry("Projects", in: model)
+    let tiny = try entry("Tiny files", in: model)
     model.expand(projects, expanded: true)
     try await waitUntil { !model.treeEditing && model.outline!.total == 2003 }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
@@ -64,10 +55,10 @@ import XCTest
     let original = model.tree
     model.focus(tiny.key)
     try await waitUntil { !model.loading }
-    let notes = try entry("Notes", model)
+    let notes = try entry("Notes", in: model)
     model.focus(notes.key)
     try await waitUntil { !model.loading }
-    let small = try entry("four-KiB.txt", model)
+    let small = try entry("four-KiB.txt", in: model)
     let rect = try XCTUnwrap(try model.picture!.frame.region(key: small.key))
     XCTAssertGreaterThan(rect.width * rect.height, 1000)
     model.focusParent()
@@ -82,7 +73,7 @@ import XCTest
     XCTAssertEqual(model.history.count, 2)  // Both visited descendant contexts remain restorable.
   }
   func testHistoryCapPayloadAndSessionAndMutationInvalidation() async throws {
-    let model = try await load("dix-deep")
+    let model = try await fixtureModel("dix-deep")
     for _ in 0..<70 {
       let child = try XCTUnwrap(model.outline?.rows.first { $0.entry.kind == .directory }?.entry)
       let leaf = try XCTUnwrap(model.picture?.targets.first)
@@ -104,14 +95,14 @@ import XCTest
     model.load { try ExplorerSession.fixture(scenario: "dix") }
     try await waitUntil { !model.replacingSession && !model.loading }
     XCTAssertTrue(model.history.isEmpty)
-    let tiny = try entry("Tiny files", model)
+    let tiny = try entry("Tiny files", in: model)
     model.focus(tiny.key)
     try await waitUntil { !model.loading }
-    let notes = try entry("Notes", model)
+    let notes = try entry("Notes", in: model)
     model.focus(notes.key)
     try await waitUntil { !model.loading }
     let oldFrame = model.picture!.frame
-    model.select(try entry("four-KiB.txt", model))
+    model.select(try entry("four-KiB.txt", in: model))
     model.prepare(.permanentlyDelete)
     try await waitUntil { model.pending != nil }
     model.execute()
@@ -121,12 +112,11 @@ import XCTest
     XCTAssertThrowsError(try oldFrame.hit(x: 0, y: 0))
   }
   func testStaleHoverRevealAndFrameCannotPublishAcrossSessionReplacement() async throws {
-    let model = try await load("metadata-delay")
+    let model = try await fixtureModel("metadata-delay")
     let old = model.session!
-    let movie = try entry("large-file", model)
+    let movie = try entry("large-file", in: model)
     let target = try XCTUnwrap(model.picture?.targets.first)
-    let blocked = Task.detached { try old.liveMetadata(key: movie.key) }
-    try await pollUntil { old.isBusy() }
+    let blocked = try await holdBridge(model)
     model.select(target.entry)
     let (x, y) = center(target)
     model.point(x, y)
@@ -143,13 +133,13 @@ import XCTest
     XCTAssertNil(model.selection.entry)
     XCTAssertNil(model.selection.row)
     XCTAssertTrue(model.history.isEmpty)
-    XCTAssertNotNil(try entry("large-file", model))
+    XCTAssertNotNil(try entry("large-file", in: model))
   }
   func testNativeHundredThousandRowsAreVirtual() async throws {
     var before = rusage()
     getrusage(RUSAGE_SELF, &before)
     let start = ContinuousClock.now
-    let model = try await load("dix-wide")
+    let model = try await fixtureModel("dix-wide")
     let loadTime = start.duration(to: .now)
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
@@ -165,7 +155,7 @@ import XCTest
       return view.subviews.compactMap { table(in: $0) }.first
     }
     let table = try XCTUnwrap(table(in: host))
-    let projects = try entry("Projects", model)
+    let projects = try entry("Projects", in: model)
     let expanded = ContinuousClock.now
     model.expand(projects, expanded: true)
     try await pollUntil { !model.treeEditing && table.numberOfRows == 100003 }
@@ -183,9 +173,9 @@ import XCTest
     )
   }
   func testNativeDatasourceCallbacksUseCachedRowsWhileBridgeIsBusy() async throws {
-    let model = try await load("metadata-delay")
+    let model = try await fixtureModel("metadata-delay")
     let session = model.session!
-    let key = try entry("large-file", model).key
+    let key = try entry("large-file", in: model).key
     let table = ContentsTree.Table(frame: .zero)
     let datasource = ContentsTree.Coordinator(model)
     table.dataSource = datasource
@@ -209,7 +199,7 @@ import XCTest
   func testDownsampledPointerMatchesRustOwnerAndAppKitDrawUsesCachedImage() async throws {
     var baseline = rusage()
     getrusage(RUSAGE_SELF, &baseline)
-    let model = try await load()
+    let model = try await fixtureModel("dix")
     model.resize(CGSize(width: 8000, height: 4000))
     try await waitUntil { model.picture!.bitmap.width > 2000 && !model.loading }
     let picture = model.picture!
@@ -250,7 +240,7 @@ import XCTest
     )
   }
   func testOffscreenAppKitTrackingKeyboardAndDisclosureCallbacks() async throws {
-    let model = try await load("presentation")
+    let model = try await fixtureModel("presentation")
     let root = model.records!.focus.key
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
@@ -267,7 +257,7 @@ import XCTest
     }
     let table = try XCTUnwrap(table(in: host))
     let coordinator = try XCTUnwrap(table.delegate as? ContentsTree.Coordinator)
-    let parent = try entry("small-files", model)
+    let parent = try entry("small-files", in: model)
     let parentRow = try XCTUnwrap(
       model.outline?.rows.firstIndex { $0.entry.key.sameEntry(other: parent.key) })
     let initial = table.numberOfRows
@@ -316,8 +306,13 @@ import XCTest
       return v.subviews.compactMap { map(in: $0) }.first
     }
     let view = try XCTUnwrap(map(in: mapHost))
-    try await Task.sleep(for: .milliseconds(250))
-    try await waitUntil { !model.loading }
+    // The layout resized the map; wait for that debounced rebuild.
+    await bounded("rebuild") { _ = await model.rebuildTask?.value }
+    // The rebuild task can be nil if no resize was scheduled: also require the map size.
+    try await waitUntil {
+      !model.loading && model.picture?.bitmap.width == UInt32(model.viewport.width)
+        && model.viewport.width == floor(view.bounds.width * window.backingScaleFactor)
+    }
     let target = try XCTUnwrap(model.picture?.targets.first)
     let rect = view.rect(target.rect)
     let location = view.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
@@ -342,9 +337,9 @@ import XCTest
   }
 
   func testHistoryRestoresNativeTopRowRatherThanOnlyMakingItVisible() async throws {
-    let model = try await load("presentation")
+    let model = try await fixtureModel("presentation")
     let root = model.records!.focus.key
-    let directory = try entry("small-files", model)
+    let directory = try entry("small-files", in: model)
     model.expand(directory, expanded: true)
     try await waitUntil { !model.treeEditing }
     model.select(directory)
@@ -389,8 +384,8 @@ import XCTest
   }
 
   func testShortTreeRestoreKeepsFirstRowBelowNativeHeader() async throws {
-    let model = try await load()
-    let tiny = try entry("Tiny files", model)
+    let model = try await fixtureModel("dix")
+    let tiny = try entry("Tiny files", in: model)
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
       styleMask: [.titled], backing: .buffered, defer: false)
@@ -426,10 +421,10 @@ import XCTest
   }
 
   func testHistoryRebuildsAfterExternalRevisionChange() async throws {
-    let model = try await load()
+    let model = try await fixtureModel("dix")
     let root = model.records!.focus.key
     let old = model.tree
-    let tiny = try entry("Tiny files", model)
+    let tiny = try entry("Tiny files", in: model)
     model.focus(tiny.key)
     try await waitUntil { !model.loading }
     let session = model.session!
@@ -443,7 +438,7 @@ import XCTest
   }
 
   func testAggregatePixelExplainsRecordedBytesWithoutCreatingAnActionTarget() async throws {
-    let model = try await load()
+    let model = try await fixtureModel("dix")
     let total = model.records!.focus.subtreeBytes
     model.resize(CGSize(width: 1, height: 1))
     try await waitUntil { model.picture?.bitmap.width == 1 && !model.loading }
@@ -457,7 +452,7 @@ import XCTest
   }
 
   func testAccessibilityTargetsDoNotRetainObsoleteFrames() async throws {
-    let model = try await load()
+    let model = try await fixtureModel("dix")
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
       backing: .buffered, defer: false)
@@ -499,9 +494,9 @@ import XCTest
     XCTAssertTrue(model.selection.entry?.key.sameEntry(other: key) == true, file: file, line: line)
   }
   func testDisclosurePreservesUnaffectedMovieSelection() async throws {
-    let model = try await load()
-    let movie = try entry("Movie.mov", model)
-    let tiny = try entry("Tiny files", model)
+    let model = try await fixtureModel("dix")
+    let movie = try entry("Movie.mov", in: model)
+    let tiny = try entry("Tiny files", in: model)
     model.select(movie)
     try await waitUntil { model.selection.row != nil }
     let original = model.selection.row!
@@ -515,9 +510,9 @@ import XCTest
     XCTAssertEqual(model.diagramBuilds, builds)
   }
   func testDisclosureRecomputesMovieRowAfterPrecedingSiblingChanges() async throws {
-    let model = try await load()
-    let movie = try entry("Movie.mov", model)
-    let projects = try entry("Projects", model)
+    let model = try await fixtureModel("dix")
+    let movie = try entry("Movie.mov", in: model)
+    let projects = try entry("Projects", in: model)
     model.select(movie)
     try await waitUntil { model.selection.row != nil }
     let original = model.selection.row!
@@ -529,9 +524,9 @@ import XCTest
     try await assertSelectedRow(model, matches: movie.key, expected: original)
   }
   func testDisclosureHidesSelectedDescendantWithoutReopeningOrRetargeting() async throws {
-    let model = try await load()
-    let projects = try entry("Projects", model)
-    let tiny = try entry("Tiny files", model)
+    let model = try await fixtureModel("dix")
+    let projects = try entry("Projects", in: model)
+    let tiny = try entry("Tiny files", in: model)
     let leaf = try XCTUnwrap(
       model.picture?.targets.first { $0.entry.displayName.hasPrefix("asset-") })
     model.select(leaf.entry)
@@ -553,16 +548,14 @@ import XCTest
   }
   func testDisclosureResultsRejectNewerSelectionSessionAndMutation() async throws {
     for change in ["selection", "session", "mutation"] {
-      let model = try await load("metadata-delay")
+      let model = try await fixtureModel("metadata-delay")
       let session = model.session!
       let oldTree = model.tree!
-      let directory = try entry("small-files", model)
-      let delayed = try entry("large-file", model)
+      let directory = try entry("small-files", in: model)
       let root = model.records!.focus
       model.select(directory)
       try await waitUntil { model.selection.row != nil }
-      let blocker = Task.detached { try session.liveMetadata(key: delayed.key) }
-      try await pollUntil { session.isBusy() }
+      let blocker = try await holdBridge(model)
       model.expand(directory, expanded: true)
       // Let the real tree worker queue behind the fixture's metadata lock.
       await Task.yield()
@@ -610,7 +603,7 @@ import XCTest
   }
 
   func testTreeRowsDrawMapSwatchesAndFocusRelativeUsageBars() async throws {
-    let model = try await load()
+    let model = try await fixtureModel("dix")
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
       backing: .buffered, defer: false)
@@ -625,7 +618,7 @@ import XCTest
       return view.subviews.compactMap { table(in: $0) }.first
     }
     let table = try XCTUnwrap(table(in: host))
-    model.expand(try entry("Tiny files", model), expanded: true)
+    model.expand(try entry("Tiny files", in: model), expanded: true)
     try await pollUntil { !model.treeEditing && table.numberOfRows == 4 }
     // Expansion reloads rows after the initial host layout. Lay out the current row views.
     host.layoutSubtreeIfNeeded()
@@ -671,7 +664,7 @@ import XCTest
   }
 
   func testUnknownAllocationRowKeepsAnEmptyUsageBar() async throws {
-    let model = try await load("unknown-allocation")
+    let model = try await fixtureModel("unknown-allocation")
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
       backing: .buffered, defer: false)

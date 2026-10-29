@@ -1,6 +1,7 @@
 //! Map pixels of the fixture scenarios, measured on the Rust bitmap at the size of the map in
 //! the default window on a 2x display. These replace window screenshots in UI tests: the app
-//! draws this bitmap 1:1 (`testPrototypeHomeDarkMapMatchesTheDesignBrightness` checks that).
+//! draws this bitmap 1:1 (`testWindowShowsTheMapBitmapOneToOneAndTheTreeInSystemColors` checks
+//! that).
 use super::*;
 use std::collections::HashMap;
 

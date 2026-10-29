@@ -86,7 +86,7 @@ queued/running count. `selectionQueryCount()` counts saved-selection calls actua
 entered under the backend lock, including invalid keys, not merely dispatched work.
 These atomic diagnostics are not lock barriers. "presentation_and_delay_fixtures_are_isolated"
 in [src/bridge/tests.rs](../src/bridge/tests.rs) and the parent-request tests in
-[IntegrationFixTests.swift](../native/ExplorerModelTests/IntegrationFixTests.swift)
+[StaleWorkRecoveryTests.swift](../native/ExplorerModelTests/StaleWorkRecoveryTests.swift)
 check them. There are no callbacks or async Rust methods; Sendable handles still block.
 
 `prepare` returns a Rust-owned `PreparedAction` retaining the actual core pin.

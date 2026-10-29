@@ -53,6 +53,6 @@ bytes), `zero-byte`, `hardlink-a`, `hardlink-b`, `trash`, and raw bytes `raw-` f
 
 The fixture invariants and their tests are listed in [bridge.md](bridge.md). The `dix`
 scenarios are used by
-[DixModelTests.swift](../native/ExplorerModelTests/DixModelTests.swift) and
+[TreeAndMapNavigationTests.swift](../native/ExplorerModelTests/TreeAndMapNavigationTests.swift) and
 [src/bridge/tests.rs](../src/bridge/tests.rs)
 "diagram_and_virtual_tree_are_native_free_bounded_and_revision_guarded" (`dix-wide`).

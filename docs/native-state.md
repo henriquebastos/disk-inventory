@@ -129,7 +129,7 @@ cell per state, with no table or session: "testCellShowsAFileRowWithItsColorSwat
 "testCellShowsALoadingRowWithoutSwatchOrBarAfterReuse" and
 "testSizeCellShowsTheSizeWithTheNameFrameAndAHelpTag". The on-screen alignment, selection and
 background checks stay in "testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows" and
-"testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch".
+"testWindowShowsTheMapBitmapOneToOneAndTheTreeInSystemColors".
 
 The rendered card (fonts, truncation and the material) stays covered by
 "testHeaderAndCardShowOnlySizesAndCountsWithoutAccountingNotes" and

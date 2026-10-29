@@ -3,26 +3,17 @@ import XCTest
 
 @testable import DiskInventory
 
-/// Dogfood feedback: the status bar hover, the Trash region, Esc, the outcome banner, refresh progress and Stop,
-/// and the selection region that caused the click flicker.
-@MainActor final class FeedbackModelTests: XCTestCase {
-  func load(_ scenario: String) async throws -> ExplorerModel {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
-    return model
-  }
-  func row(_ model: ExplorerModel, _ name: String) throws -> OutlineRow {
-    try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name }, name)
-  }
+/// The status bar hover, the Trash region, Esc, the outcome banner, the progress and Stop of
+/// Refresh, Delete and Trash, and the selection region that caused the click flicker.
+@MainActor final class StatusAndProgressTests: XCTestCase {
 
   func testSelectionRegionNeverClearsWhileTheNextRegionLoads() async throws {
-    let model = try await load("presentation")
-    model.select(try row(model, "large-file").entry)
+    let model = try await fixtureModel("presentation")
+    model.select(try entry("large-file", in: model))
     try await waitUntil { model.selection.region != nil }
     let first = try XCTUnwrap(model.selection.region)
     // A tree selection keeps the shown region until the new one arrives: no frame without dim.
-    model.select(try row(model, "small-files").entry)
+    model.select(try entry("small-files", in: model))
     XCTAssertEqual(model.selection.region?.x, first.x)
     XCTAssertEqual(model.selection.region?.width, first.width)
     try await waitUntil { model.selection.region.map { $0.width != first.width } == true }
@@ -36,15 +27,15 @@ import XCTest
   }
 
   func testStatusTextNamesTheHoveredBlockWhileAnotherItemIsSelected() async throws {
-    let model = try await load("prototype-home")
+    let model = try await fixtureModel("prototype-home")
     let session = try XCTUnwrap(model.session)
-    model.select(try row(model, "Movies").entry)
+    model.select(try entry("Movies", in: model))
     try await waitUntil { model.selectedDisplayPath == "/Users/ana/Movies" }
     XCTAssertEqual(model.statusText, "", "no hover: the status bar is empty")
     let frame = try XCTUnwrap(model.picture?.frame)
     let (builds, picture) = (model.diagramBuilds, model.picture)
     let queries = session.selectionQueryCount()
-    let trash = try XCTUnwrap(try frame.region(key: try row(model, ".Trash").entry.key))
+    let trash = try XCTUnwrap(try frame.region(key: try entry(".Trash", in: model).key))
     model.point(UInt32(trash.x + trash.width / 2), UInt32(trash.y + trash.height / 2))
     try await waitUntil { model.hover?.entry.displayName == ".Trash" }
     XCTAssertEqual(model.statusText, "/Users/ana/.Trash")
@@ -68,8 +59,8 @@ import XCTest
   }
 
   func testTrashRegionSelectsTheTrashDirectory() async throws {
-    let model = try await load("prototype-home")
-    let trash = try row(model, ".Trash").entry
+    let model = try await fixtureModel("prototype-home")
+    let trash = try entry(".Trash", in: model)
     let frame = try XCTUnwrap(model.picture?.frame)
     let region = try XCTUnwrap(try frame.region(key: trash.key))
     for (fx, fy) in [(0.2, 0.3), (0.5, 0.5), (0.8, 0.7)] {
@@ -91,8 +82,8 @@ import XCTest
   }
 
   func testClearSelectionResetsItemRegionCardAndRowOnly() async throws {
-    let model = try await load("presentation")
-    model.select(try row(model, "large-file").entry)
+    let model = try await fixtureModel("presentation")
+    model.select(try entry("large-file", in: model))
     try await waitUntil { model.selection.region != nil && model.selection.path == "large-file" }
     let (focus, builds, tree) = (model.records?.focus.key, model.diagramBuilds, model.tree)
     XCTAssertTrue(model.canClearSelection)
@@ -103,8 +94,8 @@ import XCTest
     XCTAssertNil(model.selection.path)
     XCTAssertNil(model.selectedDisplayPath)
     XCTAssertFalse(model.canClearSelection)
-    try await Task.sleep(for: .milliseconds(300))
     // A late path or region answer for the old selection does not come back.
+    await settled(model)
     XCTAssertNil(model.selection.region)
     XCTAssertNil(model.selection.path)
     XCTAssertTrue(model.records?.focus.key.sameEntry(other: try XCTUnwrap(focus)) == true)
@@ -119,7 +110,7 @@ import XCTest
   }
 
   func testBannerDismissHidesOutcomeErrorAndSeenIssues() async throws {
-    let model = try await load("presentation")
+    let model = try await fixtureModel("presentation")
     XCTAssertFalse(model.bannerVisible)
     model.outcome = "Moved to Trash."
     model.issues = ["one issue"]
@@ -139,8 +130,8 @@ import XCTest
   }
 
   func testControlledRefreshNamesTheFolderCountsAndStopKeepsTheView() async throws {
-    let model = try await load("prototype-home-refresh")
-    model.focus(try row(model, "Library").entry.key)
+    let model = try await fixtureModel("prototype-home-refresh")
+    model.focus(try entry("Library", in: model).key)
     try await waitUntil { model.records?.focus.displayName == "Library" && !model.loading }
     let (picture, tree, builds) = (model.picture?.frame, model.tree, model.diagramBuilds)
     let total = model.records?.focus.subtreeBytes
@@ -168,10 +159,10 @@ import XCTest
   }
 
   func testControlledRefreshAppliesLiveChangesAndRebuilds() async throws {
-    let model = try await load("prototype-home-refresh")
-    model.focus(try row(model, "Library").entry.key)
+    let model = try await fixtureModel("prototype-home-refresh")
+    model.focus(try entry("Library", in: model).key)
     try await waitUntil { model.records?.focus.displayName == "Library" && !model.loading }
-    model.select(try row(model, "Caches").entry)
+    model.select(try entry("Caches", in: model))
     try await waitUntil { model.selection.region != nil }
     let total = try XCTUnwrap(model.records?.focus.subtreeBytes)
     let builds = model.diagramBuilds
@@ -193,12 +184,13 @@ import XCTest
   }
   /// Prepares `kind` for Library in `operation-paused` and returns at the confirmation.
   func confirmLibrary(_ kind: ActionKind) async throws -> (ExplorerModel, ExplorerSession) {
-    let model = try await load("operation-paused")
+    let model = try await fixtureModel("operation-paused")
     let session = try XCTUnwrap(model.session)
-    model.select(try row(model, "Library").entry)
+    model.select(try entry("Library", in: model))
     let preparation = try XCTUnwrap(model.prepare(kind))
     // The check runs before the alert, and the bar names it.
     XCTAssertEqual(model.checking, "Library")
+    XCTAssertEqual(model.progressBar, .checking(name: "Library"))
     XCTAssertTrue(model.working)
     let stage = try await held(session)
     XCTAssertEqual(stage, "check")
@@ -220,6 +212,9 @@ import XCTest
     XCTAssertNil(model.scan.itemsText(model.numbers))
     XCTAssertTrue(model.scan.offersStop)
     XCTAssertTrue(ExplorerCommand.stopScan.isEnabled(in: model))
+    XCTAssertEqual(
+      model.progressBar,
+      .operation(phase: "Checking “Library”…", items: nil, offersStop: true, canStop: true))
     try session.releaseFixtureStage()
     stage = try await held(session)
     XCTAssertEqual(stage, "remove")
@@ -227,6 +222,9 @@ import XCTest
     XCTAssertEqual(model.scan.label, "Deleting “Library”…")
     XCTAssertEqual(model.scan.itemsText(model.numbers), "5 items")
     XCTAssertTrue(ExplorerCommand.stopScan.isEnabled(in: model))
+    XCTAssertEqual(
+      model.progressBar,
+      .operation(phase: "Deleting “Library”…", items: "5 items", offersStop: true, canStop: true))
     try session.releaseFixtureStage()
     stage = try await held(session)
     XCTAssertEqual(stage, "update")
@@ -234,6 +232,9 @@ import XCTest
     XCTAssertEqual(model.scan.label, "Updating view…")
     XCTAssertNil(model.scan.itemsText(model.numbers))
     XCTAssertFalse(ExplorerCommand.stopScan.isEnabled(in: model), "the deletion is done")
+    XCTAssertEqual(
+      model.progressBar,
+      .operation(phase: "Updating view…", items: nil, offersStop: true, canStop: false))
     try session.releaseFixtureStage()
     await execution.value
     XCTAssertEqual(model.outcome, "Deleted.")
@@ -301,8 +302,8 @@ import XCTest
   }
 
   func testSkippedItemsReadAsDeletedWithACountAndReasonsInDetails() async throws {
-    let model = try await load("operation-skip")
-    model.select(try row(model, "Library").entry)
+    let model = try await fixtureModel("operation-skip")
+    model.select(try entry("Library", in: model))
     await model.prepare(.permanentlyDelete)?.value
     await model.execute()?.value
     XCTAssertEqual(model.outcome, "Deleted. 3 items skipped.")

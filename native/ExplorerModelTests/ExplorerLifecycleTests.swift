@@ -4,7 +4,7 @@ import XCTest
 
 @testable import DiskInventory
 
-@MainActor final class RedesignModelTests: XCTestCase {
+@MainActor final class ExplorerLifecycleTests: XCTestCase {
   func ownedRoot() throws -> URL {
     let base = try XCTUnwrap(
       ProcessInfo.processInfo.environment["DI_TEST_ROOT"],
@@ -16,18 +16,9 @@ import XCTest
     defer { free(canonical) }
     return URL(fileURLWithPath: String(cString: canonical))
   }
-  func fixture(_ scenario: String = "dix") async throws -> ExplorerModel {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", scenario], environment: [:])
-    try await waitUntil { !model.loading && !model.replacingSession && model.records != nil }
-    return model
-  }
-  func entry(_ name: String, in model: ExplorerModel) throws -> EntryRecord {
-    try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == name }?.entry)
-  }
 
   func testFullExplorerViewSettlesMapInputNavigationAndWindowResize() async throws {
-    let model = try await fixture("dix")
+    let model = try await fixtureModel("dix")
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
       styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -56,15 +47,14 @@ import XCTest
       let viewport = model.viewport
       let bounds = map.bounds
       let builds = model.diagramBuilds
-      // Each sample exceeds the real 180 ms resize debounce. Busy chrome must not resize the map.
-      for _ in 0..<3 {
-        try await Task.sleep(for: .milliseconds(220))
-        host.layoutSubtreeIfNeeded()
-        XCTAssertFalse(model.loading)
-        XCTAssertEqual(model.viewport, viewport)
-        XCTAssertEqual(map.bounds, bounds)
-        XCTAssertEqual(model.diagramBuilds, builds)
-      }
+      // The quiet period exceeds two real 180 ms resize debounces. Busy chrome must not resize
+      // the map.
+      try await stays(
+        {
+          host.layoutSubtreeIfNeeded()
+          return !model.loading && model.viewport == viewport && map.bounds == bounds
+            && model.diagramBuilds == builds
+        }, for: quietPeriod)
     }
     try await assertSettled()
     let target = try XCTUnwrap(model.picture?.targets.first { $0.actionable })
@@ -173,12 +163,12 @@ import XCTest
     defer { try? FileManager.default.removeItem(at: root) }
     let storage = ManagedInventoryStorage(root: root.appendingPathComponent("support"))
     let model = ExplorerModel(arguments: [], environment: [:], storage: storage)
-    try await Task.sleep(for: .milliseconds(300))
-    XCTAssertNil(model.session)
-    XCTAssertNil(model.records)
-    XCTAssertNil(model.lastInventory)
-    XCTAssertFalse(model.loading)
-    XCTAssertFalse(model.scan.polling)
+    // The metadata read at launch has no completion signal; nothing else may start.
+    try await stays(
+      {
+        model.session == nil && model.records == nil && model.lastInventory == nil
+          && !model.loading && !model.scan.polling
+      }, for: quietPeriod)
     XCTAssertFalse(FileManager.default.fileExists(atPath: storage.root.path))
     model.shutdown()
   }
@@ -303,8 +293,8 @@ import XCTest
     fixture.reopenLastFolder()
     fixture.createManaged(root: root)
     XCTAssertFalse(fixture.replacingSession)
-    try await Task.sleep(for: .milliseconds(200))
-    XCTAssertEqual(try listing(), before)
+    try await stays(
+      { !fixture.replacingSession && (try? listing()) == before }, for: quietPeriod)
     // Without the variable, fixture mode has no storage. Production ignores the variable.
     let plain = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", "presentation"], environment: [:])
@@ -314,9 +304,8 @@ import XCTest
     let production = ExplorerModel(arguments: [], environment: environment, storage: injected)
     defer { production.shutdown() }
     try await waitUntil { plain.records != nil && !plain.replacingSession }
-    try await Task.sleep(for: .milliseconds(200))
-    XCTAssertNil(plain.lastInventory)
-    XCTAssertNil(production.lastInventory)
+    try await stays(
+      { plain.lastInventory == nil && production.lastInventory == nil }, for: quietPeriod)
     XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
     XCTAssertEqual(try listing(), before)
   }
@@ -354,9 +343,11 @@ import XCTest
   func testScanPollingStopAndReplacementCallRustControlAndEndPolling() async throws {
     let poll = ScanCoordinator()
     let first = ScanControl()
+    let start = ContinuousClock.now
     poll.begin(first)
-    try await Task.sleep(for: .milliseconds(570))
-    XCTAssertTrue((1...3).contains(poll.samples))
+    try await waitUntil { poll.samples >= 2 }
+    // The poll sleeps 250 ms before each sample. A lower bound holds also under load.
+    XCTAssertGreaterThanOrEqual(start.duration(to: .now), .milliseconds(500))
     poll.stop()
     XCTAssertEqual(first.progress().phase, .stopping)
     XCTAssertEqual(poll.progress?.phase, .stopping)
@@ -368,13 +359,12 @@ import XCTest
     XCTAssertEqual(second.progress().phase, .stopping)
     poll.stopPolling(cancelScan: true)
     let count = poll.samples
-    try await Task.sleep(for: .milliseconds(550))
+    // Longer than one poll interval: a poll that went on would sample in this time.
+    try await stays({ poll.samples == count && !poll.polling }, for: quietPeriod)
     XCTAssertEqual(third.progress().phase, .stopping)
-    XCTAssertFalse(poll.polling)
     XCTAssertNil(poll.progress)
-    XCTAssertEqual(poll.samples, count)
 
-    let model = try await fixture("presentation")
+    let model = try await fixtureModel("presentation")
     let control = ScanControl()
     model.scan.begin(control)
     model.load { try ExplorerSession.fixture(scenario: "ordinary") }
@@ -384,7 +374,7 @@ import XCTest
   }
 
   func testBreadcrumbContextsRestoreBothDirectionsAndHiddenSelection() async throws {
-    let model = try await fixture()
+    let model = try await fixtureModel("dix")
     let root = model.records!.focus.key
     let projects = try entry("Projects", in: model)
     model.expand(projects, expanded: true)
@@ -448,7 +438,7 @@ import XCTest
   }
 
   func testRemovalMotionOutcomesVisibleDestinationAndReduceMotion() async throws {
-    let model = try await fixture("presentation")
+    let model = try await fixtureModel("presentation")
     let target = try XCTUnwrap(model.picture?.targets.first)
     let root = model.records!.status.rootPath
     var destination = root
@@ -490,13 +480,13 @@ import XCTest
   }
 
   func testSuccessfulRemovalHoldsOnlyOneOldFrameAndReplacementCancelsMotion() async throws {
-    let model = try await fixture("presentation")
+    let model = try await fixtureModel("presentation")
     model.select(try entry("large-file", in: model))
     try await waitUntil { model.selection.region != nil }
     let old = model.picture!.frame
     model.prepare(.permanentlyDelete)
     try await waitUntil { model.pending != nil }
-    model.execute()
+    let execution = try XCTUnwrap(model.execute())
     try await waitUntil { model.motion.active }
     XCTAssertEqual(model.outcome, "Deleted.")
     XCTAssertTrue(model.motion.previous?.frame === old)
@@ -505,14 +495,15 @@ import XCTest
     model.load { try ExplorerSession.fixture(scenario: "ordinary") }
     XCTAssertFalse(model.motion.active)
     try await waitUntil { !model.replacingSession }
-    try await Task.sleep(for: .milliseconds(300))
+    // The removal ends after the replacement and must publish nothing of the old session.
+    await bounded("removal") { await execution.value }
     XCTAssertNil(model.motion.previous)
     XCTAssertNil(model.selection.entry)
     XCTAssertNil(model.outcome)
   }
 
   func testConfirmationPresentationNamesItemAndAssignsAlertRoles() async throws {
-    let model = try await fixture("presentation")
+    let model = try await fixtureModel("presentation")
     defer { model.shutdown() }
     for (name, scope) in [("large-file", "File"), ("small-files", "Directory and its contents")] {
       model.select(try entry(name, in: model))
@@ -563,7 +554,7 @@ import XCTest
   }
 
   func testPartialRemovalPreservesSurvivingSelectionWithoutSuccessMotion() async throws {
-    let model = try await fixture("partial-deletion")
+    let model = try await fixtureModel("partial-deletion")
     model.select(try entry("small-files", in: model))
     model.prepare(.permanentlyDelete)
     try await waitUntil { model.pending != nil }
@@ -584,7 +575,7 @@ import XCTest
     XCTAssertFalse(native.fixtureMode)
     XCTAssertFalse(native.fixtureReduceMotion)
     native.shutdown()
-    let ordinary = try await fixture("presentation")
+    let ordinary = try await fixtureModel("presentation")
     XCTAssertFalse(ordinary.fixtureReduceMotion)
     let disabled = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", "presentation"],
@@ -608,7 +599,7 @@ import XCTest
   }
 
   func testRecoveryPublishesBoundedSliceAndScrollForLateSurvivor() async throws {
-    let model = try await fixture("dix")
+    let model = try await fixtureModel("dix")
     let session = try XCTUnwrap(model.session)
     let projects = try entry("Projects", in: model)
     let survivor = try await Task.detached {
@@ -651,7 +642,7 @@ import XCTest
   }
 
   func testRecoveryKeepsOutsideFocusSurvivorWithoutFalseTreeRow() async throws {
-    let model = try await fixture("dix")
+    let model = try await fixtureModel("dix")
     let session = try XCTUnwrap(model.session)
     let movie = try entry("Movie.mov", in: model)
     let tiny = try entry("Tiny files", in: model)
@@ -669,15 +660,14 @@ import XCTest
   }
 
   func testRecoveryRetainsRowsWithoutInteractiveStaleTree() async throws {
-    let model = try await fixture("metadata-delay")
+    let model = try await fixtureModel("metadata-delay")
     let target = try entry("large-file", in: model)
     model.select(target)
     try await waitUntil { model.selection.row != nil && model.selection.rawPath != nil }
     let session = try XCTUnwrap(model.session)
     let token = model.outlineToken
     let rows = try XCTUnwrap(model.outline).total
-    let blocker = Task.detached { try session.liveMetadata(key: target.key) }
-    try await pollUntil { session.isBusy() }
+    let blocker = try await holdBridge(model)
     let recovery = Task { await model.recoverView(session, preserving: target.key) }
     try await waitUntil { model.tree == nil && model.loading }
     XCTAssertTrue(model.outlineToken === token)
@@ -710,7 +700,7 @@ import XCTest
 
   func testRemovalOutcomeKeepsHostedMapViewportAndTreeRowsStable() async throws {
     for action in [ActionKind.trash, .permanentlyDelete] {
-      let model = try await fixture("presentation-trash-inside")
+      let model = try await fixtureModel("presentation-trash-inside")
       let window = NSWindow(
         contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
         styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -732,7 +722,7 @@ import XCTest
         return !model.loading && model.picture?.bitmap.height == UInt32(model.viewport.height)
           && model.viewport.height == floor(map.bounds.height * window.backingScaleFactor)
       }
-      try await Task.sleep(for: .milliseconds(220))
+      await bounded("rebuild") { _ = await model.rebuildTask?.value }
       let bounds = map.bounds
       let viewport = model.viewport
       let builds = model.diagramBuilds
@@ -749,18 +739,17 @@ import XCTest
         try await Task.sleep(for: .milliseconds(10))
       }
       XCTAssertNotNil(model.outcome)
-      for _ in 0..<3 {
-        try await Task.sleep(for: .milliseconds(220))
-        host.layoutSubtreeIfNeeded()
-        XCTAssertEqual(map.bounds, bounds)
-        XCTAssertEqual(model.viewport, viewport)
-        XCTAssertEqual(model.diagramBuilds, builds + 1)
-      }
+      try await stays(
+        {
+          host.layoutSubtreeIfNeeded()
+          return map.bounds == bounds && model.viewport == viewport
+            && model.diagramBuilds == builds + 1
+        }, for: quietPeriod)
     }
   }
 
   func testInsideTrashTravelsBetweenMateriallyDistinctRegions() async throws {
-    let model = try await fixture("presentation-trash-inside")
+    let model = try await fixtureModel("presentation-trash-inside")
     model.select(try entry("large-file", in: model))
     try await waitUntil { model.selection.region != nil }
     model.prepare(.trash)
@@ -781,7 +770,7 @@ import XCTest
   }
 
   func testInsideTrashTravelsToTheMovedTileBeyondAccessibilityTargets() async throws {
-    let model = try await fixture("presentation-trash-late-target")
+    let model = try await fixtureModel("presentation-trash-late-target")
     model.select(try entry("large-file", in: model))
     try await waitUntil { model.selection.region != nil }
     model.prepare(.trash)

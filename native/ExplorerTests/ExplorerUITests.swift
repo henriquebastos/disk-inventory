@@ -53,6 +53,14 @@ extension XCUIElement {
   func until(_ timeout: TimeInterval = 8, _ condition: () -> Bool) -> Bool {
     poll(timeout, condition)
   }
+  /// How long a test watches for a change that must not happen, such as an alert that a key
+  /// must not open or close. The app answers a key or a menu command within a few hundred
+  /// milliseconds; nothing signals that it chose to do nothing.
+  static let quietPeriod: TimeInterval = 1
+  /// Reports whether `condition` holds on every check for `duration` seconds.
+  func stays(_ condition: () -> Bool, for duration: TimeInterval) -> Bool {
+    !poll(duration) { !condition() }
+  }
   /// Waits until the busy bar of an operation is gone: the outcome shows before the view
   /// recovers, and the bar stays until the recovery ends.
   func operationEnds(timeout: TimeInterval = 8) {
@@ -201,7 +209,7 @@ extension XCUIElement {
     let title = app.staticTexts["confirmation-title"]
     // Return has no default button to press: the alert and the row stay.
     app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
-    XCTAssertFalse(title.disappears(within: 2))
+    XCTAssertTrue(stays({ title.exists }, for: Self.quietPeriod))
     XCTAssertTrue(row("large-file").exists)
     text("confirmation-title", contains: "Delete “large-file” immediately?")
     XCTAssertEqual(app.buttons["confirm-action"].title, "Delete Immediately")
@@ -237,18 +245,15 @@ extension XCUIElement {
       anyText(containing: "Trash destination scope is unknown").appears(within: 8))
     screenshot("trash-unknown-issue-details")
   }
+  /// Real clicks on two rows of the latency fixture. The timing (under 750 ms with live
+  /// metadata that takes 1 s) is a model test in ExplorerModelTests.swift.
   func testImmediateSavedOnlySelection() {
     launch("metadata-delay")
     row("large-file").click()
-    let start = Date()
     row("zero-byte").click()
     text("selected-name", contains: "zero-byte")
-    let elapsed = Date().timeIntervalSince(start)
-    print("RESPONSIVENESS XCUITest click+AX selected-name assertion: \(elapsed) seconds")
     text("selected-usage", contains: "0 bytes")
     text("selected-path", contains: "zero-byte")
-    XCTAssertFalse(app.staticTexts["metadata-state"].exists)
-    text("selected-name", contains: "zero-byte")
     screenshot("responsive-later-selection")
   }
   func testFixtureModeFailsClosed() {
@@ -463,7 +468,7 @@ extension XCUIElement {
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
-    XCTAssertFalse(title.appears(within: 2))
+    XCTAssertTrue(stays({ !title.exists }, for: Self.quietPeriod))
     // A new selection refreshes the menu: no stale root state.
     row("large-file").click()
     text("selected-name", contains: "large-file")
@@ -479,7 +484,7 @@ extension XCUIElement {
     // Under the alert, both shortcuts and the menu items do nothing.
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
-    XCTAssertFalse(title.disappears(within: 2))
+    XCTAssertTrue(stays({ title.exists }, for: Self.quietPeriod))
     text("confirmation-title", contains: "Move “large-file” to the Trash?")
     XCTAssertEqual(app.sheets.count, 1)
     XCTAssertFalse(menuItem("File", "Move to Trash…").isEnabled)
@@ -502,18 +507,14 @@ extension XCUIElement {
     let appMenu = app.menuBars.menuBarItems.element(boundBy: 1)
     appMenu.click()
     appMenu.menuItems["orderFrontStandardAboutPanel:"].click()
-    let deadline = Date().addingTimeInterval(5)
-    while app.windows.count + app.dialogs.count < 2, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.1)
-    }
-    XCTAssertGreaterThanOrEqual(app.windows.count + app.dialogs.count, 2)
+    XCTAssertTrue(until(5) { app.windows.count + app.dialogs.count >= 2 }, "the About panel")
     XCTAssertFalse(menuItem("File", "Move to Trash…").isEnabled)
     XCTAssertFalse(menuBarItem("File").menuItems["Delete Immediately…"].isEnabled)
     screenshot("file-menu-about-panel-key")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
-    XCTAssertFalse(title.appears(within: 2))
+    XCTAssertTrue(stays({ !title.exists }, for: Self.quietPeriod))
     XCTAssertTrue(row("large-file").exists)
   }
   func testNavigateMenuPrecedesWindowMenu() {
@@ -526,17 +527,15 @@ extension XCUIElement {
     XCTAssertLessThan(navigate ?? .max, titles.firstIndex(of: "Help") ?? -1, "\(titles)")
     XCTAssertLessThan(titles.firstIndex(of: "File") ?? .max, navigate ?? -1, "\(titles)")
   }
-  /// Writes last-folder metadata into a new directory that the test owns. A nil `rootName`
-  /// writes metadata without the field.
-  func lastFolderMetadata(rootName: String?) throws -> URL {
+  /// Writes last-folder metadata with `rootName` into a new directory that the test owns.
+  func lastFolderMetadata(rootName: String) throws -> URL {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       "reopen-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    var record: [String: Any] = [
+    let record: [String: Any] = [
       "filename": "inventory-\(UUID().uuidString).dmap",
-      "scannedAt": Date().timeIntervalSinceReferenceDate,
+      "scannedAt": Date().timeIntervalSinceReferenceDate, "rootName": rootName,
     ]
-    if let rootName { record["rootName"] = rootName }
     try JSONSerialization.data(withJSONObject: record).write(
       to: directory.appendingPathComponent("last-inventory.json"))
     ownedDirectories.append(directory)
@@ -567,45 +566,21 @@ extension XCUIElement {
     XCTAssertTrue(menuBarItem("File").menuItems["Choose Folder…"].appears(within: 5))
     return menuBarItem("File").menuItems.allElementsBoundByIndex.map(\.title)
   }
-  func testFileMenuShowsReopenWorkspaceAndNoOpenSnapshot() throws {
-    launch(storage: try lastFolderMetadata(rootName: "/Workspace"))
+  /// The File menu and the start screen name the last folder from owned metadata; the labels
+  /// for other metadata are model tests. Fixture mode only reads the metadata: Reopen stays
+  /// disabled, and the directory stays unchanged.
+  func testReopenNamesTheLastFolderAndFixtureStorageStaysUnchanged() throws {
+    let storage = try lastFolderMetadata(rootName: "/Workspace")
+    let before = try listing(storage)
+    launch(storage: storage)
+    // The label proves that the app read this directory.
     let titles = fileMenuTitles()
     XCTAssertEqual(
       Array(titles.prefix(2)), ["Choose Folder…", "Reopen “Workspace”"], "\(titles)")
     XCTAssertFalse(titles.contains("Open Snapshot…"), "\(titles)")
     XCTAssertFalse(titles.contains { $0.hasPrefix("Open Last") }, "\(titles)")
-    // Fixture mode only reads the metadata. Reopen stays disabled.
     XCTAssertFalse(menuBarItem("File").menuItems["Reopen “Workspace”"].isEnabled)
     screenshot("reopen-file-menu")
-    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-  }
-  func testStartScreenShowsReopenWorkspace() throws {
-    launchStartScreen(storage: try lastFolderMetadata(rootName: "/Workspace"))
-    let reopen = app.buttons["reopen-last-folder"]
-    XCTAssertTrue(reopen.appears(within: 8))
-    XCTAssertEqual(reopen.label, "Reopen “Workspace”")
-    XCTAssertFalse(reopen.isEnabled)
-    XCTAssertFalse(app.buttons["open-snapshot"].exists)
-    XCTAssertFalse(app.buttons["Open Snapshot…"].exists)
-    screenshot("reopen-start-screen")
-  }
-  func testOldMetadataShowsReopenLastFolder() throws {
-    launchStartScreen(storage: try lastFolderMetadata(rootName: nil))
-    let reopen = app.buttons["reopen-last-folder"]
-    XCTAssertTrue(reopen.appears(within: 8))
-    XCTAssertEqual(reopen.label, "Reopen Last Folder")
-    let titles = fileMenuTitles()
-    XCTAssertEqual(
-      Array(titles.prefix(2)), ["Choose Folder…", "Reopen Last Folder"], "\(titles)")
-    app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-    screenshot("reopen-start-screen-old-metadata")
-  }
-  func testFixtureStorageDirectoryStaysUnchanged() throws {
-    let storage = try lastFolderMetadata(rootName: "/Workspace")
-    let before = try listing(storage)
-    launch(storage: storage)
-    // The label proves that the app read this directory.
-    XCTAssertTrue(menuItem("File", "Reopen “Workspace”").exists)
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     app.typeKey("o", modifierFlags: [.command])
     XCTAssertEqual(app.dialogs.count, 0)
@@ -614,6 +589,10 @@ extension XCUIElement {
     let reopen = app.buttons["reopen-last-folder"]
     XCTAssertTrue(reopen.appears(within: 8))
     XCTAssertEqual(reopen.label, "Reopen “Workspace”")
+    XCTAssertFalse(reopen.isEnabled)
+    XCTAssertFalse(app.buttons["open-snapshot"].exists)
+    XCTAssertFalse(app.buttons["Open Snapshot…"].exists)
+    screenshot("reopen-start-screen")
     reopen.click()
     app.typeKey("o", modifierFlags: [.command])
     XCTAssertEqual(app.dialogs.count, 0)
@@ -716,7 +695,7 @@ extension XCUIElement {
     screenshot("edit-menu-after-trash")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     app.typeKey("z", modifierFlags: [.command])
-    XCTAssertFalse(row("large-file").appears(within: 2))
+    XCTAssertTrue(stays({ !row("large-file").exists }, for: Self.quietPeriod))
     text("outcome", contains: "Moved to Trash")
   }
 
@@ -914,39 +893,11 @@ extension XCUIElement {
       app.terminate()
     }
   }
-  func testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch() throws {
-    continueAfterFailure = true
-    for appearance in Self.appearances {
-      launch(appearance: appearance)
-      XCTAssertTrue(row("zero-byte").appears(within: 8))
-      let p = try windowPixels()
-      var expected: (background: [Double], swatch: [Double]) = ([], [])
-      NSAppearance(named: appearance.hasPrefix("light") ? .aqua : .darkAqua)!
-        .performAsCurrentDrawingAppearance {
-          func rgb(_ color: NSColor) -> [Double] {
-            let c = color.usingColorSpace(.sRGB)!
-            return [c.redComponent, c.greenComponent, c.blueComponent].map { $0 * 255 }
-          }
-          expected = (rgb(.controlBackgroundColor), rgb(.systemGray))
-        }
-      // Empty tree area below the last row, and the center of an unselected directory swatch.
-      let empty = CGPoint(
-        x: app.outlines["entry-tree"].frame.midX, y: row("zero-byte").frame.maxY + 60)
-      let name = row("small-files").frame
-      let swatch = CGPoint(x: name.minX - 10.5, y: name.midY)
-      let background = p.mean(empty)
-      let square = p.mean(swatch)
-      print("TREE \(appearance) background=\(background) swatch=\(square) expected=\(expected)")
-      for c in 0..<3 {
-        XCTAssertEqual(
-          background[c], expected.background[c], accuracy: 4, "\(appearance) background")
-        XCTAssertEqual(square[c], expected.swatch[c], accuracy: 6, "\(appearance) swatch")
-      }
-      screenshot("tree-inset-\(appearance)")
-      app.terminate()
-    }
-  }
-  func testMapTileBaseColorMatchesTreeSwatchOnScreen() throws {
+  /// The window shows the map bitmap 1:1 and the tree in system colors, in light and dark.
+  /// Rust pixel tests own the map colors (src/explorer_tests.rs, src/bridge/tests/map_pixels.rs);
+  /// AppearanceModelTests.swift owns the inset style and the adaptive swatch color. This test
+  /// checks what only the real window shows: color management, scaling and the background.
+  func testWindowShowsTheMapBitmapOneToOneAndTheTreeInSystemColors() throws {
     continueAfterFailure = true
     for appearance in ["light", "dark"] {
       launch("dix", appearance: appearance)
@@ -954,9 +905,9 @@ extension XCUIElement {
       XCTAssertTrue(tile.appears(within: 8))
       row("Tiny files").hover()
       let p = try windowPixels()
-      let name = row("Movie.mov").frame
-      let swatch = p.mean(CGPoint(x: name.minX - 10.5, y: name.midY)).map { Int($0.rounded()) }
-      // The tile gradient passes through its base color, which the swatch shows.
+      // The movie row's swatch shows its file color; the tile gradient passes through it.
+      let movie = row("Movie.mov").frame
+      let swatch = p.mean(CGPoint(x: movie.minX - 10.5, y: movie.midY)).map { Int($0.rounded()) }
       var nearest = Int.max
       let frame = tile.frame.insetBy(dx: 4, dy: 4)
       for y in stride(from: p.y(frame.minY), to: p.y(frame.maxY), by: 2) {
@@ -966,7 +917,55 @@ extension XCUIElement {
       }
       print("SRGB \(appearance) swatch=\(swatch) nearest=\(nearest)")
       XCTAssertLessThanOrEqual(nearest, 3, "\(appearance): map tile and swatch colors differ")
-      screenshot("srgb-swatch-\(appearance)")
+      // Rust darkens one backing pixel on each tile edge to 0.55 of the next pixel inside. A
+      // scaled or blurred bitmap would not keep that one-pixel seam.
+      let srgb = try windowPixels(srgb: true)
+      let f = tile.frame
+      let (x0, y0) = (
+        Int(((f.minX - srgb.origin.x) * srgb.scale - 0.5).rounded(.up)),
+        Int(((f.minY - srgb.origin.y) * srgb.scale - 0.5).rounded(.up))
+      )
+      let (x1, y1) = (
+        Int(((f.maxX - srgb.origin.x) * srgb.scale - 0.5).rounded(.up)),
+        Int(((f.maxY - srgb.origin.y) * srgb.scale - 0.5).rounded(.up))
+      )
+      var ratios: [Double] = []
+      for fraction in [0.25, 0.5, 0.75] {
+        let x = x0 + Int(Double(x1 - x0) * fraction)
+        let y = y0 + Int(Double(y1 - y0) * fraction)
+        for (edge, inside) in [
+          ((x0, y), (x0 + 1, y)), ((x, y0), (x, y0 + 1)), ((x1 - 1, y), (x1 - 2, y)),
+          ((x, y1 - 1), (x, y1 - 2)),
+        ] {
+          let (e, i) = (srgb.rgb(edge.0, edge.1), srgb.rgb(inside.0, inside.1))
+          ratios.append(Double(e.reduce(0, +)) / Double(max(1, i.reduce(0, +))))
+        }
+      }
+      let seam = ratios.reduce(0, +) / Double(ratios.count)
+      print("SEAM \(appearance) edge/interior mean=\(seam) \(ratios)")
+      XCTAssertEqual(seam, 0.55, accuracy: 0.04, "\(appearance): the one-pixel seam")
+      // The empty tree area below the last row and the center of a directory swatch.
+      var expected: (background: [Double], swatch: [Double]) = ([], [])
+      NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)!
+        .performAsCurrentDrawingAppearance {
+          func rgb(_ color: NSColor) -> [Double] {
+            let c = color.usingColorSpace(.sRGB)!
+            return [c.redComponent, c.greenComponent, c.blueComponent].map { $0 * 255 }
+          }
+          expected = (rgb(.controlBackgroundColor), rgb(.systemGray))
+        }
+      let rows = ["Projects", "Movie.mov", "Tiny files"].map { row($0).frame.maxY }
+      let empty = CGPoint(x: app.outlines["entry-tree"].frame.midX, y: rows.max()! + 60)
+      let projects = row("Projects").frame
+      let background = p.mean(empty)
+      let directory = p.mean(CGPoint(x: projects.minX - 10.5, y: projects.midY))
+      print("TREE \(appearance) background=\(background) swatch=\(directory) expected=\(expected)")
+      for c in 0..<3 {
+        XCTAssertEqual(
+          background[c], expected.background[c], accuracy: 4, "\(appearance) background")
+        XCTAssertEqual(directory[c], expected.swatch[c], accuracy: 6, "\(appearance) swatch")
+      }
+      screenshot("window-colors-\(appearance)")
       app.terminate()
     }
   }
@@ -1041,100 +1040,13 @@ extension XCUIElement {
     }
   }
 
-  // MARK: Dogfood feedback
+  // MARK: Map clicks, status bar, Esc and operation progress
 
-  /// The map area 12 points inside the padded map view: right of the tree, below the
-  /// appearance probe and above the status bar.
-  func mapArea() -> CGRect {
-    let probe = app.descendants(matching: .any)["map-appearance"]
-    let left = app.outlines["entry-tree"].frame.maxX + 12
-    let top = probe.frame.minY + 12
-    return CGRect(
-      x: left, y: top, width: app.windows.firstMatch.frame.maxX - 12 - left,
-      height: statusBarTop() - 12 - top)
-  }
-  /// Clicks a screen point in the window.
-  func click(_ point: CGPoint, double: Bool = false) {
-    let window = app.windows.firstMatch
-    let target = window.coordinate(withNormalizedOffset: .zero).withOffset(
-      CGVector(dx: point.x - window.frame.minX, dy: point.y - window.frame.minY))
-    if double { target.doubleClick() } else { target.click() }
-  }
   /// The text of the status bar; empty when it shows nothing.
   func statusPath() -> String {
     let element = app.staticTexts["status-path"]
     guard element.exists else { return "" }
     return (element.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? element.label
-  }
-  /// Rust `MapAppearance::trash` band colors (plain, then striped) at 21 gradient positions.
-  static func trashBands(_ appearance: String) -> [[Double]] {
-    let base: [Double] =
-      appearance == "dark"
-      ? [68, 72, 78]
-      : appearance == "dark-contrast"
-        ? [132, 136, 142]
-        : [185, 190, 198]
-    let stripe: Double = appearance.hasPrefix("dark") ? 255 : 0
-    let alpha = appearance.hasSuffix("contrast") ? 0.30 : 0.09
-    var bands: [[Double]] = []
-    for step in 0...20 {
-      let t = Double(step) / 20
-      let (a, white) = (0.08 * (1 - t) + 0.12 * t, 255 * 0.08 * (1 - t))
-      let plain = base.map { $0 * (1 - a) + white }
-      bands.append(plain)
-      bands.append(plain.map { $0 * (1 - alpha) + stripe * alpha })
-    }
-    return bands
-  }
-  /// Map pixels within 4 sRGB levels of a Trash band color whose neighbors 3 pixels away also
-  /// match (thin seam lines of gray tiles do not), sampled every second pixel. Also returns
-  /// their bounding box in screen points and the mean plain and striped band colors.
-  func trashPixels(_ p: WindowPixels, map: CGRect, appearance: String) -> (
-    count: Int, deep: [CGPoint], plain: [Int], striped: [Int]
-  ) {
-    let bands = Self.trashBands(appearance).map { $0.map { Int($0.rounded()) } }
-    let low = bands.map { $0.min()! }.min()! - 4
-    let high = bands.map { $0.max()! }.max()! + 4
-    /// The band index within 4 levels, or nil.
-    func band(_ x: Int, _ y: Int) -> Int? {
-      let c = p.rgb(x, y)
-      guard c.min()! >= low, c.max()! <= high, c[2] >= c[0] else { return nil }
-      for (i, b) in bands.enumerated()
-      where abs(c[0] - b[0]) <= 4 && abs(c[1] - b[1]) <= 4 && abs(c[2] - b[2]) <= 4 {
-        return i
-      }
-      return nil
-    }
-    var (count, plain, striped) = (0, [0, 0, 0, 0], [0, 0, 0, 0])
-    var matched = Set<[Int]>()
-    for y in stride(from: p.y(map.minY) + 3, to: p.y(map.maxY) - 3, by: 2) {
-      for x in stride(from: p.x(map.minX) + 3, to: p.x(map.maxX) - 3, by: 2) {
-        guard let index = band(x, y), band(x - 3, y) != nil, band(x + 3, y) != nil,
-          band(x, y - 3) != nil, band(x, y + 3) != nil
-        else { continue }
-        count += 1
-        matched.insert([x, y])
-        let c = p.rgb(x, y)
-        if index % 2 == 0 {
-          plain = [plain[0] + c[0], plain[1] + c[1], plain[2] + c[2], plain[3] + 1]
-        } else {
-          striped = [striped[0] + c[0], striped[1] + c[1], striped[2] + c[2], striped[3] + 1]
-        }
-      }
-    }
-    let mean = { (s: [Int]) in s[3] > 0 ? (0..<3).map { s[$0] / s[3] } : [] }
-    // Deep points: every sampled pixel within 12 pixels also matches, so a click there lands
-    // inside the striped region and not on a gray tile that shares a band color.
-    let deep = matched.filter { m in
-      stride(from: -12, through: 12, by: 2).allSatisfy { dy in
-        stride(from: -12, through: 12, by: 2).allSatisfy { dx in
-          matched.contains([m[0] + dx, m[1] + dy])
-        }
-      }
-    }.sorted { ($0[1], $0[0]) < ($1[1], $1[0]) }.map {
-      CGPoint(x: CGFloat($0[0]) / p.scale + p.origin.x, y: CGFloat($0[1]) / p.scale + p.origin.y)
-    }
-    return (count, deep, mean(plain), mean(striped))
   }
   /// Real clicks on a nested `.Trash`, one block at its parent's level: a click selects that
   /// `.Trash`, the hover names its path and a double click focuses it. Its stripes and colors
@@ -1143,108 +1055,22 @@ extension XCUIElement {
     launch("prototype-home-nested-trash", appearance: "dark")
     row("Projects").doubleClick()
     text("focus-name", contains: "Projects")
-    let renders = app.buttons.matching(
-      NSPredicate(format: "identifier BEGINSWITH %@", "map-file-Render "))
-    XCTAssertTrue(renders.firstMatch.appears(within: 8), "Projects map")
+    // The `.Trash` block is one map target, which selects the directory.
+    let trash = app.buttons["map-file-.Trash"]
+    XCTAssertTrue(trash.appears(within: 8), "Projects/.Trash on the Projects map")
     offMap()
     screenshot("nested-trash-dark-projects")
-    // The stripes locate the block on screen.
-    let trash = trashPixels(try windowPixels(srgb: true), map: mapArea(), appearance: "dark")
-    let middle = try XCTUnwrap(
-      trash.deep.count > 20 ? trash.deep[trash.deep.count / 2] : nil,
-      "no Trash stripes for Projects/.Trash")
-    click(middle)
+    trash.click()
     text("selected-name", contains: ".Trash")
     text("selected-path", contains: "/Users/ana/Projects/.Trash")
     hovered("/Users/ana/Projects/.Trash")
     XCTAssertEqual(statusPath(), "/Users/ana/Projects/.Trash")
     XCTAssertFalse(app.buttons["map-file-Old render 01.mov"].exists, "children are not drawn")
     screenshot("nested-trash-dark-selected")
-    click(middle, double: true)
+    trash.doubleClick()
     text("focus-name", contains: ".Trash")
     XCTAssertTrue(app.buttons["map-file-Old render 01.mov"].appears(within: 8))
     screenshot("nested-trash-dark-focused")
-  }
-  /// Up to six of the largest file tiles with an accessibility target and a unique name,
-  /// each at least 40 points wide and high.
-  func largeTiles() -> [(name: String, frame: CGRect)] {
-    let targets = app.buttons.matching(
-      NSPredicate(format: "identifier BEGINSWITH %@", "map-file-"))
-    var seen: [String: Int] = [:]
-    var tiles: [(name: String, frame: CGRect)] = []
-    for i in 0..<targets.count {
-      let element = targets.element(boundBy: i)
-      let name = String(element.identifier.dropFirst("map-file-".count))
-      seen[name, default: 0] += 1
-      if element.frame.width >= 40, element.frame.height >= 40 {
-        tiles.append((name, element.frame))
-      }
-    }
-    return Array(
-      tiles.filter { seen[$0.name] == 1 }
-        .sorted { $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height }
-        .prefix(6))
-  }
-  /// Dark prototype-home against the design: tile interiors equal the CSS gradient over the
-  /// kind color, and the seam darkens one backing pixel on each edge to 0.55 of the interior
-  /// (the design's inset on a 2x grid). The old top/left seam at 0.775 left the map brighter.
-  func testPrototypeHomeDarkMapMatchesTheDesignBrightness() throws {
-    launch("prototype-home", appearance: "dark")
-    XCTAssertTrue(app.buttons["map-file-Interview raw.mov"].appears(within: 8))
-    offMap()
-    let p = try windowPixels(srgb: true)
-    // Rust `type_color`: the prototype palette by extension.
-    let kinds: [String: [Double]] = [
-      "mov": [79, 138, 198], "mp4": [79, 138, 198], "heic": [81, 153, 98], "jpg": [81, 153, 98],
-      "png": [81, 153, 98], "m4a": [171, 109, 166], "wav": [171, 109, 166],
-      "zip": [173, 124, 47], "dmg": [173, 124, 47], "app": [133, 122, 196], "o": [0, 153, 160],
-      "swiftmodule": [0, 153, 160], "js": [0, 153, 160], "db": [190, 110, 82],
-      "cache": [190, 110, 82], "sqlite": [138, 140, 52], "bin": [138, 140, 52],
-    ]
-    var edgeRatios: [Double] = []
-    for (name, frame) in largeTiles() {
-      let base = kinds[String(name.split(separator: ".").last!)] ?? [127, 135, 147]
-      // The center sits at 0.5 along the 155-degree gradient: base plus 1.27% white.
-      let expected = base.map { $0 + (255 - $0) * 0.14 * (1 - 0.5 / 0.55) }
-      let center = p.mean(CGPoint(x: frame.midX, y: frame.midY))
-      print(
-        "BRIGHTNESS \(name) center=\(center.map { Int($0.rounded()) }) expected=\(expected.map { Int($0.rounded()) })"
-      )
-      for c in 0..<3 { XCTAssertEqual(center[c], expected[c], accuracy: 3, "\(name) interior") }
-      let f = frame
-      let (x0, y0) = (
-        Int(((f.minX - p.origin.x) * p.scale - 0.5).rounded(.up)),
-        Int(((f.minY - p.origin.y) * p.scale - 0.5).rounded(.up))
-      )
-      let (x1, y1) = (
-        Int(((f.maxX - p.origin.x) * p.scale - 0.5).rounded(.up)),
-        Int(((f.maxY - p.origin.y) * p.scale - 0.5).rounded(.up))
-      )
-      let (mx, my) = ((x0 + x1) / 2, (y0 + y1) / 2)
-      for (edge, inside) in [
-        ((x0, my), (x0 + 1, my)), ((mx, y0), (mx, y0 + 1)), ((x1 - 1, my), (x1 - 2, my)),
-        ((mx, y1 - 1), (mx, y1 - 2)),
-      ] {
-        let (e, i) = (p.rgb(edge.0, edge.1), p.rgb(inside.0, inside.1))
-        edgeRatios.append(Double(e.reduce(0, +)) / Double(max(1, i.reduce(0, +))))
-      }
-    }
-    let mean = edgeRatios.reduce(0, +) / Double(max(1, edgeRatios.count))
-    var whole = [0.0, 0, 0]
-    var count = 0.0
-    let map = mapArea()
-    for y in stride(from: p.y(map.minY), to: p.y(map.maxY), by: 2) {
-      for x in stride(from: p.x(map.minX), to: p.x(map.maxX), by: 2) {
-        for (c, v) in p.rgb(x, y).enumerated() { whole[c] += Double(v) }
-        count += 1
-      }
-    }
-    print(
-      "BRIGHTNESS edge/interior mean=\(mean) over \(edgeRatios.count) edges; whole map mean sRGB=\(whole.map { ($0 / count * 10).rounded() / 10 })"
-    )
-    XCTAssertGreaterThanOrEqual(edgeRatios.count, 12)
-    XCTAssertEqual(mean, 0.55, accuracy: 0.04, "design seam on every edge")
-    screenshot("brightness-dark")
   }
   /// Esc clears a tree or map selection: no card, no tree highlight, no dim, no status path.
   /// An open confirmation keeps its own Esc (Cancel) and the selection.
@@ -1384,6 +1210,9 @@ extension XCUIElement {
     return (Int(shown.filter(\.isNumber)) ?? -1, shown)
   }
   /// `operation-slow`: each check, the Trash move and the update take 3 s, each removal 30 ms.
+  /// Real clicks on Delete, its confirmation and Stop, with the bar of each phase that they
+  /// reach. StatusAndProgressTests.swift holds each stage of `operation-paused`: every label,
+  /// counter, Stop state and outcome, also "Updating view…" and a complete Delete.
   func testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop() throws {
     launch("operation-slow")
     row("Library").click()
@@ -1397,6 +1226,7 @@ extension XCUIElement {
     let first = items()
     XCTAssertTrue(app.buttons["stop-scan"].isEnabled)
     screenshot("delete-deleting")
+    // Stop once the walk has removed more items: the counter is live.
     var second = items()
     _ = until {
       second = items()
@@ -1404,25 +1234,13 @@ extension XCUIElement {
     }
     print("DELETE counter \(first.shown) -> \(second.shown)")
     XCTAssertGreaterThan(second.count, first.count, "the removed-items counter is live")
-    XCTAssertNotNil(second.shown.range(of: #"^[0-9,]+ items$"#, options: .regularExpression))
-    phase("Updating view…", timeout: 8)
-    XCTAssertFalse(app.buttons["stop-scan"].isEnabled, "the deletion is done")
-    screenshot("delete-updating")
-    outcome(is: "Deleted.", timeout: 12)
-    XCTAssertTrue(app.staticTexts["scan-phase"].disappears(within: 8))
-    XCTAssertFalse(row("Library").exists)
-    screenshot("delete-done")
-    app.terminate()
-    // Stop ends the walk between two entries and says how many were deleted.
-    launch("operation-slow")
-    row("Library").click()
-    app.buttons["delete"].click()
-    XCTAssertTrue(app.staticTexts["confirmation-title"].appears(within: 8))
-    app.buttons["confirm-action"].click()
-    phase("Deleting “Library”…", timeout: 8)
-    // Stop once the walk has removed an item.
-    XCTAssertTrue(until { items().count > 0 }, "the walk removes items")
+    XCTAssertNotNil(second.shown.range(of: #"^[0-9,]+ items?$"#, options: .regularExpression))
     app.buttons["stop-scan"].click()
+    // The 3 s update stage keeps the bar, with Stop shown but disabled: the deletion is done.
+    phase("Updating view…", timeout: 8)
+    let stop = app.buttons["stop-scan"]
+    XCTAssertTrue(until { stop.exists && !stop.isEnabled }, "Stop is disabled in the update")
+    screenshot("delete-updating")
     text("outcome", contains: "Deletion stopped.", timeout: 12)
     let stopped = (app.staticTexts["outcome"].value as? String) ?? ""
     print("DELETE stopped: \(stopped)")
@@ -1469,9 +1287,8 @@ extension XCUIElement {
     chevron.click()
     XCTAssertTrue(reason.disappears(within: 8), "the chevron closes Details")
     word.click()
-    _ = reason.appears(within: 2)
+    XCTAssertTrue(reason.appears(within: 8), "a click on the word opens Details")
     screenshot("delete-skipped-details-after-word-click")
-    XCTAssertTrue(reason.exists, "a click on the word opens Details")
     word.click()
     XCTAssertTrue(reason.disappears(within: 8), "a click on the word closes Details")
   }
@@ -1508,11 +1325,10 @@ extension XCUIElement {
       app.buttons["confirm-action"].click()
       outcome(is: expected)
       let want = survives ? siblings.union(["Library"]) : siblings
-      let deadline = Date().addingTimeInterval(8)
-      var shown = visibleRows()
-      while shown != want, Date() < deadline {
-        Thread.sleep(forTimeInterval: 0.1)
+      var shown: Set<String> = []
+      _ = until {
         shown = visibleRows()
+        return shown == want
       }
       screenshot("siblings-\(scenario)-\(action)")
       XCTAssertEqual(shown, want, "\(scenario) \(action): every remaining row is visible")
@@ -1532,9 +1348,11 @@ extension XCUIElement {
     let count = tiles.count
     for i in 0..<40 {
       tiles.element(boundBy: (i * 7) % count).click()
+      // The rhythm of quick user clicks: input, not a wait.
       Thread.sleep(forTimeInterval: 0.15)
     }
-    Thread.sleep(forTimeInterval: 0.5)
+    // The probe has counted the last frame once the window stops changing.
+    _ = settled { app.windows.firstMatch.screenshot() }
     let values = Dictionary(
       uniqueKeysWithValues: probe.label.split(separator: " ").compactMap { part in
         let pair = part.split(separator: "=")
@@ -1657,13 +1475,14 @@ extension XCUIElement {
   func helpTagText(_ element: XCUIElement) throws -> String {
     let tag = app.helpTags.firstMatch
     XCTAssertTrue(showsHelpTag(element), "help tag")
-    Thread.sleep(forTimeInterval: 0.5)
-    let shot = tag.screenshot()
-    let attachment = XCTAttachment(screenshot: shot)
+    // The help tag fades in: read it once two screenshots in a row are equal.
+    let png = settled { tag.screenshot() }
+    let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
     attachment.name = "help-tag"
     attachment.lifetime = .keepAlways
     add(attachment)
-    let image = try XCTUnwrap(shot.image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+    let image = try XCTUnwrap(
+      NSImage(data: png)?.cgImage(forProposedRect: nil, context: nil, hints: nil))
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
     try VNImageRequestHandler(cgImage: image).perform([request])

@@ -86,10 +86,10 @@ publication. Motion does not claim reclaimed space or undo availability.
 
 ## Executable evidence
 
-[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift):
+[ExplorerLifecycleTests.swift](../native/ExplorerModelTests/ExplorerLifecycleTests.swift):
 
 - "testFullExplorerViewSettlesMapInputNavigationAndWindowResize": complete hosted
-  ExplorerView settles without repeated builds or viewport changes across three
+  ExplorerView settles without repeated builds or viewport changes for longer than two
   resize-debounce intervals; map input, navigation and actual window resize work.
 - "testOfflineRootBreadcrumbNamesAndFullPathHelpRemainDistinct": two unavailable
   owned roots retain distinct basename/full-path presentation at root, ancestor and
@@ -130,7 +130,7 @@ publication. Motion does not claim reclaimed space or undo availability.
 - "testFixtureReduceMotionOverrideIsIgnoredOutsideFixtureMode": the override needs
   fixture mode and produces a fade for a real removal.
 
-[DixModelTests.swift](../native/ExplorerModelTests/DixModelTests.swift)
+[TreeAndMapNavigationTests.swift](../native/ExplorerModelTests/TreeAndMapNavigationTests.swift)
 "testDisclosureZoomBreadcrumbAndAncestorRestoreContext" and
 "testHistoryCapPayloadAndSessionAndMutationInvalidation" cover sparse-context
 restoration, the 64-context cap and mutation/replacement invalidation.

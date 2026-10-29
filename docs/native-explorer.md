@@ -131,8 +131,8 @@ app against real generated Rust sessions and stateful MemoryFileSystem scenarios
 - "testConfirmationCancelDeleteAndStaleHandleRecovery": cancellation, confirmed
   deletion, disappeared target, dirty inventory and root protection.
 - "testUnknownTrashScopeIssueOpensFromTheDetailsChevron": the chevron opens Details.
-- "testImmediateSavedOnlySelection": later selection during the
-  latency scenario; XCUITest timing includes automation waits, not paint latency.
+- "testImmediateSavedOnlySelection": real clicks select a later row in the latency
+  scenario; model tests check the timing.
 - "testFixtureModeFailsClosed": absent/unknown scenarios cannot enable native pickers.
 - "testTreeSizeTextCentersWithNameOnSelectedAndUnselectedRows": the drawn size text and
   name share a vertical center within 1 point on a selected and an unselected row.
@@ -153,7 +153,7 @@ untested; the fixture-only `motion-style` probe stays for manual checks.
 Fixture mode shows "SIMULATED" only in the window title; other content matches production.
 "testFixtureModeNamesSimulationOnlyInWindowTitle" checks the window and its confirmation.
 "testOnlyFixtureWindowTitleNamesSimulation" in
-[RedesignModelTests.swift](../native/ExplorerModelTests/RedesignModelTests.swift) checks the production title.
+[ExplorerLifecycleTests.swift](../native/ExplorerModelTests/ExplorerLifecycleTests.swift) checks the production title.
 `--fixture-mode`,
 `--scenario`, or `DI_UI_TEST` locks the app into fixture-only mode; incomplete or
 unknown configuration is an error, never a native fallback.

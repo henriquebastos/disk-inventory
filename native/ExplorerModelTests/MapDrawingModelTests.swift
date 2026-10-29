@@ -31,10 +31,7 @@ import XCTest
   /// A 1000 x 700-point map view over a 2000 x 1400-pixel picture of `scenario` in the fixture
   /// `appearance`.
   func mapView(_ scenario: String, appearance: String) async throws -> DiagramView.MapView {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", scenario],
-      environment: ["DI_APPEARANCE": appearance])
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
+    let model = try await fixtureModel(scenario, environment: ["DI_APPEARANCE": appearance])
     model.resize(CGSize(width: 2000, height: 1400))
     try await waitUntil {
       model.picture?.bitmap.width == 2000 && model.picture?.bitmap.height == 1400
@@ -185,10 +182,8 @@ import XCTest
   /// counts its draws: a tree expansion draws nothing, a map click draws its region once, and
   /// the path and reveal answers that follow draw nothing.
   func testHostedMapDrawsOnlyWhenADrawnInputChanges() async throws {
-    let model = ExplorerModel(
-      arguments: ["--fixture-mode", "--scenario", "metadata-delay"], environment: [:])
+    let model = try await fixtureModel("metadata-delay")
     defer { model.shutdown() }
-    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
       backing: .buffered, defer: false)
@@ -200,37 +195,47 @@ import XCTest
       return view.subviews.compactMap { map(in: $0) }.first
     }
     /// SwiftUI applies model changes to the map view on a later main-loop pass, and AppKit
-    /// draws only on display, so a check that nothing draws needs a wait. 250 ms is longer
-    /// than the 180 ms rebuild debounce.
-    func drawPending() async throws {
-      for _ in 0..<2 {
-        try await Task.sleep(for: .milliseconds(250))
-        await settled(model)
-        window.contentView?.layoutSubtreeIfNeeded()
-        window.displayIfNeeded()
-      }
+    /// draws only on display. Nothing signals that they are done, so a check that the map does
+    /// not draw watches the draw count for the quiet period.
+    func display() {
+      window.contentView?.layoutSubtreeIfNeeded()
+      window.displayIfNeeded()
     }
-    try await drawPending()
+    // The first layout resizes the map. After its rebuild, wait until a quiet period passes
+    // without a draw.
+    display()
+    await bounded("rebuild") { _ = await model.rebuildTask?.value }
     try await waitUntil { !model.loading }
-    try await drawPending()
+    display()
     let view = try XCTUnwrap(window.contentView.flatMap { map(in: $0) })
     let probe = try XCTUnwrap(view.drawProbe)
+    let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+    var drawn = -1
+    while probe.draws != drawn, ContinuousClock.now < deadline {
+      drawn = probe.draws
+      for _ in 0..<Int(quietPeriod / .milliseconds(20)) {
+        display()
+        try await Task.sleep(for: .milliseconds(20))
+      }
+    }
+    XCTAssertEqual(probe.draws, drawn, "the map still drew after 8 s")
     let start = probe.draws
     XCTAssertGreaterThan(start, 0, "the hosted map has drawn")
 
-    let directory = try XCTUnwrap(
-      model.outline?.rows.first { $0.entry.displayName == "small-files" })
-    model.expand(directory.entry, expanded: true)
+    let directory = try entry("small-files", in: model)
+    model.expand(directory, expanded: true)
     try await waitUntil { !model.treeEditing }
-    try await drawPending()
-    XCTAssertEqual(probe.draws, start, "an expansion does not draw the map")
+    await settled(model)
+    // An expansion does not draw the map.
+    try await stays(
+      {
+        display()
+        return probe.draws == start
+      }, for: quietPeriod)
 
     // Holds the session lock with the one-second live metadata read of large-file, so the path
     // and reveal answers of the click wait until the click's own draw is done.
-    let session = try XCTUnwrap(model.session)
-    let file = try XCTUnwrap(model.outline?.rows.first { $0.entry.displayName == "large-file" })
-    let blocker = Task.detached { try session.liveMetadata(key: file.entry.key) }
-    try await pollUntil { session.isBusy() }
+    let blocker = try await holdBridge(model)
     let target = try XCTUnwrap(
       model.picture?.targets.first { $0.entry.displayName == "large-file" })
     model.select(target.entry, region: target.rect)
@@ -242,8 +247,13 @@ import XCTest
     XCTAssertNil(model.selection.path, "the path waits on the lock")
     _ = try await blocker.value
     try await waitUntil { model.selection.path != nil }
-    try await drawPending()
+    await settled(model)
     XCTAssertNotNil(model.selection.row, "the reveal answered")
-    XCTAssertEqual(probe.draws, start + 1, "the path and reveal answers do not draw the map")
+    // The path and reveal answers do not draw the map.
+    try await stays(
+      {
+        display()
+        return probe.draws == start + 1
+      }, for: quietPeriod)
   }
 }
