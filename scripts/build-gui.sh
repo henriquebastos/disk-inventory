@@ -14,4 +14,6 @@ xcodegen generate --spec "$repo/native/project.yml" --project "$out/project"
 xcodebuild -project "$out/project/DiskInventory.xcodeproj" -scheme DiskInventory \
   -configuration Debug -derivedDataPath "$out/DerivedData" \
   BRIDGE_ROOT="$BRIDGE_ROOT" CLANG_MODULE_CACHE_PATH="$out/module-cache" build-for-testing
-printf 'App: %s\n' "$out/DerivedData/Build/Products/Debug/DiskInventory.app"
+app="$out/DerivedData/Build/Products/Debug/DiskInventory.app"
+bash "$repo/scripts/check-app-icon.sh" "$app"
+printf 'App: %s\n' "$app"

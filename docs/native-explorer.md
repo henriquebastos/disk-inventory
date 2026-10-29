@@ -6,8 +6,8 @@ inventory, or Swift accounting/layout implementation. The CLI remains unchanged.
 
 ## 1a Build and launch
 
-Use installed Xcode, Swift 6, XcodeGen and the locked Rust dependencies. The local
-build targets macOS 26 to match the installed Rust standard-library archive;
+Use installed Xcode, Swift 6, XcodeGen and the locked Rust dependencies. The build
+targets macOS 26, matching the installed Rust standard-library archive;
 older macOS and Intel are unverified. No installation or signing identity is needed.
 Choose an absolute artifact root outside the repository:
 
@@ -19,11 +19,13 @@ open "$G/DerivedData/Build/Products/Debug/DiskInventory.app"
 ```
 
 [Build](../scripts/build-gui.sh) regenerates UniFFI and the Xcode project from
-[project.yml](../native/project.yml), then builds the app and tests. All requested
-build products, bindings, module caches and results go under G. macOS/Xcode can
-also maintain their own system-managed application/automation state.
+[project.yml](../native/project.yml) and builds the app and tests. actool compiles
+[AppIcon.icon](../native/Explorer/AppIcon.icon) into `Assets.car` and `AppIcon.icns`;
+[a check](../scripts/check-app-icon.sh) requires them and `CFBundleIconName`.
+Products, bindings, caches and results go under G; macOS/Xcode keep
+system-managed state elsewhere.
 
-For native-free manual exploration:
+For native-free exploration:
 
 ```sh
 open -n "$G/DerivedData/Build/Products/Debug/DiskInventory.app" \
@@ -33,7 +35,7 @@ open -n "$G/DerivedData/Build/Products/Debug/DiskInventory.app" \
 Normal launch scans nothing. Choose Folder uses a native directory panel for an
 explicit root, then saves to app-managed Application Support storage. Reopen opens the
 last folder's saved inventory offline. The user never opens a snapshot file. Picker
-URLs use filesystem byte representations, not display paths. Scan progress, Stop, retention and executable tests are specified in
+URLs use filesystem byte representations, not display paths. Scan progress, Stop, retention and tests are in
 [native-lifecycle.md](native-lifecycle.md). No save panel or automatic scan is used.
 
 ## 1b Navigation and presentation
