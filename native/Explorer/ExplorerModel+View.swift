@@ -19,7 +19,7 @@ extension ExplorerModel {
     hoverRequest = nil
     clickRequest = nil
     clickVersion += 1
-    regionRequest = nil
+    regionWorker.discard()
     parentRequest = nil
   }
   func updateView(focus: EntryKey, recovery: Bool = false, preserving selection: EntryKey? = nil)

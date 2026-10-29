@@ -35,18 +35,14 @@ extension ExplorerModel {
       selectedRegion = nil
       return
     }
-    regionRequest = (frame, key, sessionVersion, viewVersion, selectionVersion)
-    guard !regionWorkerRunning else { return }
-    regionWorkerRunning = true
-    Task {
-      while let (frame, key, generation, navigation, selection) = regionRequest {
-        regionRequest = nil
-        let region = try? await Task.detached { try frame.region(key: key) }.value
-        if generation == sessionVersion, navigation == viewVersion, selection == selectionVersion {
-          selectedRegion = region
-        }
-      }
-      regionWorkerRunning = false
+    regionWorker.submit(
+      (frame, key, sessionVersion, viewVersion, selectionVersion), serve: serveRegion)
+  }
+  private func serveRegion(_ request: RegionRequest) async {
+    let (frame, key, generation, navigation, selection) = request
+    let region = try? await Task.detached { try frame.region(key: key) }.value
+    if generation == sessionVersion, navigation == viewVersion, selection == selectionVersion {
+      selectedRegion = region
     }
   }
   func point(_ x: UInt32, _ y: UInt32, click: Bool = false, doubleClick: Bool = false) {
@@ -114,7 +110,7 @@ extension ExplorerModel {
     selectionVersion += 1
     reveal(entry)
     if let region {
-      regionRequest = nil
+      regionWorker.discard()
       selectedRegion = region
     } else {
       updateSelectedRegion(entry.key)
@@ -148,7 +144,7 @@ extension ExplorerModel {
     guard canClearSelection else { return }
     clickVersion += 1
     pathWorker.discard()
-    regionRequest = nil
+    regionWorker.discard()
     parentRequest = nil
     selectionVersion += 1
     selected = nil

@@ -117,8 +117,10 @@ struct PendingConfirmation: Identifiable {
   }
   var hoverRequest: HitRequest?
   var clickRequest: HitRequest?
-  var regionWorkerRunning = false
-  var regionRequest: (DiagramFrame, EntryKey, Int, Int, Int)?
+  /// Frame, selected key, and the session, view and selection versions it was asked under.
+  typealias RegionRequest = (DiagramFrame, EntryKey, Int, Int, Int)
+  /// Publishes the map region of the selection.
+  let regionWorker = LatestWorker<RegionRequest>()
 
   var selected: EntryRecord?
   var selectionPath: String?
@@ -185,7 +187,7 @@ struct PendingConfirmation: Identifiable {
   /// Publishes the saved path of the selection.
   let pathWorker = LatestWorker<PathRequest>()
   /// Every latest-wins worker, for `settled()`.
-  var workers: [any Settling] { [pathWorker] }
+  var workers: [any Settling] { [pathWorker, regionWorker] }
   /// Returns once every worker is idle at the same moment. A worker that hands work to another
   /// is seen on the next pass. Session loads, operations, the rebuild debounce, the motion
   /// clock and AppKit are not workers: they publish `loading`, `working` or their own state.
