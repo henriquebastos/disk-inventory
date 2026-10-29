@@ -862,13 +862,14 @@ fn file_type_colors_fixture_colors_new_extensions_and_context_folders_in_map_and
     let s = session("file-type-colors");
     let (archive, cache, code, data) = (0xad7c2f, 0xbe6e52, 0x0099a0, 0x8a8c34);
     let (video, audio, image, gray) = (0x4f8ac6, 0xab6da6, 0x519962, 0x7f8793);
-    let expected: [(&str, u32); 23] = [
+    let expected: [(&str, u32); 24] = [
         ("7c91d04e", archive),
         ("pack-1f2e.pack", archive),
         ("pack-1f2e.idx", archive),
         ("b4e0aa", gray),
         ("a1b2c3d4", archive),
         ("0d9e8f7a", archive),
+        ("f0e1d2c3", archive),
         ("cdef0123", archive),
         ("e9d8c7", gray),
         ("libcore.dylib", code),

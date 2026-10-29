@@ -1305,6 +1305,11 @@ fn diagram_colors_files_by_extension_and_folder_context_also_inside_a_focused_co
     let nested = add(&mut map, nested_modules, b"dep", Kind::Dir, 0);
     let nested_objects = add(&mut map, nested, b"objects", Kind::Dir, 0);
     let nested_object = add(&mut map, nested_objects, b"5ea1b2", Kind::File, 5_000);
+    // Git names a submodule after its path: `vendor/lib`.
+    let vendor = add(&mut map, modules, b"vendor", Kind::Dir, 0);
+    let slashed = add(&mut map, vendor, b"lib", Kind::Dir, 0);
+    let slashed_objects = add(&mut map, slashed, b"objects", Kind::Dir, 0);
+    let slashed_object = add(&mut map, slashed_objects, b"f0e1d2", Kind::File, 5_000);
     let bare = add(&mut map, 0, b"mirror.git", Kind::Dir, 0);
     let bare_objects = add(&mut map, bare, b"objects", Kind::Dir, 0);
     let bare_object = add(&mut map, bare_objects, b"ab12cd", Kind::File, 5_000);
@@ -1333,6 +1338,7 @@ fn diagram_colors_files_by_extension_and_folder_context_also_inside_a_focused_co
         (numbered, cache),
         (plain, gray),
         (nested_object, archive),
+        (slashed_object, archive),
         (bare_object, archive),
         (module_plain, gray),
         (library_file, code),
@@ -1360,6 +1366,8 @@ fn diagram_colors_files_by_extension_and_folder_context_also_inside_a_focused_co
             (lookalike, &[(plain, gray)]),
             (nested_objects, &[(nested_object, archive)]),
             (nested, &[(nested_object, archive)]),
+            (slashed_objects, &[(slashed_object, archive)]),
+            (vendor, &[(slashed_object, archive)]),
             (bare_objects, &[(bare_object, archive)]),
             (module_lookalike, &[(module_plain, gray)]),
         ] {

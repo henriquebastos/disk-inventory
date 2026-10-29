@@ -1152,8 +1152,10 @@ import XCTest
       ("9f86d081", "cache"), ("cd34ef", "cache"), ("1a2b3c", "cache"),
       ("events.jsonl", "data"), ("table.csv", "data"), ("clip.webm", "video"),
       ("voice.opus", "audio"), ("sketch.psd", "image"), ("tool.whl", "archive"),
-      // Objects of a submodule, a nested submodule and a bare repository.
-      ("a1b2c3d4", "archive"), ("0d9e8f7a", "archive"), ("cdef0123", "archive"),
+      // Objects of a submodule, a nested submodule, a submodule named after its path
+      // `vendor/lib` and a bare repository.
+      ("a1b2c3d4", "archive"), ("0d9e8f7a", "archive"), ("f0e1d2c3", "archive"),
+      ("cdef0123", "archive"),
       // Gray controls: a document, `objects` outside `.git`, no extension, a numbered file,
       // `modules/<name>/objects` outside `.git`.
       ("report.pdf", "gray"), ("b4e0aa", "gray"), ("notes", "gray"), ("segment.1", "gray"),
@@ -1176,12 +1178,18 @@ import XCTest
       try checkFileTypes(
         appearance, "objects",
         [("7c91d04e", "archive"), ("pack-1f2e.pack", "archive"), ("pack-1f2e.idx", "archive")])
-      // So does a focus inside a nested submodule's objects and a bare repository's objects.
+      // So does a focus inside the objects of a nested submodule, a submodule named
+      // `vendor/lib` and a bare repository.
       for (scene, path, file) in [
         (
           "submodule",
           ["Projects", "atlas", ".git", "modules", "vendor-lib", "modules", "deep-dep", "objects"],
           "0d9e8f7a"
+        ),
+        (
+          "slash-submodule",
+          ["Projects", "atlas", ".git", "modules", "vendor", "lib", "objects"],
+          "f0e1d2c3"
         ),
         ("bare", ["Projects", "mirror.git", "objects"], "cdef0123"),
       ] {

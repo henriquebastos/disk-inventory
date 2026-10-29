@@ -159,6 +159,52 @@ fn folder_rule_colors_files_without_a_known_extension_by_context() {
             archive,
         ),
         (&[b"\xff.git", b"objects"], archive),
+        // Git names a submodule after its path: names with one and several slashes, nested,
+        // in a bare repository.
+        (
+            &[
+                b"repo", b".git", b"modules", b"vendor", b"lib", b"objects", b"3a",
+            ],
+            archive,
+        ),
+        (
+            &[
+                b"repo", b".git", b"modules", b"third", b"party", b"lib", b"objects",
+            ],
+            archive,
+        ),
+        (
+            &[
+                b"repo", b".git", b"modules", b"vendor", b"lib", b"modules", b"third", b"party",
+                b"objects",
+            ],
+            archive,
+        ),
+        (
+            &[
+                b"srv",
+                b"mirror.git",
+                b"modules",
+                b"vendor",
+                b"lib",
+                b"objects",
+            ],
+            archive,
+        ),
+        (
+            &[b"repo", b".git", b"modules", b"objects", b"objects"],
+            archive,
+        ),
+        // Known false positives: `objects` as a segment of a submodule name (`lib/objects/x`),
+        // with the files of that submodule's Git directory, and a submodule's ref folder.
+        (
+            &[b"repo", b".git", b"modules", b"lib", b"objects", b"x"],
+            archive,
+        ),
+        (
+            &[b"repo", b".git", b"modules", b"lib", b"refs", b"objects"],
+            archive,
+        ),
         // Caches and stores.
         (&[b"Library", b"Caches", b"com.example.viewer"], cache),
         (
@@ -211,10 +257,24 @@ fn folder_rule_colors_files_without_a_known_extension_by_context() {
         (&[b"repo", b".git", b"modules"], GRAY),
         (&[b"repo", b".git", b"modules", b"objects"], GRAY),
         (&[b"repo", b".git", b"modules", b"lib"], GRAY),
+        (&[b"repo", b".git", b"modules", b"vendor", b"lib"], GRAY),
+        (&[b"modules", b"vendor", b"lib", b"objects"], GRAY),
         (
-            &[b"repo", b".git", b"modules", b"lib", b"refs", b"objects"],
+            &[b"Projects", b"modules", b"vendor", b"lib", b"objects"],
             GRAY,
         ),
+        (
+            &[
+                b"srv",
+                b"mirror.GIT",
+                b"modules",
+                b"vendor",
+                b"lib",
+                b"objects",
+            ],
+            GRAY,
+        ),
+        (&[b"repo", b".git", b"refs", b"heads", b"objects"], GRAY),
         (
             &[b"repo", b".git", b"refs", b"modules", b"lib", b"objects"],
             GRAY,
@@ -291,7 +351,7 @@ fn directory_chain(root: &str, folders: &[&[u8]]) -> (Map, Vec<u32>) {
 
 #[test]
 fn focus_context_from_saved_ancestors_and_root_path_equals_entering_from_the_root() {
-    let chains: [(&str, &[&[u8]]); 11] = [
+    let chains: [(&str, &[&[u8]]); 19] = [
         (
             "/Users/ana",
             &[b"Projects", b"repo", b".git", b"objects", b"3a"],
@@ -341,6 +401,48 @@ fn focus_context_from_saved_ancestors_and_root_path_equals_entering_from_the_roo
         ),
         ("/Users/ana/repo/.git/modules/lib", &[b"objects", b"ab"]),
         ("/srv/mirror.git", &[b"modules", b"lib", b"objects"]),
+        (
+            "/Users/ana",
+            &[
+                b"repo", b".git", b"modules", b"vendor", b"lib", b"objects", b"3a",
+            ],
+        ),
+        (
+            "/Users/ana",
+            &[
+                b"repo", b".git", b"modules", b"vendor", b"lib", b"modules", b"third", b"party",
+                b"objects", b"c4",
+            ],
+        ),
+        (
+            "/srv",
+            &[
+                b"mirror.git",
+                b"modules",
+                b"a",
+                b"b",
+                b"c",
+                b"objects",
+                b"pack",
+            ],
+        ),
+        (
+            "/Users/ana/repo/.git/modules",
+            &[b"objects", b"x", b"objects"],
+        ),
+        ("/Users/ana/repo/.git/modules/vendor", &[b"lib", b"objects"]),
+        (
+            "/Users/ana/repo/.git/modules/vendor/lib",
+            &[b"objects", b"ab"],
+        ),
+        (
+            "/Users/ana",
+            &[b"modules", b"vendor", b"lib", b"objects", b"ab"],
+        ),
+        (
+            "/srv",
+            &[b"mirror.GIT", b"modules", b"vendor", b"lib", b"objects"],
+        ),
     ];
     for (root, folders) in chains {
         let (map, ids) = directory_chain(root, folders);
@@ -369,7 +471,12 @@ fn focus_context_from_saved_ancestors_and_root_path_equals_entering_from_the_roo
         explorer.folder_context(ids[2]).file_color(b"cd12"),
         Archive.color()
     );
-    for root in ["/Users/ana/repo/.git/modules/lib", "/srv/mirror.git"] {
+    for root in [
+        "/Users/ana/repo/.git/modules/lib",
+        "/srv/mirror.git",
+        "/Users/ana/repo/.git/modules/vendor/lib",
+        "/srv/mirror.git/modules/vendor/lib/modules/third/party",
+    ] {
         let (map, ids) = directory_chain(root, &[b"objects", b"ab"]);
         let explorer = Explorer::from_map(map).unwrap();
         assert_eq!(

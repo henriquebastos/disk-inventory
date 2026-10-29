@@ -57,16 +57,19 @@ The folder rule colors a file whose extension is missing, unknown or numeric by 
 context folder; a known extension keeps its own color, gray documents included. Names are exact,
 case-sensitive byte matches, and a context covers every descendant:
 
-- Archive: `objects` whose parent is `lfs` or a Git directory (Git object storage). A Git
-  directory is `.git`, a bare repository `<name>.git`, or a submodule's `modules/<name>` inside
-  a Git directory, nested submodules included. `modules/<name>/objects` outside one stays gray.
+- Archive: `objects` whose parent is `lfs`, a Git directory (`.git` or a bare repository
+  `<name>.git`), or any folder below `modules` inside a Git directory (Git object storage).
+  Git names a submodule after its path, so `.git/modules/vendor/lib/objects` and nested
+  submodules count. `modules/objects` (a submodule named `objects`) and `modules/<name>/objects`
+  outside a Git directory stay gray. Known false positive: an `objects` folder that is part of a
+  submodule name (`modules/lib/objects/x`) or of a submodule's refs is archive, with its files.
 - Cache: `Caches`, `Cache`, `.cache`, `_cacache` and `.pnpm-store`; `store` whose parent is
   `pnpm`; `blobs` whose parent starts with `models--` or `datasets--`, or that has a
   `huggingface` ancestor. Lowercase `cache` stays gray.
 
 Layout computes a directory's context once, from its name and its parent's context, when it
-reaches the directory. A focus starts from one walk over its saved ancestors and the saved root
-path, so a focus inside a context folder keeps the color. Tree swatches use the same rule. No
+reaches the directory. A focus starts from bounded walks over its saved ancestors and the saved
+root path, so a focus inside a context folder keeps the color. Tree swatches use the same rule. No
 lookup allocates or reads metadata.
 
 ## Appearance changes
@@ -142,7 +145,7 @@ real runner's screenshots:
   ratio.
 - "testNewExtensionsAndContextFoldersReplaceGrayTilesWithTypeColors": in `file-type-colors`, light
   and dark, each tile has its kind's hue and the controls stay gray, also with the focus on
-  `.git/objects`, a nested submodule's `objects` or a bare repository's `objects`.
+  `.git/objects`, a nested or slash-named submodule's `objects` or a bare repository's `objects`.
 - "testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast": black in light
   contrast, white in dark contrast, 70% white without contrast.
 - "testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch".

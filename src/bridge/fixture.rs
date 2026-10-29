@@ -300,8 +300,8 @@ fn prototype_home(nested_trash: bool) -> Result<Map, BridgeError> {
 }
 
 /// `file-type-colors`: files whose extension the prototype table lacked, and files without an
-/// extension in Git object storage (also of a submodule, a nested submodule and a bare
-/// repository) and cache folders, beside gray controls (a document, a numbered file, a file
+/// extension in Git object storage (also of a submodule, a nested submodule, a submodule
+/// named after its path `vendor/lib` and a bare repository) and cache folders, beside gray controls (a document, a numbered file, a file
 /// without an extension, an `objects` folder outside `.git` and `modules/<name>/objects`
 /// outside `.git`).
 fn file_type_colors_map() -> Result<Map, BridgeError> {
@@ -361,6 +361,13 @@ fn file_type_colors_map() -> Result<Map, BridgeError> {
             ],
             "0d9e8f7a",
             1.2,
+        ),
+        (
+            &[
+                "Projects", "atlas", ".git", "modules", "vendor", "lib", "objects", "7d",
+            ],
+            "f0e1d2c3",
+            1.3,
         ),
         (
             &["Projects", "mirror.git", "objects", "ab"],
