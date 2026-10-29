@@ -180,6 +180,9 @@ Test each change in the cheapest layer that can fail when the behavior changes:
 3. Component pictures drawn offscreen, such as
    [MapDrawingModelTests.swift](native/ExplorerModelTests/MapDrawingModelTests.swift).
 4. XCUITests only for real input (mouse, keyboard, menus, sheets, help tags), window-level
-   layout and rendering, and end-to-end flows.
+   layout and rendering, and end-to-end flows. They wait with `appears(within:)`,
+   `disappears(within:)` and `until`, which poll at once and then every 50 ms or slower:
+   `waitForExistence` first checks after one second
+   ([ExplorerUITests.swift](native/ExplorerTests/ExplorerUITests.swift)).
 
 A UI assertion moves only with a replacement that fails on a deliberately broken variant.

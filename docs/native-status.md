@@ -142,8 +142,8 @@ real runner:
   hard-link, directory and grouped cards without accounting or sharing notes.
 - "testRefreshHelpTagHasNoSnapshotNoteAndBadgesHaveNoHelpTags": the Incomplete and Not saved
   badges have no help tag; the Refresh help tag, read by on-device text recognition, is
-  "Rescan the focused directory and descendants." Help tags appear unreliably after the first
-  one in a window, so each check has its own launch.
+  "Rescan the focused directory and descendants." Often no further help tag shows in a window
+  after one, and none after a hover on text without one, so each check has its own launch.
 
 Model tests in [FeedbackModelTests.swift](../native/ExplorerModelTests/FeedbackModelTests.swift):
 "testStatusTextNamesTheHoveredBlockWhileAnotherItemIsSelected" (the selection, the picture and

@@ -2,6 +2,27 @@ import AppKit
 import Vision
 import XCTest
 
+/// Checks `condition` until it holds, at most `timeout` seconds, and reports whether it held.
+/// Between checks it waits 50 ms, or as long as the last check took: a check is an
+/// accessibility query that the app answers on its main thread. In the dense map, queries took
+/// 2 s, and checks back to back kept the app from showing a revealed row for over 8 s.
+@MainActor func poll(_ timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+  let deadline = Date().addingTimeInterval(timeout)
+  while true {
+    let start = Date()
+    if condition() { return true }
+    if Date() >= deadline { return false }
+    Thread.sleep(forTimeInterval: max(0.05, Date().timeIntervalSince(start)))
+  }
+}
+
+extension XCUIElement {
+  /// Polls `exists`. `waitForExistence` and `waitForNonExistence` check first after about one
+  /// second, also when the element is already there: that cost about 270 s of a 806 s suite.
+  func appears(within timeout: TimeInterval) -> Bool { poll(timeout) { exists } }
+  func disappears(within timeout: TimeInterval) -> Bool { poll(timeout) { !exists } }
+}
+
 @MainActor final class ExplorerUITests: XCTestCase {
   var app: XCUIApplication!
   /// Directories that a test owns. Teardown deletes them.
@@ -26,26 +47,36 @@ import XCTest
     // Fixture-only appearance; the system appearance and Increase Contrast never change.
     if let appearance { app.launchEnvironment["DI_APPEARANCE"] = appearance }
     app.launch()
-    XCTAssertTrue(app.staticTexts["scope-total"].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.staticTexts["scope-total"].appears(within: 15))
     XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
+  }
+  func until(_ timeout: TimeInterval = 8, _ condition: () -> Bool) -> Bool {
+    poll(timeout, condition)
+  }
+  /// Waits until the busy bar of an operation is gone: the outcome shows before the view
+  /// recovers, and the bar stays until the recovery ends.
+  func operationEnds(timeout: TimeInterval = 8) {
+    XCTAssertTrue(app.staticTexts["scan-phase"].disappears(within: timeout), "the operation ends")
+  }
+  /// Waits until the map shows the picture of the fixture `appearance`.
+  func mapShows(_ appearance: String) {
+    let probe = app.descendants(matching: .any)["map-appearance"]
+    XCTAssertTrue(probe.appears(within: 8), appearance)
+    XCTAssertTrue(until { probe.label == appearance }, "\(appearance), got \(probe.label)")
   }
   func row(_ name: String) -> XCUIElement {
     app.staticTexts.matching(NSPredicate(format: "identifier == %@", "entry-\(name)")).firstMatch
   }
   func text(_ id: String, contains value: String, timeout: TimeInterval = 8) {
     let element = id == "selected-name" ? app.buttons[id] : app.staticTexts[id]
-    XCTAssertTrue(element.waitForExistence(timeout: timeout))
-    // Polls about every 50 ms: a predicate expectation samples about once a second, which made
-    // each changing text cost a second. The query compares the whole value; a snapshot value
-    // can be truncated.
+    XCTAssertTrue(element.appears(within: timeout))
+    // Polls (`poll`): a predicate expectation samples about once a second, which made each
+    // changing text cost a second. The query compares the whole value; a snapshot value can be
+    // truncated.
     let match = (id == "selected-name" ? app.buttons : app.staticTexts).matching(identifier: id)
       .matching(NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", value, value))
       .firstMatch
-    let deadline = Date().addingTimeInterval(timeout)
-    repeat {
-      if match.exists { return }
-      Thread.sleep(forTimeInterval: 0.05)
-    } while Date() < deadline
+    if poll(timeout, { match.exists }) { return }
     screenshot("failure-\(id)")
     print("UI_STATE id=\(id) actual=\(String(describing: element.value))")
     XCTFail("\(id) must contain \(value), got \(String(describing: element.value))")
@@ -58,11 +89,10 @@ import XCTest
   /// Waits until the status bar names `value`, the hovered map block. "none" waits until the
   /// status bar is empty: the pointer is off the map.
   func hovered(_ value: String, timeout: TimeInterval = 8) {
-    let deadline = Date().addingTimeInterval(timeout)
-    var shown = statusPath()
-    while !(value == "none" ? shown.isEmpty : shown.contains(value)), Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.05)
+    var shown = ""
+    _ = poll(timeout) {
       shown = statusPath()
+      return value == "none" ? shown.isEmpty : shown.contains(value)
     }
     XCTAssertTrue(
       value == "none" ? shown.isEmpty : shown.contains(value),
@@ -78,7 +108,7 @@ import XCTest
     XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
     row(target).click()
     app.buttons[action].click()
-    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["confirmation-title"].appears(within: 8))
     text("confirmation-path", contains: target)
   }
   func disclosure(_ name: String) -> XCUIElement {
@@ -90,7 +120,7 @@ import XCTest
     row("small-files").click()
     disclosure("small-files").click()
     text("focus-name", contains: "Workspace")
-    XCTAssertTrue(row("small-00").waitForExistence(timeout: 8))
+    XCTAssertTrue(row("small-00").appears(within: 8))
     row("small-00").click()
     app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
     text("selected-name", contains: "small-01")
@@ -102,7 +132,7 @@ import XCTest
     text("focus-name", contains: "small-files")
     app.buttons["breadcrumb-0"].click()
     text("focus-name", contains: "Workspace")
-    XCTAssertTrue(row("small-00").waitForExistence(timeout: 8))
+    XCTAssertTrue(row("small-00").appears(within: 8))
     text("selected-name", contains: "small-files")
     screenshot("restored-tree-context")
     app.outlines["entry-tree"].scroll(byDeltaX: 0, deltaY: -600)
@@ -116,15 +146,18 @@ import XCTest
     app.buttons["breadcrumb-0"].click()
     text("focus-name", contains: "Workspace")
     text("selected-name", contains: "small-files")
-    let after = try XCTUnwrap(Double(String(describing: try XCTUnwrap(scrollbar.value))))
-    // Scroll history stores a row, so restoration can round by less than one row.
+    func scrolled() -> Double { Double(String(describing: scrollbar.value ?? "")) ?? -1 }
+    // Scroll history stores a row, so restoration can round by less than one row. The tree
+    // restores the scroll position after the selection shows.
+    _ = until { abs(scrolled() - before) <= 0.02 }
+    let after = scrolled()
     XCTAssertEqual(after, before, accuracy: 0.02)
     XCTAssertFalse(row("small-files").isHittable)
     screenshot("scrolled-tree-restored")
     app.outlines["entry-tree"].scroll(byDeltaX: 0, deltaY: 600)
     XCTAssertTrue(disclosure("small-files").isHittable)
     disclosure("small-files").click()
-    XCTAssertTrue(row("small-00").waitForNonExistence(timeout: 8))
+    XCTAssertTrue(row("small-00").disappears(within: 8))
     row("large-file").click()
     text("selected-usage", contains: "4.1 KB")
     screenshot("balanced-overview")
@@ -138,8 +171,10 @@ import XCTest
     prepare("delete", target: "large-file")
     app.buttons["confirm-action"].click()
     outcome(is: "Deleted.")
-    XCTAssertFalse(row("large-file").exists)
-    XCTAssertTrue(app.staticTexts["dirty"].exists)
+    // The outcome shows before the view recovers.
+    XCTAssertTrue(row("large-file").disappears(within: 8))
+    XCTAssertTrue(app.staticTexts["dirty"].appears(within: 8))
+    operationEnds()
     app.buttons["inspect-root"].click()
     XCTAssertTrue(app.staticTexts["root-protected"].exists)
     XCTAssertFalse(app.buttons["delete"].isEnabled)
@@ -158,7 +193,7 @@ import XCTest
     screenshot("trash-confirmation-default-action")
     app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
     outcome(is: "Moved to Trash.")
-    XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
+    XCTAssertTrue(row("large-file").disappears(within: 8))
   }
   func testPermanentConfirmationHasNoDefaultAndEscapeCancels() {
     launch()
@@ -166,7 +201,7 @@ import XCTest
     let title = app.staticTexts["confirmation-title"]
     // Return has no default button to press: the alert and the row stay.
     app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
-    XCTAssertFalse(title.waitForNonExistence(timeout: 2))
+    XCTAssertFalse(title.disappears(within: 2))
     XCTAssertTrue(row("large-file").exists)
     text("confirmation-title", contains: "Delete “large-file” immediately?")
     XCTAssertEqual(app.buttons["confirm-action"].title, "Delete Immediately")
@@ -174,14 +209,14 @@ import XCTest
       app.buttons["cancel-action"].frame.minY, app.buttons["confirm-action"].frame.maxY - 1)
     screenshot("permanent-confirmation-without-default")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-    XCTAssertTrue(title.waitForNonExistence(timeout: 8))
+    XCTAssertTrue(title.disappears(within: 8))
     XCTAssertTrue(row("large-file").exists)
     XCTAssertFalse(app.staticTexts["outcome"].exists)
     // A second preparation after Esc must present a new alert.
     prepare("delete", target: "large-file")
     app.buttons["confirm-action"].click()
     outcome(is: "Deleted.")
-    XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
+    XCTAssertTrue(row("large-file").disappears(within: 8))
   }
   /// Only the chevron opens Details. The other failure outcomes and the saved-only selection
   /// are model tests in OperationOutcomeModelTests.swift.
@@ -191,7 +226,7 @@ import XCTest
     app.buttons["confirm-action"].click()
     // The unknown Trash scope is a core issue in Details, not a banner sentence.
     outcome(is: "Moved to Trash.")
-    XCTAssertTrue(app.staticTexts["stale"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["stale"].appears(within: 8))
     // The chevron sits below the start of the outcome text; the accessibility frame of the
     // control starts at the banner edge.
     let details = app.disclosureTriangles["issues"]
@@ -199,7 +234,7 @@ import XCTest
     details.coordinate(withNormalizedOffset: .zero)
       .withOffset(CGVector(dx: chevron, dy: details.frame.height / 2)).click()
     XCTAssertTrue(
-      anyText(containing: "Trash destination scope is unknown").waitForExistence(timeout: 8))
+      anyText(containing: "Trash destination scope is unknown").appears(within: 8))
     screenshot("trash-unknown-issue-details")
   }
   func testImmediateSavedOnlySelection() {
@@ -223,7 +258,7 @@ import XCTest
       app.launchEnvironment["DI_UI_TEST"] = "1"
       app.launchEnvironment["DI_MODEL_TEST"] = "0"
       app.launch()
-      XCTAssertTrue(app.staticTexts["fixture-locked"].waitForExistence(timeout: 8))
+      XCTAssertTrue(app.staticTexts["fixture-locked"].appears(within: 8))
       XCTAssertFalse(app.buttons["open-snapshot"].exists)
       XCTAssertFalse(app.buttons["create-inventory"].isEnabled)
       XCTAssertEqual(app.dialogs.count, 0)
@@ -237,7 +272,7 @@ import XCTest
     launch()
     row("large-file").click()
     app.buttons["delete"].click()
-    XCTAssertTrue(app.staticTexts["confirmation-path"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["confirmation-path"].appears(within: 8))
     // Walk the window, including its confirmation sheet. Only the window title and its
     // title-bar text element are exempt.
     let window = try app.windows.firstMatch.snapshot()
@@ -297,8 +332,12 @@ import XCTest
     let target = app.buttons.matching(
       NSPredicate(format: "identifier BEGINSWITH %@", "map-file-asset-")
     ).firstMatch
-    XCTAssertTrue(target.waitForExistence(timeout: 8))
-    let name = target.label
+    XCTAssertTrue(target.appears(within: 8))
+    // The label of a map target read right after launch was sometimes empty; the identifier
+    // that the query matched is "map-file-" and the same name.
+    let name = String(target.identifier.dropFirst("map-file-".count))
+    print("DENSE target \(name) label \(target.label)")
+    XCTAssertTrue(name.hasPrefix("asset-"), name)
     screenshot("dix-dense-overview")
     row("Movie.mov").click()
     target.hover()
@@ -308,12 +347,13 @@ import XCTest
     target.click()
     text("selected-name", contains: name)
     text("focus-name", contains: "Workspace")
-    XCTAssertTrue(row(name).waitForExistence(timeout: 8))
+    XCTAssertTrue(row(name).appears(within: 8))
     screenshot("dix-linked-reveal")
-    XCTAssertTrue(disclosure("Projects").isEnabled)
+    // Disclosures stay disabled until the reveal's expansion ends.
+    XCTAssertTrue(until { disclosure("Projects").isEnabled })
     disclosure("Projects").click()
     // Disclosure publishes a Rust worker result asynchronously; event delivery is not publication.
-    XCTAssertTrue(row(name).waitForNonExistence(timeout: 8))
+    XCTAssertTrue(row(name).disappears(within: 8))
     text("selected-name", contains: name)
     screenshot("dix-disclosure-collapsed")
     row("Tiny files").doubleClick()
@@ -322,7 +362,7 @@ import XCTest
     row("Notes").doubleClick()
     text("focus-name", contains: "Notes")
     let small = app.buttons["map-file-four-KiB.txt"]
-    XCTAssertTrue(small.waitForExistence(timeout: 8))
+    XCTAssertTrue(small.appears(within: 8))
     small.hover()
     hovered("four-KiB.txt")
     small.click()
@@ -343,7 +383,7 @@ import XCTest
     row("long-path").doubleClick()
     for i in 0..<3 {
       let name = "segment-\(i)-" + String(repeating: "long-name-", count: 18)
-      XCTAssertTrue(row(name).waitForExistence(timeout: 8))
+      XCTAssertTrue(row(name).appears(within: 8))
       row(name).doubleClick()
     }
     prepare("delete", target: "target-directory")
@@ -379,7 +419,7 @@ import XCTest
       // The selection lives in the card; the status bar names only the hovered block.
       XCTAssertEqual(statusPath(), "", "the pointer is on the tree")
       let tile = app.buttons["map-file-large-file"]
-      XCTAssertTrue(tile.waitForExistence(timeout: 8))
+      XCTAssertTrue(tile.appears(within: 8))
       tile.hover()
       hovered("/Workspace/large-file")
       prepare("delete", target: "large-file")
@@ -397,7 +437,7 @@ import XCTest
   func menuItem(_ menu: String, _ title: String) -> XCUIElement {
     menuBarItem(menu).click()
     let item = menuBarItem(menu).menuItems[title]
-    XCTAssertTrue(item.waitForExistence(timeout: 5), "\(menu) > \(title)")
+    XCTAssertTrue(item.appears(within: 5), "\(menu) > \(title)")
     return item
   }
   func contextItem(_ title: String) -> XCUIElement {
@@ -414,7 +454,7 @@ import XCTest
     // The protected root disables both removals in the card, the menu and the shortcuts.
     let title = app.staticTexts["confirmation-title"]
     app.buttons["inspect-root"].click()
-    XCTAssertTrue(app.staticTexts["root-protected"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["root-protected"].appears(within: 8))
     XCTAssertFalse(app.buttons["trash"].isEnabled)
     XCTAssertFalse(app.buttons["delete"].isEnabled)
     XCTAssertFalse(menuItem("File", "Move to Trash…").isEnabled)
@@ -423,7 +463,7 @@ import XCTest
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
-    XCTAssertFalse(title.waitForExistence(timeout: 2))
+    XCTAssertFalse(title.appears(within: 2))
     // A new selection refreshes the menu: no stale root state.
     row("large-file").click()
     text("selected-name", contains: "large-file")
@@ -434,12 +474,12 @@ import XCTest
     XCTAssertTrue(menuBarItem("File").menuItems["Delete Immediately…"].isEnabled)
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
-    XCTAssertTrue(title.waitForExistence(timeout: 8))
+    XCTAssertTrue(title.appears(within: 8))
     text("confirmation-title", contains: "Move “large-file” to the Trash?")
     // Under the alert, both shortcuts and the menu items do nothing.
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
-    XCTAssertFalse(title.waitForNonExistence(timeout: 2))
+    XCTAssertFalse(title.disappears(within: 2))
     text("confirmation-title", contains: "Move “large-file” to the Trash?")
     XCTAssertEqual(app.sheets.count, 1)
     XCTAssertFalse(menuItem("File", "Move to Trash…").isEnabled)
@@ -449,13 +489,13 @@ import XCTest
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     XCTAssertTrue(title.exists)
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-    XCTAssertTrue(title.waitForNonExistence(timeout: 8))
+    XCTAssertTrue(title.disappears(within: 8))
     XCTAssertTrue(row("large-file").exists)
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
-    XCTAssertTrue(title.waitForExistence(timeout: 8))
+    XCTAssertTrue(title.appears(within: 8))
     text("confirmation-title", contains: "Delete “large-file” immediately?")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-    XCTAssertTrue(title.waitForNonExistence(timeout: 8))
+    XCTAssertTrue(title.disappears(within: 8))
     XCTAssertTrue(row("large-file").exists)
     // Another key window (the standard About panel) disables the explorer commands.
     // Index 0 is the Apple menu; index 1 is this app's menu.
@@ -473,7 +513,7 @@ import XCTest
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command])
     app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [.command, .option])
-    XCTAssertFalse(title.waitForExistence(timeout: 2))
+    XCTAssertFalse(title.appears(within: 2))
     XCTAssertTrue(row("large-file").exists)
   }
   func testNavigateMenuPrecedesWindowMenu() {
@@ -519,12 +559,12 @@ import XCTest
     app.launchEnvironment["DI_FIXTURE_STORAGE_ROOT"] = storage.path
     if let appearance { app.launchEnvironment["DI_APPEARANCE"] = appearance }
     app.launch()
-    XCTAssertTrue(app.staticTexts["fixture-locked"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["fixture-locked"].appears(within: 8))
     XCTAssertEqual(app.windows.firstMatch.title, "Disk Inventory — SIMULATED")
   }
   func fileMenuTitles() -> [String] {
     menuBarItem("File").click()
-    XCTAssertTrue(menuBarItem("File").menuItems["Choose Folder…"].waitForExistence(timeout: 5))
+    XCTAssertTrue(menuBarItem("File").menuItems["Choose Folder…"].appears(within: 5))
     return menuBarItem("File").menuItems.allElementsBoundByIndex.map(\.title)
   }
   func testFileMenuShowsReopenWorkspaceAndNoOpenSnapshot() throws {
@@ -542,7 +582,7 @@ import XCTest
   func testStartScreenShowsReopenWorkspace() throws {
     launchStartScreen(storage: try lastFolderMetadata(rootName: "/Workspace"))
     let reopen = app.buttons["reopen-last-folder"]
-    XCTAssertTrue(reopen.waitForExistence(timeout: 8))
+    XCTAssertTrue(reopen.appears(within: 8))
     XCTAssertEqual(reopen.label, "Reopen “Workspace”")
     XCTAssertFalse(reopen.isEnabled)
     XCTAssertFalse(app.buttons["open-snapshot"].exists)
@@ -552,7 +592,7 @@ import XCTest
   func testOldMetadataShowsReopenLastFolder() throws {
     launchStartScreen(storage: try lastFolderMetadata(rootName: nil))
     let reopen = app.buttons["reopen-last-folder"]
-    XCTAssertTrue(reopen.waitForExistence(timeout: 8))
+    XCTAssertTrue(reopen.appears(within: 8))
     XCTAssertEqual(reopen.label, "Reopen Last Folder")
     let titles = fileMenuTitles()
     XCTAssertEqual(
@@ -572,7 +612,7 @@ import XCTest
     app.terminate()
     launchStartScreen(storage: storage)
     let reopen = app.buttons["reopen-last-folder"]
-    XCTAssertTrue(reopen.waitForExistence(timeout: 8))
+    XCTAssertTrue(reopen.appears(within: 8))
     XCTAssertEqual(reopen.label, "Reopen “Workspace”")
     reopen.click()
     app.typeKey("o", modifierFlags: [.command])
@@ -643,29 +683,29 @@ import XCTest
     row("small-files").click()
     text("selected-name", contains: "small-files")
     row("large-file").rightClick()
-    XCTAssertTrue(contextItem("moveToTrash").waitForExistence(timeout: 5))
+    XCTAssertTrue(contextItem("moveToTrash").appears(within: 5))
     // The clicked row is the target, not the earlier selection.
     text("selected-name", contains: "large-file")
     XCTAssertFalse(contextItem("revealInFinder").isEnabled)
     XCTAssertTrue(contextItem("deleteImmediately").isEnabled)
     screenshot("context-menu-tree-row")
     contextItem("moveToTrash").click()
-    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["confirmation-title"].appears(within: 8))
     text("confirmation-title", contains: "Move “large-file” to the Trash?")
     app.buttons["cancel-action"].click()
-    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["confirmation-title"].disappears(within: 8))
     row("small-files").click()
     text("selected-name", contains: "small-files")
     let tile = app.buttons["map-file-large-file"]
-    XCTAssertTrue(tile.waitForExistence(timeout: 8))
+    XCTAssertTrue(tile.appears(within: 8))
     tile.hover()
     hovered("large-file")
     tile.rightClick()
-    XCTAssertTrue(contextItem("deleteImmediately").waitForExistence(timeout: 5))
+    XCTAssertTrue(contextItem("deleteImmediately").appears(within: 5))
     text("selected-name", contains: "large-file")
     screenshot("context-menu-map-block")
     contextItem("deleteImmediately").click()
-    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["confirmation-title"].appears(within: 8))
     text("confirmation-title", contains: "Delete “large-file” immediately?")
     app.buttons["cancel-action"].click()
     XCTAssertTrue(row("large-file").exists)
@@ -675,13 +715,13 @@ import XCTest
     prepare("trash", target: "large-file")
     app.buttons["confirm-action"].click()
     text("outcome", contains: "Moved to Trash")
-    XCTAssertTrue(row("large-file").waitForNonExistence(timeout: 8))
+    XCTAssertTrue(row("large-file").disappears(within: 8))
     let undo = menuItem("Edit", "Undo")
     XCTAssertFalse(undo.isEnabled)
     screenshot("edit-menu-after-trash")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     app.typeKey("z", modifierFlags: [.command])
-    XCTAssertFalse(row("large-file").waitForExistence(timeout: 2))
+    XCTAssertFalse(row("large-file").appears(within: 2))
     text("outcome", contains: "Moved to Trash")
   }
 
@@ -786,6 +826,8 @@ import XCTest
   func clickHatch() throws { try hatchPoint()?.click() }
   /// The middle of an area of aggregate hatch on the map.
   func hatchPoint() throws -> XCUICoordinate? {
+    let tiles = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "map-file-"))
+    XCTAssertTrue(tiles.firstMatch.appears(within: 8), "the map shows its picture")
     let p = try windowPixels()
     let minX = app.outlines["entry-tree"].frame.maxX
     let levels = hatchLevels(p, minX: minX)
@@ -812,9 +854,8 @@ import XCTest
   func testAppearanceVariantsRenderMapChromeAndSheets() {
     for appearance in Self.appearances {
       launch(appearance: appearance)
+      mapShows(appearance)
       let probe = app.descendants(matching: .any)["map-appearance"]
-      XCTAssertTrue(probe.waitForExistence(timeout: 8), appearance)
-      XCTAssertEqual(probe.label, appearance)
       leaveMap()
       screenshot("\(appearance)-overview")
       row("large-file").click()
@@ -823,7 +864,7 @@ import XCTest
       leaveMap()
       screenshot("\(appearance)-selection")
       let tile = app.buttons["map-file-large-file"]
-      XCTAssertTrue(tile.waitForExistence(timeout: 8))
+      XCTAssertTrue(tile.appears(within: 8))
       tile.hover()
       hovered("large-file")
       screenshot("\(appearance)-hover")
@@ -831,7 +872,7 @@ import XCTest
         prepare(action, target: "large-file")
         screenshot("\(appearance)-\(action)-sheet")
         app.buttons["cancel-action"].click()
-        XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["confirmation-title"].disappears(within: 8))
       }
       // Each sheet and the hover keep the appearance: no rebuild with another variant.
       XCTAssertEqual(probe.label, appearance)
@@ -842,7 +883,7 @@ import XCTest
     continueAfterFailure = true
     for appearance in Self.appearances {
       launch(appearance: appearance)
-      XCTAssertTrue(row("zero-byte").waitForExistence(timeout: 8))
+      XCTAssertTrue(row("zero-byte").appears(within: 8))
       let p = try windowPixels()
       var expected: (background: [Double], swatch: [Double]) = ([], [])
       NSAppearance(named: appearance.hasPrefix("light") ? .aqua : .darkAqua)!
@@ -875,7 +916,7 @@ import XCTest
     for appearance in ["light", "dark"] {
       launch("dix", appearance: appearance)
       let tile = app.buttons["map-file-Movie.mov"]
-      XCTAssertTrue(tile.waitForExistence(timeout: 8))
+      XCTAssertTrue(tile.appears(within: 8))
       row("Tiny files").hover()
       let p = try windowPixels()
       let name = row("Movie.mov").frame
@@ -929,9 +970,7 @@ import XCTest
     for appearance in ["light", "dark"] {
       launch(appearance: appearance)
       // Measure only in the requested appearance.
-      let probe = app.descendants(matching: .any)["map-appearance"]
-      XCTAssertTrue(probe.waitForExistence(timeout: 8), appearance)
-      if probe.exists { XCTAssertEqual(probe.label, appearance) }
+      mapShows(appearance)
       leaveMap()
       func check(_ name: String, _ element: XCUIElement, _ pixels: WindowPixels) {
         XCTAssertTrue(element.exists, name)
@@ -952,13 +991,13 @@ import XCTest
       check("status path", app.staticTexts["status-path"], try windowPixels())
       // The card of a grouped block shows its size.
       try clickHatch()
-      XCTAssertTrue(app.staticTexts["aggregate-text"].waitForExistence(timeout: 8), appearance)
+      XCTAssertTrue(app.staticTexts["aggregate-text"].appears(within: 8), appearance)
       leaveMap()
       check("card grouped size", app.staticTexts["aggregate-text"], try windowPixels())
       screenshot("text-contrast-\(appearance)")
       app.terminate()
       launchStartScreen(storage: storage, appearance: appearance)
-      XCTAssertTrue(app.buttons["reopen-last-folder"].waitForExistence(timeout: 8))
+      XCTAssertTrue(app.buttons["reopen-last-folder"].appears(within: 8))
       let start = try windowPixels()
       check("start subtitle", staticText("Nothing is scanned"), start)
       check("last-folder caption", staticText("Last folder"), start)
@@ -1071,7 +1110,7 @@ import XCTest
     text("focus-name", contains: "Projects")
     let renders = app.buttons.matching(
       NSPredicate(format: "identifier BEGINSWITH %@", "map-file-Render "))
-    XCTAssertTrue(renders.firstMatch.waitForExistence(timeout: 8), "Projects map")
+    XCTAssertTrue(renders.firstMatch.appears(within: 8), "Projects map")
     offMap()
     screenshot("nested-trash-dark-projects")
     // The stripes locate the block on screen.
@@ -1088,7 +1127,7 @@ import XCTest
     screenshot("nested-trash-dark-selected")
     click(middle, double: true)
     text("focus-name", contains: ".Trash")
-    XCTAssertTrue(app.buttons["map-file-Old render 01.mov"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.buttons["map-file-Old render 01.mov"].appears(within: 8))
     screenshot("nested-trash-dark-focused")
   }
   /// Up to six of the largest file tiles with an accessibility target and a unique name,
@@ -1116,7 +1155,7 @@ import XCTest
   /// (the design's inset on a 2x grid). The old top/left seam at 0.775 left the map brighter.
   func testPrototypeHomeDarkMapMatchesTheDesignBrightness() throws {
     launch("prototype-home", appearance: "dark")
-    XCTAssertTrue(app.buttons["map-file-Interview raw.mov"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.buttons["map-file-Interview raw.mov"].appears(within: 8))
     offMap()
     let p = try windowPixels(srgb: true)
     // Rust `type_color`: the prototype palette by extension.
@@ -1177,14 +1216,14 @@ import XCTest
   func testEscapeClearsTheSelectionInTreeAndMap() throws {
     launch()
     let tile = app.buttons["map-file-large-file"]
-    XCTAssertTrue(tile.waitForExistence(timeout: 8))
+    XCTAssertTrue(tile.appears(within: 8))
     offMap()
     let clear = try windowPixels()
     let probe = CGPoint(x: tile.frame.minX - 30, y: tile.frame.midY)
     row("large-file").click()
     text("selected-name", contains: "large-file")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-    XCTAssertTrue(app.buttons["selected-name"].waitForNonExistence(timeout: 8), "tree Esc")
+    XCTAssertTrue(app.buttons["selected-name"].disappears(within: 8), "tree Esc")
     XCTAssertTrue(staticText("Nothing selected").exists)
     XCTAssertEqual(statusPath(), "")
     XCTAssertFalse(row("large-file").isSelected)
@@ -1195,14 +1234,14 @@ import XCTest
     tile.click()
     text("selected-name", contains: "large-file")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-    XCTAssertTrue(app.buttons["selected-name"].waitForNonExistence(timeout: 8), "map Esc")
+    XCTAssertTrue(app.buttons["selected-name"].disappears(within: 8), "map Esc")
     // A confirmation sheet owns Esc: it cancels and the selection stays.
     prepare("delete", target: "large-file")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForNonExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["confirmation-title"].disappears(within: 8))
     text("selected-name", contains: "large-file")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-    XCTAssertTrue(app.buttons["selected-name"].waitForNonExistence(timeout: 8))
+    XCTAssertTrue(app.buttons["selected-name"].disappears(within: 8))
     XCTAssertTrue(row("large-file").exists)
     screenshot("esc-after-map")
   }
@@ -1213,7 +1252,9 @@ import XCTest
   func testStatusBarShowsTheHoveredBlockAlsoWhileAnItemIsSelected() throws {
     launch()
     let tile = app.buttons["map-file-large-file"]
-    XCTAssertTrue(tile.waitForExistence(timeout: 8))
+    XCTAssertTrue(tile.appears(within: 8))
+    // The pointer stays where the last test left it, which can be over the map.
+    offMap()
     XCTAssertEqual(statusPath(), "")
     XCTAssertFalse(anyText(containing: "Recorded disk usage").exists)
     // Find the grouped block before the selection dims the map.
@@ -1245,7 +1286,7 @@ import XCTest
     XCTAssertFalse(statusPath().contains("Moved"))
     screenshot("status-bar-outcome-banner")
     app.buttons["dismiss-banner"].click()
-    XCTAssertTrue(outcome.waitForNonExistence(timeout: 8))
+    XCTAssertTrue(outcome.disappears(within: 8))
   }
   /// Refresh shows the scan's progress with the folder name, a live counter and Stop. Stop
   /// keeps the previous data and says so; a complete refresh applies the live change.
@@ -1256,48 +1297,55 @@ import XCTest
     let total = app.staticTexts["scope-total"].value as? String
     app.buttons["refresh"].click()
     text("scan-phase", contains: "Refreshing “Library”…")
-    let items = app.staticTexts["scan-items"]
-    XCTAssertTrue(items.waitForExistence(timeout: 8))
-    let first = (items.value as? String) ?? items.label
-    Thread.sleep(forTimeInterval: 1.2)
-    let second = (items.value as? String) ?? items.label
+    XCTAssertTrue(app.staticTexts["scan-items"].appears(within: 8))
+    let first = shownText("scan-items")
+    var second = first
+    _ = until {
+      second = shownText("scan-items")
+      return second != first
+    }
     print("REFRESH counter \(first) -> \(second)")
     XCTAssertNotEqual(first, second, "the counter is live")
     XCTAssertTrue(app.buttons["stop-scan"].isEnabled)
     screenshot("refresh-progress")
     app.buttons["stop-scan"].click()
     text("outcome", contains: "Refresh of “Library” stopped. The previous data is unchanged.")
-    XCTAssertTrue(app.staticTexts["scan-phase"].waitForNonExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["scan-phase"].disappears(within: 8))
     XCTAssertEqual(app.staticTexts["scope-total"].value as? String, total)
     disclosure("Caches").click()
-    XCTAssertTrue(row("cache 01.db").waitForExistence(timeout: 8))
+    XCTAssertTrue(row("cache 01.db").appears(within: 8))
     XCTAssertFalse(row("new cache.db").exists)
     screenshot("refresh-stopped")
     app.buttons["refresh"].click()
     outcome(is: "Refreshed “Library”.", timeout: 20)
+    operationEnds()
     XCTAssertNotEqual(app.staticTexts["scope-total"].value as? String, total)
     disclosure("Caches").click()
-    XCTAssertTrue(row("new cache.db").waitForExistence(timeout: 8))
+    XCTAssertTrue(row("new cache.db").appears(within: 8))
     screenshot("refresh-complete")
   }
   /// The bar names the operation's phase and item; a bare "Working…" never shows. It reads the
   /// value directly: a predicate expectation samples about once a second, slower than a phase.
   func phase(_ value: String, timeout: TimeInterval = 6) {
-    let element = app.staticTexts["scan-phase"]
-    let deadline = Date().addingTimeInterval(timeout)
     var shown = ""
-    while Date() < deadline {
-      if element.exists { shown = (element.value as? String) ?? element.label }
-      if shown.contains(value) { break }
-      Thread.sleep(forTimeInterval: 0.05)
+    _ = poll(timeout) {
+      let now = shownText("scan-phase")
+      if !now.isEmpty { shown = now }
+      return shown.contains(value)
     }
     XCTAssertTrue(shown.contains(value), "the phase must be \(value), got \(shown)")
     XCTAssertFalse(anyText(containing: "Working…").exists, value)
   }
+  /// The value or label of a text; empty once it is gone. A snapshot of a missing element
+  /// throws, where reading `value` would fail the test: the busy bar goes when its operation
+  /// ends, also while a wait polls it.
+  func shownText(_ id: String) -> String {
+    guard let element = try? app.staticTexts[id].snapshot() else { return "" }
+    return (element.value as? String) ?? element.label
+  }
   /// The removed-items counter, such as "96 items".
   func items() -> (count: Int, shown: String) {
-    let element = app.staticTexts["scan-items"]
-    let shown = (element.value as? String) ?? element.label
+    let shown = shownText("scan-items")
     return (Int(shown.filter(\.isNumber)) ?? -1, shown)
   }
   /// `operation-slow`: each check, the Trash move and the update take 3 s, each removal 30 ms.
@@ -1307,15 +1355,18 @@ import XCTest
     app.buttons["delete"].click()
     phase("Checking “Library”…")
     screenshot("delete-checking")
-    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["confirmation-title"].appears(within: 8))
     app.buttons["confirm-action"].click()
     phase("Deleting “Library”…", timeout: 8)
-    XCTAssertTrue(app.staticTexts["scan-items"].waitForExistence(timeout: 4))
+    XCTAssertTrue(app.staticTexts["scan-items"].appears(within: 4))
     let first = items()
     XCTAssertTrue(app.buttons["stop-scan"].isEnabled)
     screenshot("delete-deleting")
-    Thread.sleep(forTimeInterval: 1)
-    let second = items()
+    var second = items()
+    _ = until {
+      second = items()
+      return second.count > first.count
+    }
     print("DELETE counter \(first.shown) -> \(second.shown)")
     XCTAssertGreaterThan(second.count, first.count, "the removed-items counter is live")
     XCTAssertNotNil(second.shown.range(of: #"^[0-9,]+ items$"#, options: .regularExpression))
@@ -1323,7 +1374,7 @@ import XCTest
     XCTAssertFalse(app.buttons["stop-scan"].isEnabled, "the deletion is done")
     screenshot("delete-updating")
     outcome(is: "Deleted.", timeout: 12)
-    XCTAssertTrue(app.staticTexts["scan-phase"].waitForNonExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["scan-phase"].disappears(within: 8))
     XCTAssertFalse(row("Library").exists)
     screenshot("delete-done")
     app.terminate()
@@ -1331,10 +1382,11 @@ import XCTest
     launch("operation-slow")
     row("Library").click()
     app.buttons["delete"].click()
-    XCTAssertTrue(app.staticTexts["confirmation-title"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["confirmation-title"].appears(within: 8))
     app.buttons["confirm-action"].click()
     phase("Deleting “Library”…", timeout: 8)
-    Thread.sleep(forTimeInterval: 0.5)
+    // Stop once the walk has removed an item.
+    XCTAssertTrue(until { items().count > 0 }, "the walk removes items")
     app.buttons["stop-scan"].click()
     text("outcome", contains: "Deletion stopped.", timeout: 12)
     let stopped = (app.staticTexts["outcome"].value as? String) ?? ""
@@ -1343,6 +1395,7 @@ import XCTest
       stopped.range(
         of: #"^Deletion stopped\. [0-9,]+ items? deleted\.$"#, options: .regularExpression),
       stopped)
+    operationEnds()
     XCTAssertTrue(row("Library").exists, "the survivors stay")
     screenshot("delete-stopped")
   }
@@ -1351,15 +1404,16 @@ import XCTest
     prepare("delete", target: "Library")
     app.buttons["confirm-action"].click()
     outcome(is: "Deleted. 3 items skipped.")
+    operationEnds()
     XCTAssertTrue(row("Library").exists, "the folders of skipped items stay")
     let details = app.disclosureTriangles["issues"]
-    XCTAssertTrue(details.waitForExistence(timeout: 8))
+    XCTAssertTrue(details.appears(within: 8))
     let chevron = app.staticTexts["outcome"].frame.minX + 4.5 - details.frame.minX
     details.coordinate(withNormalizedOffset: .zero)
       .withOffset(CGVector(dx: chevron, dy: details.frame.height / 2)).click()
     XCTAssertTrue(
       anyText(containing: "Skipped /Users/ana/Library/Caches/cache 01.db: permission denied")
-        .waitForExistence(timeout: 8))
+        .appears(within: 8))
     XCTAssertTrue(
       anyText(containing: "cache 02.cache: not permitted, for example locked").exists)
     screenshot("delete-skipped-details")
@@ -1415,9 +1469,9 @@ import XCTest
   func testRepeatedMapClicksNeverDrawAFrameWithoutTheSelectionDim() throws {
     launch("prototype-home", appearance: "dark")
     let tiles = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "map-file-"))
-    XCTAssertTrue(tiles.firstMatch.waitForExistence(timeout: 8))
+    XCTAssertTrue(tiles.firstMatch.appears(within: 8))
     let probe = app.descendants(matching: .any)["map-selection-gaps"]
-    XCTAssertTrue(probe.waitForExistence(timeout: 8), "frame sampler")
+    XCTAssertTrue(probe.appears(within: 8), "frame sampler")
     let count = tiles.count
     for i in 0..<40 {
       tiles.element(boundBy: (i * 7) % count).click()
@@ -1458,16 +1512,16 @@ import XCTest
     row("small-files").click()
     text("selected-path", contains: "/Workspace/small-files")
     let count = anyText(containing: " direct items")
-    XCTAssertTrue(count.waitForExistence(timeout: 8))
+    XCTAssertTrue(count.appears(within: 8))
     let caption = (count.value as? String) ?? count.label
     XCTAssertNotNil(
       caption.range(of: "^[0-9][0-9,]* direct items$", options: .regularExpression), caption)
     screenshot("card-directory")
     app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-    XCTAssertTrue(app.staticTexts["selected-path"].waitForNonExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["selected-path"].disappears(within: 8))
     hatch.click()
     let grouped = app.staticTexts["aggregate-text"]
-    XCTAssertTrue(grouped.waitForExistence(timeout: 8))
+    XCTAssertTrue(grouped.appears(within: 8))
     let groupedSize = (grouped.value as? String) ?? grouped.label
     XCTAssertNotNil(
       groupedSize.range(of: size, options: .regularExpression), "grouped card \(groupedSize)")
@@ -1477,17 +1531,18 @@ import XCTest
     screenshot("card-grouped")
   }
   /// Help tags: the Incomplete and Not saved badges stay and have no help tag; Refresh says what
-  /// it does, without a snapshot note. In trials macOS often showed no further help tag in a
-  /// window after one hover check, or after a confirmed delete or Trash. So each check has its
-  /// own launch, and the badges come from a refresh.
+  /// it does, without a snapshot note. The badges come from a refresh. In trials the first
+  /// help tag in a window showed within about 2 s, but often none after one had shown, and none
+  /// after the pointer rested on text without one. So each check has its own launch, and a
+  /// badge is hovered once: later tries could not show its help tag.
   func testRefreshHelpTagHasNoSnapshotNoteAndBadgesHaveNoHelpTags() throws {
     continueAfterFailure = true
     for (badge, name) in [("stale", "Incomplete"), ("dirty", "Not saved")] {
       launch("unknown-allocation")
       app.buttons["refresh"].click()
-      XCTAssertTrue(app.staticTexts[badge].waitForExistence(timeout: 8))
+      XCTAssertTrue(app.staticTexts[badge].appears(within: 8))
       text(badge, contains: name)
-      XCTAssertFalse(showsHelpTag(app.staticTexts[badge]), "\(name) badge")
+      XCTAssertFalse(showsHelpTag(app.staticTexts[badge], tries: 1), "\(name) badge")
       screenshot("badge-\(badge)-without-help-tag")
       app.terminate()
     }
@@ -1497,12 +1552,12 @@ import XCTest
     XCTAssertTrue(refreshHelp.contains("Rescan the focused directory"), refreshHelp)
     for part in ["memory", "snapshot"] { XCTAssertFalse(refreshHelp.contains(part), refreshHelp) }
   }
-  /// Hovers `element` up to three times and reports whether a help tag appears. In trials
+  /// Hovers `element` up to `tries` times and reports whether a help tag appears. In trials
   /// macOS sometimes skipped a help tag, mostly after clicks, so each try first rests the
   /// pointer on two points of the tree.
-  func showsHelpTag(_ element: XCUIElement) -> Bool {
+  func showsHelpTag(_ element: XCUIElement, tries: Int = 3) -> Bool {
     let tag = app.helpTags.firstMatch
-    for _ in 0..<3 {
+    for _ in 0..<tries {
       for offset in [0.3, 0.6] {
         app.outlines["entry-tree"].coordinate(
           withNormalizedOffset: CGVector(dx: offset, dy: offset)
@@ -1510,7 +1565,7 @@ import XCTest
         Thread.sleep(forTimeInterval: 1)
       }
       element.hover()
-      if tag.waitForExistence(timeout: 4) { return true }
+      if tag.appears(within: 4) { return true }
     }
     return false
   }
