@@ -2,8 +2,7 @@ import AppKit
 
 extension ExplorerModel {
   private func parentRequestIsCurrent(_ request: ParentRequest) -> Bool {
-    !working && !loading && !replacingSession && pending == nil
-      && request.session === session && request.generation == sessionVersion
+    isIdle && request.session === session && request.generation == sessionVersion
       && request.navigation == viewVersion && request.selection == selectionVersion
       && selected?.key.sameEntry(other: request.source) == true
   }
@@ -51,7 +50,7 @@ extension ExplorerModel {
     }
   }
   func point(_ x: UInt32, _ y: UInt32, click: Bool = false, doubleClick: Bool = false) {
-    guard !loading, !working, !motion.active, !replacingSession, let frame = picture?.frame else {
+    guard acceptsMapPointer, let frame = picture?.frame else {
       return
     }
     if click { clickVersion += 1 } else { hoverVersion += 1 }
@@ -74,7 +73,7 @@ extension ExplorerModel {
         let hit = try? await Task.detached { try request.frame.hit(x: request.x, y: request.y) }
           .value
         guard request.generation == sessionVersion, request.navigation == viewVersion,
-          !working, !loading, !replacingSession, !motion.active
+          acceptsMapPointer
         else {
           continue
         }

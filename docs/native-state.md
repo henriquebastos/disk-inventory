@@ -16,6 +16,7 @@ extensions hold the behavior:
 | [ExplorerModel+Selection.swift](../native/Explorer/ExplorerModel+Selection.swift) | Selection, map hover and click, paths, Finder |
 | [ExplorerModel+Navigation.swift](../native/Explorer/ExplorerModel+Navigation.swift) | Focus, parent and history |
 | [ExplorerModel+Operations.swift](../native/Explorer/ExplorerModel+Operations.swift) | Command enable rules, Trash and Delete, outcomes, Refresh Directory |
+| [ExplorerModel+Input.swift](../native/Explorer/ExplorerModel+Input.swift) | Busy rules for tree and map input, tree keys, map context-menu selection |
 
 Swift `private` does not reach other files, so the request bookkeeping is internal. Views read
 only published state and component states.
@@ -95,3 +96,36 @@ The rendered card (fonts, truncation and the material) stays covered by
 "testCaptionAndSecondaryTextMeetFourAndAHalfToOne" in
 [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift); the rendered banner,
 bar and header by the UI tests that [native-status.md](native-status.md) lists.
+
+## Busy rules
+
+Tree and map views ask named model rules instead of checking busy flags themselves. The rules
+differ on purpose, and each keeps the exact condition that its input had:
+
+| Rule | Condition | Used by |
+|---|---|---|
+| `isIdle` | no load, operation, session replacement or pending confirmation | tree keys, parent selection, Navigate commands |
+| `treeInteractive` | `isIdle` and a tree handle | row selection, double-click, disclosure clicks, row context menu |
+| `visibleDisclosuresEnabled` | `treeInteractive` and no expansion in flight | disclosures of visible rows |
+| `canExpandRows` | no load, operation, replacement or expansion in flight | disclosures of new cells, `expand` |
+| `acceptsMapPointer` | no load, operation, replacement or result motion | map hover, click and accessibility press |
+| `canOpenMapContextMenu` | `acceptsMapPointer` and no pending confirmation | map block context menu |
+
+The tree's Left and Right keys (`treeArrowKey`), Command-Up, Command-Down, Return and Enter
+(`treeNavigationKey`) and the map block context menu (`selectHoveredBlockForContextMenu`) are
+model intents: a view passes the key or the click, and the intent checks its rule. A busy tree
+consumes its keys without acting. The view keeps only geometry, such as whether a secondary
+click falls inside the hovered block.
+
+[InputRulesTests.swift](../native/ExplorerModelTests/InputRulesTests.swift):
+
+- "testTreeArrowKeysExpandSelectTheFirstItemCollapseAndSelectTheParent" and
+  "testTreeNavigationKeysFocusTheParentAndOpenTheSelectedDirectory": the key decisions.
+- "testTreeKeysAreConsumedWithoutActionWhileBusy": an operation and a pending confirmation.
+- "testTreeInputRulesDifferForVisibleAndNewDisclosures" and
+  "testMapRulesDifferForAPendingConfirmationAndAResultMotion": where the rules differ.
+- "testMapContextMenuSelectsTheHoveredBlockOrItsGroup": item and group selection.
+
+The real secondary clicks stay in "testContextMenusSelectClickedRowAndHoveredBlock" and
+"testContextMenusOnTreeRowAndMapBlock"; real keys in
+"testDisclosureKeyboardZoomBreadcrumbAndUsage".

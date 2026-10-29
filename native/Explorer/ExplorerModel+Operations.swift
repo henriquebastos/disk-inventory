@@ -16,9 +16,8 @@ extension ExplorerModel {
   var canStopScan: Bool {
     scan.progress?.cancellable == true && scan.offersStop && pending == nil
   }
-  private var canNavigate: Bool { !working && !loading && !replacingSession && pending == nil }
-  var canOpenSelectedDirectory: Bool { canNavigate && selected?.kind == .directory }
-  var canOpenEnclosingDirectory: Bool { canNavigate && records?.focus.parent != nil }
+  var canOpenSelectedDirectory: Bool { isIdle && selected?.kind == .directory }
+  var canOpenEnclosingDirectory: Bool { isIdle && records?.focus.parent != nil }
   @discardableResult
   func prepare(_ kind: ActionKind) -> Task<Void, Never>? {
     guard canAct, let entry = selected, let s = session else { return nil }

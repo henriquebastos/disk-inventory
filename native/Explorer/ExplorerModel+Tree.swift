@@ -8,7 +8,7 @@ extension ExplorerModel {
     runTreeWorker()
   }
   func expand(_ entry: EntryRecord, expanded: Bool) {
-    guard let tree, !loading, !working, !replacingSession, !treeEditing else { return }
+    guard let tree, canExpandRows else { return }
     outlineVersion += 1
     treeEditing = true
     pendingExpansion = TreeRequest(

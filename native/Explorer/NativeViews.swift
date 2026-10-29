@@ -37,21 +37,7 @@ struct ContentsTree: NSViewRepresentable {
     table.doubleAction = #selector(Coordinator.open)
     table.keyboard = { context.coordinator.key($0) }
     table.contextMenu = { [unowned table] row in context.coordinator.contextMenu(table, row: row) }
-    table.navigation = { code in
-      let model = context.coordinator.model
-      guard !model.loading, !model.working, !model.replacingSession, model.pending == nil else {
-        return true
-      }
-      if code == 126 {
-        model.focusParent()
-        return true
-      }
-      if code == 125 || code == 36 || code == 76 {
-        model.openSelectedDirectory()
-        return true
-      }
-      return false
-    }
+    table.navigation = { context.coordinator.model.treeNavigationKey($0) }
     scroll.contentView.postsBoundsChangedNotifications = true
     context.coordinator.scrollObserver = NotificationCenter.default.addObserver(
       forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
@@ -81,8 +67,7 @@ struct ContentsTree: NSViewRepresentable {
     c.commands.model = model
     c.updating = true
     table.enumerateAvailableRowViews { rowView, _ in
-      (rowView.view(atColumn: 0) as? Cell)?.disclosure.isEnabled =
-        c.interactive && !model.treeEditing
+      (rowView.view(atColumn: 0) as? Cell)?.disclosure.isEnabled = model.visibleDisclosuresEnabled
     }
     if c.offset != model.outline?.offset || c.rows !== model.outlineToken {
       c.offset = model.outline?.offset
@@ -251,21 +236,11 @@ struct ContentsTree: NSViewRepresentable {
       self.model = model
       commands = ExplorerCommandTarget(model: model)
     }
-    var interactive: Bool {
-      model.tree != nil && !model.loading && !model.working && !model.replacingSession
-        && model.pending == nil
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+      model.treeInteractive
     }
-    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { interactive }
     func numberOfRows(in tableView: NSTableView) -> Int { Int(model.outline?.total ?? 0) }
-    func record(_ row: Int) -> OutlineRow? {
-      guard row >= 0, let p = model.outline else { return nil }
-      let at = Int64(row) - Int64(p.offset)
-      guard at >= 0, at < Int64(p.rows.count) else {
-        model.requestRows(UInt64(max(0, row / 128 * 128)))
-        return nil
-      }
-      return p.rows[Int(at)]
-    }
+    func record(_ row: Int) -> OutlineRow? { model.outlineRow(at: row) }
     func rowState(_ row: Int) -> TreeRowState {
       guard let value = record(row) else { return .loading }
       return TreeRowState(
@@ -284,8 +259,7 @@ struct ContentsTree: NSViewRepresentable {
         cell.disclosure.target = self
         cell.disclosure.action = #selector(toggle(_:))
         cell.disclosure.tag = row
-        cell.disclosure.isEnabled =
-          !model.loading && !model.working && !model.replacingSession && !model.treeEditing
+        cell.disclosure.isEnabled = model.canExpandRows
         return cell
       }
       let cell =
@@ -303,7 +277,7 @@ struct ContentsTree: NSViewRepresentable {
       return view
     }
     func tableViewSelectionDidChange(_ note: Notification) {
-      guard interactive, !updating, let table = note.object as? NSTableView,
+      guard model.treeInteractive, !updating, let table = note.object as? NSTableView,
         let r = record(table.selectedRow)
       else { return }
       let selectedRow = table.selectedRow
@@ -311,46 +285,25 @@ struct ContentsTree: NSViewRepresentable {
       model.selectedRow = selectedRow
     }
     @objc func toggle(_ sender: NSButton) {
-      guard interactive else { return }
+      guard model.treeInteractive else { return }
       if let row = record(sender.tag) { model.expand(row.entry, expanded: !row.expanded) }
     }
     @objc func open(_ sender: NSTableView) {
-      guard interactive else { return }
+      guard model.treeInteractive else { return }
       if let row = record(sender.clickedRow), row.entry.kind == .directory {
         model.focus(row.entry.key)
       }
     }
     /// A secondary click selects the clicked cached row first, so the menu acts on that row.
     func contextMenu(_ table: NSTableView, row: Int) -> NSMenu? {
-      guard interactive, let record = record(row) else { return nil }
+      guard model.treeInteractive, let record = record(row) else { return nil }
       if model.selected?.key.sameEntry(other: record.entry.key) != true {
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
       }
       guard model.selected?.key.sameEntry(other: record.entry.key) == true else { return nil }
       return commands.menu()
     }
-    func key(_ code: UInt16) -> Bool {
-      guard code == 123 || code == 124 else { return false }
-      guard !model.working, !model.loading, !model.replacingSession, model.pending == nil else {
-        return true
-      }
-      guard let index = model.selectedRow, let row = record(index) else { return false }
-      if code == 124 {
-        guard row.entry.kind == .directory, row.entry.childCount > 0 else { return true }
-        if !row.expanded {
-          model.expand(row.entry, expanded: true)
-        } else if let child = record(index + 1),
-          child.entry.parent?.sameEntry(other: row.entry.key) == true
-        {
-          model.select(child.entry)
-        }
-      } else if row.expanded {
-        model.expand(row.entry, expanded: false)
-      } else {
-        model.selectParent(row.entry)
-      }
-      return true
-    }
+    func key(_ code: UInt16) -> Bool { model.treeArrowKey(code) }
   }
 }
 
@@ -592,18 +545,12 @@ struct DiagramView: NSViewRepresentable {
     override func mouseExited(with event: NSEvent) {
       model?.clearHover()
     }
-    /// Uses the published hover, never a main-thread hit test, which would take the session
-    /// lock. A grouped block selects its aggregate, which disables every item command.
+    /// A secondary click inside the hovered block's rectangle; the model selects the block.
     override func menu(for event: NSEvent) -> NSMenu? {
-      guard let model, let hover = model.hover, model.pending == nil, !model.loading,
-        !model.working, !model.replacingSession, !model.motion.active,
-        rect(hover.rect).contains(convert(event.locationInWindow, from: nil))
+      guard let model, let hover = model.hover,
+        rect(hover.rect).contains(convert(event.locationInWindow, from: nil)),
+        model.selectHoveredBlockForContextMenu()
       else { return nil }
-      if !hover.actionable {
-        model.selectAggregate(hover.entry.key, bytes: hover.bytes)
-      } else if model.selected?.key.sameEntry(other: hover.entry.key) != true {
-        model.select(hover.entry)
-      }
       return commands.menu()
     }
     func updateTargets() {
@@ -627,8 +574,7 @@ struct DiagramView: NSViewRepresentable {
         let y = UInt32(hit.rect.y + hit.rect.height / 2)
         // Accessibility clients may retain old targets; do not retain their frame or bitmap.
         let e = Target { [weak model, weak frame] in
-          guard let model, let frame, model.picture?.frame === frame, !model.loading,
-            !model.replacingSession, !model.working, !model.motion.active
+          guard let model, let frame, model.picture?.frame === frame, model.acceptsMapPointer
           else { return false }
           model.point(x, y, click: true)
           return true
