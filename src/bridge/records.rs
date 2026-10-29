@@ -10,6 +10,7 @@ pub enum BridgeError {
     WrongSession,
     ConsumedAction,
     Cancelled,
+    ObsoleteRevision { message: String },
     PermissionDenied { message: String },
     NotFound { message: String },
     Io { message: String },

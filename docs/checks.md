@@ -86,11 +86,7 @@ check.sh does not retry a failed test. To report a flake, run the one test again
 `-test-iterations 5` (model, UI) or in a loop (Rust), keep the stage logs, and add the test
 name, the failure line and its cause to this list.
 
-- StatusAndProgressTests "testSkippedItemsReadAsDeletedWithACountAndReasonsInDetails": failed
-  once in a full model run, `XCTAssertNil(model.error)` got "presentation belongs to an
-  obsolete inventory revision"; it passed 20 of 20 alone. Likely cause, not confirmed: the
-  test prepares and runs the Delete right after `select`, so a query of that selection can
-  run after the Delete changed the revision and set `error`.
+None known.
 
 ## 1f Disk and time
 

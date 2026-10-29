@@ -138,9 +138,9 @@ struct BridgeSmoke {
         }
         require(try diagram.region(key: projects) != nil, "directory selection region")
         _ = try dix.refreshDirectory(key: dixRoot)
-        try expectError({ if case .InvalidInput = $0 { true } else { false } }) { try diagram.hit(x: 0, y: 0) }
-        try expectError({ if case .InvalidInput = $0 { true } else { false } }) { try tree.rows(offset: 0, limit: 1) }
-        try expectError({ if case .InvalidInput = $0 { true } else { false } }) { try tree.visibleRow(key: projects) }
+        try expectError({ if case .ObsoleteRevision = $0 { true } else { false } }) { try diagram.hit(x: 0, y: 0) }
+        try expectError({ if case .ObsoleteRevision = $0 { true } else { false } }) { try tree.rows(offset: 0, limit: 1) }
+        try expectError({ if case .ObsoleteRevision = $0 { true } else { false } }) { try tree.visibleRow(key: projects) }
 
         // One explicitly owned one-file source tests create and offline native snapshot open.
         // No native Trash/permanent operation is ever requested.

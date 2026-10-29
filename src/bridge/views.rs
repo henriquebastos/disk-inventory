@@ -42,17 +42,21 @@ pub struct DiagramSelection {
 #[derive(uniffi::Object)]
 pub struct ExplorerTree {
     session: Arc<ExplorerSession>,
+    /// Later calls fail with `BridgeError::ObsoleteRevision` once an execution or an applied
+    /// refresh changes the session revision.
     revision: u64,
     state: Mutex<TreeView>,
 }
 #[derive(uniffi::Object)]
 pub struct DiagramFrame {
     session: Arc<ExplorerSession>,
+    /// Later calls fail with `BridgeError::ObsoleteRevision` once an execution or an applied
+    /// refresh changes the session revision.
     revision: u64,
     diagram: Diagram,
 }
 fn stale() -> BridgeError {
-    BridgeError::InvalidInput {
+    BridgeError::ObsoleteRevision {
         message: "presentation belongs to an obsolete inventory revision".into(),
     }
 }

@@ -205,7 +205,6 @@ extension ExplorerModel {
   ) async {
     if !retainingMotion { motion.cancel() }
     let generation = sessionVersion
-    let navigation = viewVersion
     let token = UUID()
     recoveryToken = token
     defer { if recoveryToken == token { recoveryToken = nil } }
@@ -213,6 +212,10 @@ extension ExplorerModel {
     restoring = nil
     loading = true
     invalidatePresentation(retainingRows: true)
+    // A view build that started before the mutation, such as a resize rebuild, captured the
+    // old tree; it must not publish it again.
+    viewVersion += 1
+    let navigation = viewVersion
     pathWorker.discard()
     selectionVersion += 1
     let candidates =

@@ -55,7 +55,8 @@ and nonthrowing `isBusy()`, `activeCallCount()`, `selectionQueryCount()`. Record
 [records.rs](../src/bridge/records.rs). Byte arrays generate **Data**, u64 generates
 **UInt64**, and raw paths remain authoritative; display names alone are lossy.
 Errors generate `BridgeError` cases including `InvalidEntry`, `WrongSession`,
-`ConsumedAction`, `Cancelled`, `PermissionDenied`, `NotFound`, `InvalidInput`, `Io`, `Internal`.
+`ConsumedAction`, `Cancelled`, `ObsoleteRevision`, `PermissionDenied`, `NotFound`,
+`InvalidInput`, `Io`, `Internal`.
 
 `EntryKey` is an opaque saved handle; compare with `sameEntry(other:)`. It is not
 an action capability. Parent keys are returned with rows; selection does not
@@ -162,6 +163,7 @@ Files use the map's base type color, folder rule included. Directories have no c
 `diagram` takes a `MapAppearance` (light, dark, light or dark Increase Contrast; a mirror
 of the core enum) and returns an immutable `DiagramFrame` with flat sRGB RGBA `bitmap`,
 owner `hit`, selection `region` and bounded accessibility `targets`. Neither view
-is an action capability. Execution/refresh revisions reject obsolete queries.
+is an action capability. After an execution or an applied refresh, calls on older trees and
+frames fail with `ObsoleteRevision`.
 Bounds, payload-versus-RSS distinctions and exact tests are specified in
 [native-diagram.md](native-diagram.md).

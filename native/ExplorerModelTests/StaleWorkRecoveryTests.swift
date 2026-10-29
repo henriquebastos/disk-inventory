@@ -3,6 +3,24 @@ import XCTest
 
 @testable import DiskInventory
 
+/// Blocks the main actor, so that no continuation runs, until no bridge call has run or waited
+/// for 100 ms. Fails after 8 s.
+@MainActor private func blockMainActorUntilBridgeIdle(_ session: ExplorerSession) {
+  let deadline = Date().addingTimeInterval(8)
+  var idleSince: Date?
+  while Date() < deadline {
+    if session.activeCallCount() > 0 {
+      idleSince = nil
+    } else if let since = idleSince {
+      if Date().timeIntervalSince(since) > 0.1 { return }
+    } else {
+      idleSince = Date()
+    }
+    usleep(1000)
+  }
+  XCTFail("a bridge call still runs after 8 s")
+}
+
 @MainActor final class StaleWorkRecoveryTests: XCTestCase {
   func testRejectedExecutionRecoversCurrentPresentationWithoutRemoval() async throws {
     let m = try await fixtureModel("trash-inside")
@@ -42,6 +60,61 @@ import XCTest
     }.value
     XCTAssertEqual(survivors.map(\.displayName), ["moved"])
     _ = try await Task.detached { try s.liveMetadata(key: survivors[0].key) }.value
+  }
+  /// A Delete, Trash or Refresh changes the Rust revision at the end of its call. The model
+  /// replaces its tree only when the operation's completion runs on the main actor, so a tree
+  /// request that runs in between fails with the obsolete-revision error. A direct Refresh
+  /// call, which the model is not told about, makes that moment without a race.
+  func testTreeAnswersOfAnObsoleteRevisionSetNoError() async throws {
+    let m = try await fixtureModel("operation-skip")
+    let s = m.session!
+    let library = try entry("Library", in: m)
+    _ = try await Task.detached { try s.refreshDirectory(key: library.key) }.value
+    XCTAssertThrowsError(try m.tree!.rows(offset: 0, limit: 1), "the shown tree is obsolete")
+    m.select(library)
+    m.requestRows(0)
+    await settled(m)
+    XCTAssertNil(m.error, "the reveal and the row page of the obsolete tree are dropped")
+    await m.recoverView(s)
+    XCTAssertNil(m.error)
+    _ = try m.tree!.rows(offset: 0, limit: 1)
+  }
+  /// A resize during a Delete starts a rebuild that reuses the old tree. If its build ends
+  /// during the recovery's candidate lookup, it must not publish that tree again: the recovery
+  /// would reuse it and fail, and the tree would stay dead. The test blocks the main actor until
+  /// the build has ended, so its result runs right after the start of the recovery.
+  func testRebuildStartedBeforeRecoveryDoesNotRepublishTheOldTree() async throws {
+    let m = try await fixtureModel("metadata-delay")
+    defer { m.shutdown() }
+    let s = m.session!
+    let old = try XCTUnwrap(m.tree)
+    let small = try entry("small-files", in: m)
+    // The revision changes and the model is not told, as at the end of a Delete.
+    _ = try await Task.detached { try s.refreshDirectory(key: small.key) }.value
+    let blocker = try await holdBridge(m)
+    m.resize(CGSize(width: m.viewport.width + 7, height: m.viewport.height))
+    // The rebuild's first call waits behind the held lock.
+    try await pollUntil { s.activeCallCount() == 2 }
+    blockMainActorUntilBridgeIdle(s)
+    await m.recoverView(s)
+    _ = try await blocker.value
+    await settled(m)
+    XCTAssertNil(m.error)
+    XCTAssertFalse(m.tree === old, "the recovery built a new tree")
+    m.expand(small, expanded: true)
+    try await waitUntil { !m.treeEditing }
+    m.requestRows(0)
+    await settled(m)
+    XCTAssertNil(m.error)
+    XCTAssertTrue(
+      m.outline?.rows.contains { $0.entry.displayName == "small-00" } == true,
+      "the new tree expands")
+  }
+  func testTreeErrorOfTheCurrentRevisionShows() async throws {
+    let m = try await fixtureModel("dix")
+    m.expand(try entry("Movie.mov", in: m), expanded: true)
+    try await waitUntil { !m.treeEditing }
+    XCTAssertEqual(m.error, #"InvalidInput(message: "only directories expand")"#)
   }
   func testFailedReplacementRestoresOldTreeAndFrameWithoutClearingError() async throws {
     let m = try await fixtureModel("ordinary")

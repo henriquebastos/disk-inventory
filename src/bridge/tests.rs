@@ -545,11 +545,14 @@ fn diagram_and_virtual_tree_are_native_free_bounded_and_revision_guarded() {
         .prepare(target.clone(), ActionKind::PermanentlyDelete)
         .unwrap();
     s.execute(action).unwrap();
-    assert!(frame.hit(0, 0).is_err());
-    assert!(frame.region(target).is_err());
-    assert!(tree.rows(0, 16).is_err());
-    assert!(tree.visible_row(projects.clone()).is_err());
-    assert!(tree.reveal(projects).is_err());
+    let obsolete = |result: Result<(), BridgeError>| {
+        matches!(result, Err(BridgeError::ObsoleteRevision { .. }))
+    };
+    assert!(obsolete(frame.hit(0, 0).map(drop)));
+    assert!(obsolete(frame.region(target).map(drop)));
+    assert!(obsolete(tree.rows(0, 16).map(drop)));
+    assert!(obsolete(tree.visible_row(projects.clone()).map(drop)));
+    assert!(obsolete(tree.reveal(projects).map(drop)));
 }
 
 #[test]

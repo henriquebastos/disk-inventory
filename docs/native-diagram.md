@@ -101,14 +101,15 @@ directories and verifies a proposed child's parent. Parent selection has one act
 request plus one replaceable pending request, with identity/generation and interactive
 state checks before dispatch and publication.
 
-Session/view/selection generations reject obsolete work. Core frames and trees also
-capture an inventory revision; execution and an applied refresh invalidate their queries.
-A stopped refresh changed nothing, so its old queries stay valid. An immutable old bitmap remains drawable, but obsolete hit/region/
-row calls fail. Navigation contexts clear on replacement/recovery; obsolete saved trees
-rebuild rather than republishing stale row counts. Preparing actions still performs
-fresh metadata/pin checks inside Rust, separate from ordinary presentation.
-Rejected execution also rebuilds current presentation without suppressing the error.
-A failed constructor rebuilds the retained session before ending read-only replacement.
+Session/view/selection generations reject obsolete work. Frames and trees capture an
+inventory revision; after an execution or applied refresh (not a stopped one), their hit,
+region and row calls fail with `ObsoleteRevision`; old bitmaps stay drawable. Tree requests
+can get it before the operation's completion replaces the tree; the model drops it and
+shows other tree errors. Recovery raises the view version, so an earlier build, like a
+resize rebuild, cannot publish the old tree. Navigation contexts clear on
+replacement/recovery; obsolete saved trees rebuild. Preparing checks metadata and pins
+in Rust. Rejected execution rebuilds presentation and keeps the error. A failed constructor
+rebuilds the retained session before ending read-only replacement.
 
 ## Executable invariants
 
@@ -196,6 +197,10 @@ coverage, bounded visits, no source access and revision guards.
 - "testQueuedParentDoesNotExecuteAfterSelectionOrSessionChanges".
 - "testEmptyDirectoryRightDoesNotExpandOrSelectNextSibling" uses offscreen key events.
 - "testHistorySelectionOutsideSliceRestoresVisibleRowWithoutRevealOrScroll".
+- "testTreeAnswersOfAnObsoleteRevisionSetNoError" and "testTreeErrorOfTheCurrentRevisionShows":
+  obsolete tree answers set no error; a file expansion does.
+- "testRebuildStartedBeforeRecoveryDoesNotRepublishTheOldTree": a resize build ending after
+  recovery starts publishes nothing.
 
 Foreground input, modal operations and screenshots are tested separately in
 [ExplorerUITests.swift](../native/ExplorerTests/ExplorerUITests.swift), as listed in

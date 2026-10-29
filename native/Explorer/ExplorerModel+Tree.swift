@@ -44,7 +44,9 @@ extension ExplorerModel {
       slot: TreeRequest.revealSlot, serve: serveTree)
   }
   /// An expansion runs even when a newer reveal or page changed the outline version, and ends
-  /// `treeEditing` while its tree is current.
+  /// `treeEditing` while its tree is current. A Delete, Trash or Refresh makes the tree obsolete
+  /// in Rust before its completion replaces the tree here; a request that runs in between gets
+  /// `ObsoleteRevision`, which is dropped like any obsolete answer.
   private func serveTree(_ request: TreeRequest) async {
     guard request.generation == sessionVersion, request.tree === tree else { return }
     let isExpansion: Bool
@@ -88,6 +90,7 @@ extension ExplorerModel {
           }
         }
       }
+    } catch BridgeError.ObsoleteRevision {
     } catch {
       if request.generation == sessionVersion, request.version == outlineVersion {
         self.error = String(describing: error)
