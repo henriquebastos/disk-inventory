@@ -68,8 +68,6 @@ struct PendingConfirmation: Identifiable {
   var diagramBuilds = 0
   var outlineVersion = 0
   var hoverVersion = 0
-  var viewWorkerRunning = false
-  var viewRequest: ViewRequest?
   var recoveryToken: UUID?
   struct ViewRequest {
     let session: ExplorerSession
@@ -87,6 +85,9 @@ struct PendingConfirmation: Identifiable {
     let shownSelection: EntryKey?
     let done: CheckedContinuation<Void, Never>
   }
+  /// Builds the records, tree slice and map picture of a view off the main actor. A replaced
+  /// request resumes its caller at once; a served one after it publishes.
+  let viewWorker = LatestWorker<ViewRequest>()
   var treeEditing = false
   enum TreeIntent {
     case rows(UInt64)
@@ -191,7 +192,9 @@ struct PendingConfirmation: Identifiable {
   /// Publishes the saved path of the selection.
   let pathWorker = LatestWorker<PathRequest>()
   /// Every latest-wins worker, for `settled()`.
-  var workers: [any Settling] { [pathWorker, regionWorker, parentWorker, hitWorker, treeWorker] }
+  var workers: [any Settling] {
+    [viewWorker, pathWorker, regionWorker, parentWorker, hitWorker, treeWorker]
+  }
   /// Returns once every worker is idle at the same moment. A worker that hands work to another
   /// is seen on the next pass. Session loads, operations, the rebuild debounce, the motion
   /// clock and AppKit are not workers: they publish `loading`, `working` or their own state.

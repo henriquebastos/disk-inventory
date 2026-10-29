@@ -183,4 +183,47 @@ import XCTest
     let row = try XCTUnwrap(model.selectedRow)
     XCTAssertTrue(model.outline?.rows[row].entry.key.sameEntry(other: deep.key) == true)
   }
+
+  /// Three view requests while the first waits on the lock: the replaced second request
+  /// returns to its caller at once, the first and the third after their builds. Each caller
+  /// returns exactly once; a double resume would trap. Only the newest build publishes.
+  func testReplacedViewRequestsResumeTheirCallersOnceAndEarly() async throws {
+    @MainActor final class Finished { var names: [String] = [] }
+    let model = try await fixture()
+    defer { model.shutdown() }
+    let session = try XCTUnwrap(model.session)
+    let root = try XCTUnwrap(model.records?.focus.key)
+    let finished = Finished()
+    let start = model.viewVersion
+    let builds = model.diagramBuilds
+    let blocker = try await holdBridge(model)
+    let first = Task {
+      await model.updateView(focus: root)
+      finished.names.append("first")
+    }
+    try await pollUntil { session.activeCallCount() == 2 }
+    let second = Task {
+      await model.updateView(focus: root)
+      finished.names.append("second")
+    }
+    try await waitUntil { model.viewVersion == start + 2 }
+    let third = Task {
+      await model.updateView(focus: root)
+      finished.names.append("third")
+    }
+    try await waitUntil { model.viewVersion == start + 3 }
+    await bounded("replaced request returns") { await second.value }
+    XCTAssertEqual(finished.names, ["second"])
+    XCTAssertTrue(session.isBusy(), "the first build still waits on the lock")
+    _ = try await blocker.value
+    await bounded("served requests return") {
+      await first.value
+      await third.value
+    }
+    XCTAssertEqual(finished.names, ["second", "first", "third"])
+    XCTAssertFalse(model.loading)
+    await settled(model)
+    XCTAssertEqual(finished.names.count, 3)
+    XCTAssertEqual(model.diagramBuilds, builds + 1, "the first build is obsolete when it ends")
+  }
 }
