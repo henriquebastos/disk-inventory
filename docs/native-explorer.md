@@ -77,7 +77,7 @@ shows only its size and offers directory navigation, never file removal. The sta
 the outcome banner, the selection dim, Esc and refresh progress are specified in
 [native-status.md](native-status.md).
 
-There is no inspector pane. A compact card below the tree shows the selected
+There is no inspector pane. A compact [card](../native/Explorer/SelectionCard.swift) below the tree shows the selected
 name/path, its size (directory subtree or file accounted allocation),
 the direct-item count of a directory, and Reveal in Finder, Move to Trash… and Delete… actions
 with the same enable rules as the menu bar.
@@ -94,9 +94,8 @@ errors stay behind a disclosure.
 
 ## 1c Asynchronous ownership and operations
 
-[ExplorerModel.swift](../native/Explorer/ExplorerModel.swift) declares the model state; role extensions
-such as [ExplorerModel+Selection.swift](../native/Explorer/ExplorerModel+Selection.swift) hold the behavior.
-The model publishes selection before
+[ExplorerModel](../native/Explorer/ExplorerModel.swift) and its role extensions and component
+states are specified in [native-state.md](native-state.md). The model publishes selection before
 running synchronous bridge calls in detached tasks. Ordinary selection and navigation
 use saved data only: the GUI never calls liveMetadata. Path, bitmap, hover/click and selection-region requests are bounded/coalesced.
 Tree requests serialize mutations and coalesce reads/reveals. Session/selection/view generations reject obsolete

@@ -123,7 +123,7 @@ struct ExplorerView: View {
           VStack(spacing: 0) {
             ContentsTree(model: model)
             Divider()
-            selectionSummary
+            SelectionCard(state: model.selectionCard) { model.perform($0) }
           }.frame(minWidth: 360, idealWidth: 400, maxWidth: 480)
           VStack(alignment: .leading, spacing: 0) {
             DiagramView(model: model).padding(10).overlay(alignment: .topLeading) {
@@ -272,60 +272,6 @@ struct ExplorerView: View {
   func badge(_ title: String, id: String) -> some View {
     Text(title).font(.caption.weight(.medium)).padding(.horizontal, 7).padding(.vertical, 3)
       .background(.quaternary, in: Capsule()).accessibilityIdentifier(id)
-  }
-  var selectionSummary: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      if let entry = model.selected {
-        HStack(alignment: .firstTextBaseline) {
-          Button(entryName(entry), action: model.revealSelection).buttonStyle(.plain)
-            .font(.headline).lineLimit(1).truncationMode(.middle)
-            .help("Show selected item in list").accessibilityIdentifier("selected-name")
-          Spacer(minLength: 4)
-          Text(
-            model.numbers.storage(
-              entry.kind == .directory ? entry.subtreeBytes : entry.accountedBytes)
-          )
-          .font(.callout.weight(.semibold)).monospacedDigit().accessibilityIdentifier(
-            "selected-usage")
-        }
-        if entry.kind == .directory {
-          Text("\(model.numbers.count(entry.childCount)) direct items").font(.caption)
-        }
-        Text(model.selectedDisplayPath ?? "Loading path…")
-          .font(.system(.caption, design: .monospaced))
-          .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-          .help(model.selectedDisplayPath ?? "").accessibilityIdentifier("selected-path")
-        HStack(spacing: 6) {
-          Button("Reveal in Finder") { ExplorerCommand.revealInFinder.perform(in: model) }
-            .disabled(!ExplorerCommand.revealInFinder.isEnabled(in: model))
-            .accessibilityIdentifier("reveal-finder")
-          Spacer(minLength: 0)
-          Button("Delete…", role: .destructive) {
-            ExplorerCommand.deleteImmediately.perform(in: model)
-          }
-          .disabled(!ExplorerCommand.deleteImmediately.isEnabled(in: model))
-          .accessibilityIdentifier("delete")
-          Button("Move to Trash…") { ExplorerCommand.moveToTrash.perform(in: model) }
-            .disabled(!ExplorerCommand.moveToTrash.isEnabled(in: model))
-            .accessibilityIdentifier("trash")
-        }.controlSize(.small)
-        if entry.parent == nil {
-          Text("Inventory root is protected.").font(.caption).accessibilityIdentifier(
-            "root-protected")
-        }
-      } else if let text = model.aggregateText {
-        Text(text).accessibilityIdentifier("aggregate-text")
-        Button("Show Directory Contents") { if let key = model.aggregate { model.focus(key) } }
-      } else {
-        Text("Nothing selected").font(.headline)
-        Text("Click to select. Double-click a directory to focus it.")
-        if let root = model.records?.status.root {
-          Button("Select Inventory Root") { model.select(root) }.accessibilityIdentifier(
-            "inspect-root")
-        }
-      }
-    }.font(.callout).frame(maxWidth: .infinity, minHeight: 122, alignment: .leading)
-      .padding(14).background(.bar)
   }
   /// Errors, operation outcomes and issues, over the top of the map. It hit-tests only its own
   /// frame and stays until Dismiss, a replacing outcome or a new folder.
