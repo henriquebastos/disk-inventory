@@ -129,3 +129,23 @@ click falls inside the hovered block.
 The real secondary clicks stay in "testContextMenusSelectClickedRowAndHoveredBlock" and
 "testContextMenusOnTreeRowAndMapBlock"; real keys in
 "testDisclosureKeyboardZoomBreadcrumbAndUsage".
+
+## Workers
+
+[LatestWorker.swift](../native/Explorer/LatestWorker.swift) serves one request at a time on the
+main actor. A new request replaces the waiting request of its slot, and a lower slot is served
+first. The serve function awaits its own detached Rust call and checks the model's versions
+before it publishes. It is held only while the worker runs, so an idle worker retains no
+model. The selection path uses one (`pathWorker`); the other requests still use their own loops.
+
+`ExplorerModel.settled()` returns once every worker is idle at the same moment. It does not wait
+for session loads, operations, the rebuild debounce, the motion clock or AppKit; tests wait
+for those with `waitUntil` or `pollUntil`. Tests call it through `settled(_:)` in
+[ModelWait.swift](../native/ExplorerModelTests/ModelWait.swift), which fails after 8 s instead of
+hanging. "testSessionReplacementDiscardsOldSelectionAndViews" uses it in place of a 1.2 s sleep.
+
+[LatestWorkerTests.swift](../native/ExplorerModelTests/LatestWorkerTests.swift) tests the worker
+alone: "testSubmitReplacesTheWaitingRequestOfItsSlot", "testLowerSlotIsServedFirst",
+"testDiscardDropsOnlyTheWaitingRequest", "testIsIdleOnlyWhenNotServingAndNothingWaiting",
+"testSettledReturnsAtOnceWhenIdle", "testSettledIncludesARequestSubmittedDuringServe" and
+"testIdleWorkerDoesNotRetainItsServeClosure".

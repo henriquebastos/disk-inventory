@@ -62,7 +62,8 @@ import XCTest
       !model.loading && model.records?.status.root.subtreeBytes ?? 0 > (1 << 53)
     }
     _ = try await blocker.value
-    try await Task.sleep(for: .milliseconds(1200))
+    // The obsolete path request finishes and publishes nothing.
+    await settled(model)
     XCTAssertNil(model.selected)
     XCTAssertNil(model.selectionPath)
     XCTAssertGreaterThan(model.records!.status.root.subtreeBytes, 1 << 53)

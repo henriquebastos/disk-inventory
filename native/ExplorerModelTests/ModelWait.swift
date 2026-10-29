@@ -2,6 +2,8 @@ import Foundation
 import Observation
 import XCTest
 
+@testable import DiskInventory
+
 /// Wakes one waiter once, from any thread: an Observation change or the deadline.
 private final class Wake: @unchecked Sendable {
   private let lock = NSLock()
@@ -68,5 +70,24 @@ extension XCTestCase {
       try await Task.sleep(for: .milliseconds(5))
     }
     XCTAssertTrue(condition(), "timed out after \(seconds) s", file: file, line: line)
+  }
+}
+
+extension XCTestCase {
+  /// Runs `body` and fails if it does not finish within `seconds`. A stuck body is left
+  /// suspended; the test does not hang.
+  @MainActor func bounded(
+    _ name: String, seconds: Double = 8, _ body: @escaping @MainActor () async -> Void
+  ) async {
+    let done = expectation(description: name)
+    Task { @MainActor in
+      await body()
+      done.fulfill()
+    }
+    await fulfillment(of: [done], timeout: seconds)
+  }
+  /// Waits until every model worker is idle (`ExplorerModel.settled()`), at most 8 s.
+  @MainActor func settled(_ model: ExplorerModel) async {
+    await bounded("settled") { await model.settled() }
   }
 }

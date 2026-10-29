@@ -13,7 +13,7 @@ extension ExplorerModel {
     invalidatePresentation()
     history.removeAll()
     restoring = nil
-    pathRequest = nil
+    pathWorker.discard()
     selected = nil
     selectionRawPath = nil
     selectionPath = nil
@@ -56,7 +56,7 @@ extension ExplorerModel {
         // Also invalidate old-session work started while its previous view remained visible.
         viewVersion += 1
         selectionVersion += 1
-        pathRequest = nil
+        pathWorker.discard()
         self.scanDate = installedDate
         session = result.0
         working = false

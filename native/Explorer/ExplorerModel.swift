@@ -182,8 +182,16 @@ struct PendingConfirmation: Identifiable {
     let selectionVersion: Int
     let sessionVersion: Int
   }
-  var pathRequest: PathRequest?
-  var pathWorkerRunning = false
+  /// Publishes the saved path of the selection.
+  let pathWorker = LatestWorker<PathRequest>()
+  /// Every latest-wins worker, for `settled()`.
+  var workers: [any Settling] { [pathWorker] }
+  /// Returns once every worker is idle at the same moment. A worker that hands work to another
+  /// is seen on the next pass. Session loads, operations, the rebuild debounce, the motion
+  /// clock and AppKit are not workers: they publish `loading`, `working` or their own state.
+  func settled() async {
+    while let busy = workers.first(where: { !$0.isIdle }) { await busy.settled() }
+  }
   struct ParentRequest {
     let session: ExplorerSession
     let source: EntryKey

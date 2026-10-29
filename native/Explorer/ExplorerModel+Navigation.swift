@@ -20,7 +20,7 @@ extension ExplorerModel {
     invalidatePresentation()
     restoring = restore
     cancelConfirmation()
-    pathRequest = nil
+    pathWorker.discard()
     selectionVersion += 1
     selectionRawPath = nil
     selectionPath = nil

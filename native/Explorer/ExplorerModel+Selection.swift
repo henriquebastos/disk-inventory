@@ -120,26 +120,22 @@ extension ExplorerModel {
       updateSelectedRegion(entry.key)
     }
     guard let s = session else { return }
-    pathRequest = PathRequest(
-      session: s, key: entry.key,
-      selectionVersion: selectionVersion, sessionVersion: sessionVersion)
-    guard !pathWorkerRunning else { return }
-    pathWorkerRunning = true
-    Task {
-      // At most one blocking call plus one replaceable request, even during rapid keyboard selection.
-      while let request = pathRequest {
-        pathRequest = nil
-        let path = await Task.detached(priority: .userInitiated) {
-          try? request.session.selection(key: request.key).relativePath
-        }.value
-        guard request.selectionVersion == selectionVersion,
-          request.sessionVersion == sessionVersion
-        else { continue }
-        selectionRawPath = path
-        selectionPath = path.map(displayPath)
-      }
-      pathWorkerRunning = false
-    }
+    pathWorker.submit(
+      PathRequest(
+        session: s, key: entry.key,
+        selectionVersion: selectionVersion, sessionVersion: sessionVersion),
+      serve: servePath)
+  }
+  /// At most one blocking call plus one replaceable request, even during rapid keyboard selection.
+  private func servePath(_ request: PathRequest) async {
+    let path = await Task.detached(priority: .userInitiated) {
+      try? request.session.selection(key: request.key).relativePath
+    }.value
+    guard request.selectionVersion == selectionVersion,
+      request.sessionVersion == sessionVersion
+    else { return }
+    selectionRawPath = path
+    selectionPath = path.map(displayPath)
   }
 
   /// Esc in the map or the tree: no selected item, region, card or tree highlight. Saved
@@ -151,7 +147,7 @@ extension ExplorerModel {
   func clearSelection() {
     guard canClearSelection else { return }
     clickVersion += 1
-    pathRequest = nil
+    pathWorker.discard()
     regionRequest = nil
     parentRequest = nil
     selectionVersion += 1
@@ -166,7 +162,7 @@ extension ExplorerModel {
 
   func selectAggregate(_ key: EntryKey, bytes: UInt64) {
     clickVersion += 1
-    pathRequest = nil
+    pathWorker.discard()
     selectionVersion += 1
     selected = nil
     selectedRow = nil

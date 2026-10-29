@@ -206,7 +206,7 @@ extension ExplorerModel {
     restoring = nil
     loading = true
     invalidatePresentation(retainingRows: true)
-    pathRequest = nil
+    pathWorker.discard()
     selectionVersion += 1
     let candidates =
       ([records?.focus].compactMap { $0 } + (records?.ancestors.reversed() ?? [].reversed())).map(
