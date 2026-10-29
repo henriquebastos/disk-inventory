@@ -161,7 +161,7 @@ import XCTest
     XCTAssertFalse(model.canOpenMapContextMenu)
     // A hover during the motion is ignored.
     model.point(UInt32(block.rect.x + 1), UInt32(block.rect.y + 1))
-    try await Task.sleep(for: .milliseconds(50))
+    await settled(model)
     XCTAssertNil(model.hover)
     model.motion.cancel()
     XCTAssertTrue(model.acceptsMapPointer)

@@ -129,7 +129,7 @@ import XCTest
     try await waitUntil { !model.replacingSession && !model.loading }
     _ = try await blocked.value
     await rebuilding.value
-    try await Task.sleep(for: .milliseconds(50))
+    await settled(model)
     XCTAssertFalse(model.session === old)
     XCTAssertNotNil(model.tree)
     XCTAssertNil(model.error)

@@ -46,46 +46,34 @@ extension ExplorerModel {
     let request = HitRequest(
       frame: frame, x: x, y: y, generation: sessionVersion, navigation: viewVersion,
       version: click ? clickVersion : hoverVersion, click: click, doubleClick: doubleClick)
-    if click { clickRequest = request } else { hoverRequest = request }
-    guard !hitWorkerRunning else { return }
-    hitWorkerRunning = true
-    Task {
-      while clickRequest != nil || hoverRequest != nil {
-        let request: HitRequest
-        if let click = clickRequest {
-          request = click
-          clickRequest = nil
-        } else {
-          request = hoverRequest!
-          hoverRequest = nil
-        }
-        let hit = try? await Task.detached { try request.frame.hit(x: request.x, y: request.y) }
-          .value
-        guard request.generation == sessionVersion, request.navigation == viewVersion,
-          acceptsMapPointer
-        else {
-          continue
-        }
-        if request.click {
-          guard request.version == clickVersion, let hit else { continue }
-          if hit.actionable {
-            // An actionable hit is one tile, so its rectangle is the selection region.
-            select(hit.entry, region: hit.rect)
-            if request.doubleClick, hit.entry.kind == .directory { focus(hit.entry.key) }
-          } else {
-            selectAggregate(hit.entry.key, bytes: hit.bytes)
-            if request.doubleClick { focus(hit.entry.key) }
-          }
-        } else if request.version == hoverVersion {
-          hover = hit
-        }
+    hitWorker.submit(
+      request, slot: click ? HitRequest.clickSlot : HitRequest.hoverSlot, serve: serveHit)
+  }
+  private func serveHit(_ request: HitRequest) async {
+    let hit = try? await Task.detached { try request.frame.hit(x: request.x, y: request.y) }
+      .value
+    guard request.generation == sessionVersion, request.navigation == viewVersion,
+      acceptsMapPointer
+    else {
+      return
+    }
+    if request.click {
+      guard request.version == clickVersion, let hit else { return }
+      if hit.actionable {
+        // An actionable hit is one tile, so its rectangle is the selection region.
+        select(hit.entry, region: hit.rect)
+        if request.doubleClick, hit.entry.kind == .directory { focus(hit.entry.key) }
+      } else {
+        selectAggregate(hit.entry.key, bytes: hit.bytes)
+        if request.doubleClick { focus(hit.entry.key) }
       }
-      hitWorkerRunning = false
+    } else if request.version == hoverVersion {
+      hover = hit
     }
   }
   func clearHover() {
     hoverVersion += 1
-    hoverRequest = nil
+    hitWorker.discard(slot: HitRequest.hoverSlot)
     hover = nil
   }
 

@@ -16,8 +16,7 @@ extension ExplorerModel {
     pendingExpansion = nil
     pendingReveal = nil
     treeEditing = false
-    hoverRequest = nil
-    clickRequest = nil
+    hitWorker.discardAll()
     clickVersion += 1
     regionWorker.discard()
     parentWorker.discard()

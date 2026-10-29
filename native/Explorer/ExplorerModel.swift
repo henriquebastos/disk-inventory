@@ -103,7 +103,6 @@ struct PendingConfirmation: Identifiable {
   var pendingRows: TreeRequest?
   var pendingExpansion: TreeRequest?
   var pendingReveal: TreeRequest?
-  var hitWorkerRunning = false
   var clickVersion = 0
   struct HitRequest {
     let frame: DiagramFrame
@@ -114,9 +113,12 @@ struct PendingConfirmation: Identifiable {
     let version: Int
     let click: Bool
     let doubleClick: Bool
+    /// The waiting click is served before the waiting hover.
+    static let clickSlot = 0
+    static let hoverSlot = 1
   }
-  var hoverRequest: HitRequest?
-  var clickRequest: HitRequest?
+  /// Map hit tests for the pointer: clicks select, hovers name the block in the status bar.
+  let hitWorker = LatestWorker<HitRequest>(slots: 2)
   /// Frame, selected key, and the session, view and selection versions it was asked under.
   typealias RegionRequest = (DiagramFrame, EntryKey, Int, Int, Int)
   /// Publishes the map region of the selection.
@@ -187,7 +189,7 @@ struct PendingConfirmation: Identifiable {
   /// Publishes the saved path of the selection.
   let pathWorker = LatestWorker<PathRequest>()
   /// Every latest-wins worker, for `settled()`.
-  var workers: [any Settling] { [pathWorker, regionWorker, parentWorker] }
+  var workers: [any Settling] { [pathWorker, regionWorker, parentWorker, hitWorker] }
   /// Returns once every worker is idle at the same moment. A worker that hands work to another
   /// is seen on the next pass. Session loads, operations, the rebuild debounce, the motion
   /// clock and AppKit are not workers: they publish `loading`, `working` or their own state.
