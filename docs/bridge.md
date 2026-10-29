@@ -128,7 +128,7 @@ Discover entries through bounded queries: `small-files/small-00` through
 | `prototype-home` | The design prototype's 236.9 GB home `/Users/ana`: its names (`CoreSimulator` is `CoreDevice`), hierarchy, sizes and extensions; directories own zero bytes |
 | `prototype-home-refresh` | `prototype-home`; each directory metadata request sleeps 300 ms and `Library/Caches/new cache.db` (2 GB) exists only live |
 | `prototype-home-nested-trash` | `prototype-home` plus `Projects/.Trash` with four videos (4 GB), added after the prototype's entries |
-| `file-type-colors` | `/Users/ana` with newly listed extensions, files without an extension in Git object storage and cache folders, and gray controls |
+| `file-type-colors` | `/Users/ana` with newly listed extensions, files without an extension in Git object storage (submodule and bare repository included) and cache folders, and gray controls |
 | `visual-details` | Isolated nested groups and a long directory path; entry-only metadata differs from subtree bytes |
 | `ordinary`, `trash-outside` | Trash moves to `/.Trash/moved` |
 | `trash-inside` | Moves to `trash/moved` within scope |

@@ -57,10 +57,12 @@ The folder rule colors a file whose extension is missing, unknown or numeric by 
 context folder; a known extension keeps its own color, gray documents included. Names are exact,
 case-sensitive byte matches, and a context covers every descendant:
 
-- Archive: `objects` whose parent is `.git` or `lfs` (Git object storage).
+- Archive: `objects` whose parent is `lfs` or a Git directory (Git object storage). A Git
+  directory is `.git`, a bare repository `<name>.git`, or a submodule's `modules/<name>` inside
+  a Git directory, nested submodules included. `modules/<name>/objects` outside one stays gray.
 - Cache: `Caches`, `Cache`, `.cache`, `_cacache` and `.pnpm-store`; `store` whose parent is
   `pnpm`; `blobs` whose parent starts with `models--` or `datasets--`, or that has a
-  `huggingface` ancestor.
+  `huggingface` ancestor. Lowercase `cache` stays gray.
 
 Layout computes a directory's context once, from its name and its parent's context, when it
 reaches the directory. A focus starts from one walk over its saved ancestors and the saved root
@@ -140,7 +142,7 @@ real runner's screenshots:
   ratio.
 - "testNewExtensionsAndContextFoldersReplaceGrayTilesWithTypeColors": in `file-type-colors`, light
   and dark, each tile has its kind's hue and the controls stay gray, also with the focus on
-  `.git/objects`.
+  `.git/objects`, a nested submodule's `objects` or a bare repository's `objects`.
 - "testHoverStrokeFollowsAppearanceAndIsOpaqueTwoPointsWithIncreasedContrast": black in light
   contrast, white in dark contrast, 70% white without contrast.
 - "testTreeUsesOpaqueContentBackgroundAndSystemGrayDirectorySwatch".

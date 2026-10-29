@@ -1152,8 +1152,12 @@ import XCTest
       ("9f86d081", "cache"), ("cd34ef", "cache"), ("1a2b3c", "cache"),
       ("events.jsonl", "data"), ("table.csv", "data"), ("clip.webm", "video"),
       ("voice.opus", "audio"), ("sketch.psd", "image"), ("tool.whl", "archive"),
-      // Gray controls: a document, `objects` outside `.git`, no extension, a numbered file.
+      // Objects of a submodule, a nested submodule and a bare repository.
+      ("a1b2c3d4", "archive"), ("0d9e8f7a", "archive"), ("cdef0123", "archive"),
+      // Gray controls: a document, `objects` outside `.git`, no extension, a numbered file,
+      // `modules/<name>/objects` outside `.git`.
       ("report.pdf", "gray"), ("b4e0aa", "gray"), ("notes", "gray"), ("segment.1", "gray"),
+      ("e9d8c7", "gray"),
     ]
     for appearance in ["light", "dark"] {
       launch("file-type-colors", appearance: appearance)
@@ -1172,6 +1176,26 @@ import XCTest
       try checkFileTypes(
         appearance, "objects",
         [("7c91d04e", "archive"), ("pack-1f2e.pack", "archive"), ("pack-1f2e.idx", "archive")])
+      // So does a focus inside a nested submodule's objects and a bare repository's objects.
+      for (scene, path, file) in [
+        (
+          "submodule",
+          ["Projects", "atlas", ".git", "modules", "vendor-lib", "modules", "deep-dep", "objects"],
+          "0d9e8f7a"
+        ),
+        ("bare", ["Projects", "mirror.git", "objects"], "cdef0123"),
+      ] {
+        app.buttons["breadcrumb-0"].click()
+        text("focus-name", contains: "ana")
+        for folder in path {
+          row(folder).doubleClick()
+          text("focus-name", contains: folder)
+        }
+        XCTAssertTrue(app.buttons["map-file-\(file)"].waitForExistence(timeout: 8))
+        offMap()
+        screenshot("file-types-\(appearance)-\(scene)")
+        try checkFileTypes(appearance, scene, [(file, "archive")])
+      }
       app.terminate()
     }
   }

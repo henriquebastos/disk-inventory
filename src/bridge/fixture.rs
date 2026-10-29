@@ -300,8 +300,10 @@ fn prototype_home(nested_trash: bool) -> Result<Map, BridgeError> {
 }
 
 /// `file-type-colors`: files whose extension the prototype table lacked, and files without an
-/// extension in Git object storage and cache folders, beside gray controls (a document, a
-/// numbered file, a file without an extension and an `objects` folder outside `.git`).
+/// extension in Git object storage (also of a submodule, a nested submodule and a bare
+/// repository) and cache folders, beside gray controls (a document, a numbered file, a file
+/// without an extension, an `objects` folder outside `.git` and `modules/<name>/objects`
+/// outside `.git`).
 fn file_type_colors_map() -> Result<Map, BridgeError> {
     let mut h = PrototypeHome {
         map: Map {
@@ -332,6 +334,44 @@ fn file_type_colors_map() -> Result<Map, BridgeError> {
             1.2,
         ),
         (&["Projects", "atlas", "objects"], "b4e0aa", 1.5),
+        (
+            &[
+                "Projects",
+                "atlas",
+                ".git",
+                "modules",
+                "vendor-lib",
+                "objects",
+                "5e",
+            ],
+            "a1b2c3d4",
+            1.4,
+        ),
+        (
+            &[
+                "Projects",
+                "atlas",
+                ".git",
+                "modules",
+                "vendor-lib",
+                "modules",
+                "deep-dep",
+                "objects",
+                "c4",
+            ],
+            "0d9e8f7a",
+            1.2,
+        ),
+        (
+            &["Projects", "mirror.git", "objects", "ab"],
+            "cdef0123",
+            1.5,
+        ),
+        (
+            &["Projects", "site", "modules", "widget", "objects"],
+            "e9d8c7",
+            1.0,
+        ),
         (&["Projects", "atlas", "build"], "libcore.dylib", 2.0),
         (&["Projects", "atlas", "src"], "index.ts", 1.0),
         (&["Library", "Caches", "com.example.viewer"], "5C1D27", 2.5),

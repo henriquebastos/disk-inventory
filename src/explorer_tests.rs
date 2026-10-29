@@ -1299,6 +1299,15 @@ fn diagram_colors_files_by_extension_and_folder_context_also_inside_a_focused_co
     let object = add(&mut map, loose, b"7c91d0", Kind::File, 6_000);
     let pack = add(&mut map, objects, b"pack-1f.pack", Kind::File, 5_000);
     let index = add(&mut map, objects, b"pack-1f.idx", Kind::File, 4_000);
+    let modules = add(&mut map, git, b"modules", Kind::Dir, 0);
+    let submodule = add(&mut map, modules, b"lib", Kind::Dir, 0);
+    let nested_modules = add(&mut map, submodule, b"modules", Kind::Dir, 0);
+    let nested = add(&mut map, nested_modules, b"dep", Kind::Dir, 0);
+    let nested_objects = add(&mut map, nested, b"objects", Kind::Dir, 0);
+    let nested_object = add(&mut map, nested_objects, b"5ea1b2", Kind::File, 5_000);
+    let bare = add(&mut map, 0, b"mirror.git", Kind::Dir, 0);
+    let bare_objects = add(&mut map, bare, b"objects", Kind::Dir, 0);
+    let bare_object = add(&mut map, bare_objects, b"ab12cd", Kind::File, 5_000);
     let library = add(&mut map, 0, b"Library", Kind::Dir, 0);
     let caches = add(&mut map, library, b"Caches", Kind::Dir, 0);
     let viewer = add(&mut map, caches, b"com.example.viewer", Kind::Dir, 0);
@@ -1307,6 +1316,10 @@ fn diagram_colors_files_by_extension_and_folder_context_also_inside_a_focused_co
     let projects = add(&mut map, 0, b"Projects", Kind::Dir, 0);
     let lookalike = add(&mut map, projects, b"objects", Kind::Dir, 0);
     let plain = add(&mut map, lookalike, b"b4e0aa", Kind::File, 5_000);
+    let plain_modules = add(&mut map, projects, b"modules", Kind::Dir, 0);
+    let plain_module = add(&mut map, plain_modules, b"widget", Kind::Dir, 0);
+    let module_lookalike = add(&mut map, plain_module, b"objects", Kind::Dir, 0);
+    let module_plain = add(&mut map, module_lookalike, b"e9d8c7", Kind::File, 4_000);
     let library_file = add(&mut map, projects, b"libcore.dylib", Kind::File, 4_000);
     let events = add(&mut map, projects, b"events.JSONL", Kind::File, 4_000);
     let report = add(&mut map, projects, b"report.pdf", Kind::File, 4_000);
@@ -1319,6 +1332,9 @@ fn diagram_colors_files_by_extension_and_folder_context_also_inside_a_focused_co
         (cached, cache),
         (numbered, cache),
         (plain, gray),
+        (nested_object, archive),
+        (bare_object, archive),
+        (module_plain, gray),
         (library_file, code),
         (events, data),
         (report, gray),
@@ -1342,6 +1358,10 @@ fn diagram_colors_files_by_extension_and_folder_context_also_inside_a_focused_co
             (loose, &[(object, archive)]),
             (viewer, &[(cached, cache), (numbered, cache)]),
             (lookalike, &[(plain, gray)]),
+            (nested_objects, &[(nested_object, archive)]),
+            (nested, &[(nested_object, archive)]),
+            (bare_objects, &[(bare_object, archive)]),
+            (module_lookalike, &[(module_plain, gray)]),
         ] {
             let d = e.diagram(e.handle(focus), 300, 200, appearance).unwrap();
             for &(file, color) in files {

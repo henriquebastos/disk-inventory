@@ -356,16 +356,25 @@ pub(crate) struct FolderContext {
 enum Marker {
     #[default]
     None,
-    /// `.git` or `lfs`: a child `objects` holds Git objects.
-    GitStorage,
+    /// A Git directory: `.git`, a bare repository `<name>.git`, or a submodule's
+    /// `modules/<name>` inside one. A child `objects` holds Git objects; a child `modules`
+    /// holds submodule Git directories.
+    GitDirectory,
+    /// `modules` inside a Git directory: each child is a submodule's Git directory.
+    GitModules,
+    /// `lfs`: a child `objects` holds Git LFS objects.
+    Lfs,
     /// `pnpm`: a child `store` is the pnpm store.
     Pnpm,
     /// `models--*` or `datasets--*`: a child `blobs` is the Hugging Face blob store.
     HubRepository,
 }
-fn marker(name: &[u8]) -> Marker {
+/// Marker of the directory `name` inside a directory with marker `parent`.
+fn marker(name: &[u8], parent: Marker) -> Marker {
     match name {
-        b".git" | b"lfs" => Marker::GitStorage,
+        _ if parent == Marker::GitModules || name.ends_with(b".git") => Marker::GitDirectory,
+        b"modules" if parent == Marker::GitDirectory => Marker::GitModules,
+        b"lfs" => Marker::Lfs,
         b"pnpm" => Marker::Pnpm,
         _ if name.starts_with(b"models--") || name.starts_with(b"datasets--") => {
             Marker::HubRepository
@@ -373,10 +382,36 @@ fn marker(name: &[u8]) -> Marker {
         _ => Marker::None,
     }
 }
+/// Marker of the first of `names` (a directory and its ancestors, nearest first), from the
+/// names alone: equal to `marker` applied from the top, without walking to the top.
+fn marker_at<'a>(mut names: impl Iterator<Item = &'a [u8]> + Clone) -> Marker {
+    /// A directory is a Git directory if its name ends with `.git`, or if its parent is
+    /// `modules` inside a Git directory.
+    fn git_directory<'a>(mut names: impl Iterator<Item = &'a [u8]>) -> bool {
+        loop {
+            match names.next() {
+                Some(name) if name.ends_with(b".git") => return true,
+                Some(_) if names.next() == Some(&b"modules"[..]) => {}
+                _ => return false,
+            }
+        }
+    }
+    let Some(name) = names.next() else {
+        return Marker::None;
+    };
+    let parent = if git_directory(names.clone()) {
+        Marker::GitDirectory
+    } else if names.next() == Some(&b"modules"[..]) && git_directory(names) {
+        Marker::GitModules
+    } else {
+        Marker::None
+    };
+    marker(name, parent)
+}
 /// Exact, case-sensitive byte matches, so that ordinary folders rarely match.
 fn folder_type(name: &[u8], parent: Marker, huggingface_above: bool) -> Option<FileType> {
     match name {
-        b"objects" if parent == Marker::GitStorage => Some(Archive),
+        b"objects" if parent == Marker::GitDirectory || parent == Marker::Lfs => Some(Archive),
         b"Caches" | b"Cache" | b".cache" | b"_cacache" | b".pnpm-store" => Some(Cache),
         b"store" if parent == Marker::Pnpm => Some(Cache),
         b"blobs" if huggingface_above || parent == Marker::HubRepository => Some(Cache),
@@ -388,7 +423,7 @@ impl FolderContext {
     pub(crate) fn enter(self, name: &[u8]) -> Self {
         Self {
             fallback: folder_type(name, self.marker, self.huggingface).or(self.fallback),
-            marker: marker(name),
+            marker: marker(name, self.marker),
             huggingface: self.huggingface || name == b"huggingface",
         }
     }
@@ -401,7 +436,8 @@ impl FolderContext {
 }
 impl Explorer {
     /// Context of directory `id` from the saved root path's components and the saved
-    /// ancestors, nearest first: O(depth), no allocation. Equal to `enter` applied from `/`.
+    /// ancestors, nearest first: O(depth) (more only along chains of nested `modules`), no
+    /// allocation. Equal to `enter` applied from `/`.
     pub(crate) fn folder_context(&self, id: u32) -> FolderContext {
         let names = || {
             std::iter::successors(Some(id), |&at| {
@@ -425,19 +461,21 @@ impl Explorer {
             .filter(|(_, name)| *name == b"huggingface")
             .map(|(distance, _)| distance)
             .last();
-        let fallback = names()
-            .zip(names().skip(1).map(Some).chain([None]))
-            .enumerate()
-            .find_map(|(distance, (name, parent))| {
-                folder_type(
-                    name,
-                    parent.map_or(Marker::None, marker),
-                    top_huggingface.is_some_and(|top| top > distance),
-                )
-            });
+        let mut ancestors = names();
+        let mut distance = 0;
+        let fallback = loop {
+            let Some(name) = ancestors.next() else {
+                break None;
+            };
+            let huggingface_above = top_huggingface.is_some_and(|top| top > distance);
+            if let Some(kind) = folder_type(name, marker_at(ancestors.clone()), huggingface_above) {
+                break Some(kind);
+            }
+            distance += 1;
+        };
         FolderContext {
             fallback,
-            marker: names().next().map_or(Marker::None, marker),
+            marker: marker_at(names()),
             huggingface: top_huggingface.is_some(),
         }
     }
