@@ -20,7 +20,7 @@ extension ExplorerModel {
     clickRequest = nil
     clickVersion += 1
     regionWorker.discard()
-    parentRequest = nil
+    parentWorker.discard()
   }
   func updateView(focus: EntryKey, recovery: Bool = false, preserving selection: EntryKey? = nil)
     async

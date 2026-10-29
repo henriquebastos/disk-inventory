@@ -136,8 +136,8 @@ The real secondary clicks stay in "testContextMenusSelectClickedRowAndHoveredBlo
 main actor. A new request replaces the waiting request of its slot, and a lower slot is served
 first. The serve function awaits its own detached Rust call and checks the model's versions
 before it publishes. It is held only while the worker runs, so an idle worker retains no
-model. The selection path and the selection region use one each (`pathWorker`,
-`regionWorker`); the other requests still use their own loops.
+model. The selection path, the selection region and Left-arrow parent selection use one each
+(`pathWorker`, `regionWorker`, `parentWorker`); the other requests still use their own loops.
 [WorkerModelTests.swift](../native/ExplorerModelTests/WorkerModelTests.swift) holds the Rust
 lock while requests wait: "testObsoleteRegionAnswersDoNotReturnAfterClearSelection".
 
@@ -145,7 +145,9 @@ lock while requests wait: "testObsoleteRegionAnswersDoNotReturnAfterClearSelecti
 for session loads, operations, the rebuild debounce, the motion clock or AppKit; tests wait
 for those with `waitUntil` or `pollUntil`. Tests call it through `settled(_:)` in
 [ModelWait.swift](../native/ExplorerModelTests/ModelWait.swift), which fails after 8 s instead of
-hanging. "testSessionReplacementDiscardsOldSelectionAndViews" uses it in place of a 1.2 s sleep.
+hanging. "testSessionReplacementDiscardsOldSelectionAndViews",
+"testParentRequestsCoalesceActualQueriesAndDropObsoletePendingWork" and
+"testQueuedParentDoesNotExecuteAfterSelectionOrSessionChanges" use it in place of fixed sleeps.
 
 [LatestWorkerTests.swift](../native/ExplorerModelTests/LatestWorkerTests.swift) tests the worker
 alone: "testSubmitReplacesTheWaitingRequestOfItsSlot", "testLowerSlotIsServedFirst",

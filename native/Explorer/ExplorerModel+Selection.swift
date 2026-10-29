@@ -11,21 +11,14 @@ extension ExplorerModel {
     let request = ParentRequest(
       session: session, source: entry.key, parent: key,
       generation: sessionVersion, navigation: viewVersion, selection: selectionVersion)
+    parentWorker.submit(request, serve: serveParent)
+  }
+  private func serveParent(_ request: ParentRequest) async {
     guard parentRequestIsCurrent(request) else { return }
-    parentRequest = request
-    guard !parentWorkerRunning else { return }
-    parentWorkerRunning = true
-    Task {
-      while let request = parentRequest {
-        parentRequest = nil
-        guard parentRequestIsCurrent(request) else { continue }
-        let result = try? await Task.detached {
-          try request.session.selection(key: request.parent).entry
-        }.value
-        if parentRequestIsCurrent(request), let result { select(result) }
-      }
-      parentWorkerRunning = false
-    }
+    let result = try? await Task.detached {
+      try request.session.selection(key: request.parent).entry
+    }.value
+    if parentRequestIsCurrent(request), let result { select(result) }
   }
   /// The shown region stays until the new one arrives. Clearing it first drew the map
   /// without the selection dim for one to three frames whenever a display refresh fell
@@ -145,7 +138,7 @@ extension ExplorerModel {
     clickVersion += 1
     pathWorker.discard()
     regionWorker.discard()
-    parentRequest = nil
+    parentWorker.discard()
     selectionVersion += 1
     selected = nil
     selectedRow = nil

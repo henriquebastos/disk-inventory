@@ -92,7 +92,7 @@ import XCTest
     XCTAssertEqual(s.selectionQueryCount(), before)
     _ = try await blocker.value
     try await waitUntil { m.selected?.parent == nil && m.selectionPath != nil }
-    try await Task.sleep(for: .milliseconds(80))
+    await settled(m)
     let executed = s.selectionQueryCount() - before
     print(
       "PARENT_WORK repeated requests=101 actual saved selection queries=\(executed) (includes selected-path publication)"
@@ -102,7 +102,7 @@ import XCTest
     let baseline = s.selectionQueryCount()
     for _ in 0..<100 { m.selectParent(leaf) }  // Leaf is no longer the selected identity.
     _ = try await second.value
-    try await Task.sleep(for: .milliseconds(50))
+    await settled(m)
     XCTAssertEqual(s.selectionQueryCount(), baseline)
     m.select(leaf)
     try await waitUntil { m.selectionPath != nil && m.selectedRow != nil }
@@ -140,7 +140,7 @@ import XCTest
         !m.loading && !m.replacingSession && m.selectionPath != nil
           || replacement && !m.loading && !m.replacingSession
       }
-      try await Task.sleep(for: .milliseconds(100))
+      await settled(m)
       let executed = s.selectionQueryCount() - before
       print("PARENT_OBSOLETE replacement=\(replacement) old-session queries=\(executed)")
       XCTAssertEqual(executed, replacement ? 1 : 2)

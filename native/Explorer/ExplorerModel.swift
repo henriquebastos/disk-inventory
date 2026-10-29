@@ -187,7 +187,7 @@ struct PendingConfirmation: Identifiable {
   /// Publishes the saved path of the selection.
   let pathWorker = LatestWorker<PathRequest>()
   /// Every latest-wins worker, for `settled()`.
-  var workers: [any Settling] { [pathWorker, regionWorker] }
+  var workers: [any Settling] { [pathWorker, regionWorker, parentWorker] }
   /// Returns once every worker is idle at the same moment. A worker that hands work to another
   /// is seen on the next pass. Session loads, operations, the rebuild debounce, the motion
   /// clock and AppKit are not workers: they publish `loading`, `working` or their own state.
@@ -202,8 +202,8 @@ struct PendingConfirmation: Identifiable {
     let navigation: Int
     let selection: Int
   }
-  var parentRequest: ParentRequest?
-  var parentWorkerRunning = false
+  /// Selects the parent of the selection (Left arrow).
+  let parentWorker = LatestWorker<ParentRequest>()
   var preparing = false
   /// The item a Trash or Delete preparation checks, before its confirmation opens.
   var checking: String?
