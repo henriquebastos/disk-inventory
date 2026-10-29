@@ -88,7 +88,7 @@ action target but has no tree highlight until explicitly made visible again.
 Native row indentation caps
 at 120 points without capping semantic depth or inventory access.
 
-[ExplorerModel.swift](../native/Explorer/ExplorerModel.swift) keeps one 256-row slice;
+[ExplorerModel+Tree.swift](../native/Explorer/ExplorerModel+Tree.swift) keeps one 256-row slice;
 one incoming slice can coexist during publication. Resize builds reuse that slice,
 not a second row cache. The 64-context per-directory cache stores opaque sparse tree
 handles and keys/scroll positions only. This count is not itself a byte limit;

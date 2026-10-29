@@ -94,7 +94,9 @@ errors stay behind a disclosure.
 
 ## 1c Asynchronous ownership and operations
 
-[ExplorerModel](../native/Explorer/ExplorerModel.swift) publishes selection before
+[ExplorerModel.swift](../native/Explorer/ExplorerModel.swift) declares the model state; role extensions
+such as [ExplorerModel+Selection.swift](../native/Explorer/ExplorerModel+Selection.swift) hold the behavior.
+The model publishes selection before
 running synchronous bridge calls in detached tasks. Ordinary selection and navigation
 use saved data only: the GUI never calls liveMetadata. Path, bitmap, hover/click and selection-region requests are bounded/coalesced.
 Tree requests serialize mutations and coalesce reads/reveals. Session/selection/view generations reject obsolete
