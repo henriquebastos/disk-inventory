@@ -6,7 +6,7 @@ progress of Refresh Directory. The code is in
 [ExplorerApp.swift](../native/Explorer/ExplorerApp.swift),
 [OutcomeBanner.swift](../native/Explorer/OutcomeBanner.swift),
 [ProgressBar.swift](../native/Explorer/ProgressBar.swift), the [model](native-state.md),
-[NativeViews.swift](../native/Explorer/NativeViews.swift) and
+[TreeView.swift](../native/Explorer/TreeView.swift), [MapView.swift](../native/Explorer/MapView.swift) and
 [ScanCoordinator.swift](../native/Explorer/ScanCoordinator.swift).
 
 ## Status bar

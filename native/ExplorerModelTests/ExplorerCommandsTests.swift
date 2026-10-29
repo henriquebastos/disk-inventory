@@ -332,8 +332,8 @@ import XCTest
     let menu = table.menu(
       for: try rightClick(at: table.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)))
     // The clicked row becomes the selection, so the commands act on that row.
-    XCTAssertTrue(model.selected?.key.sameEntry(other: file.key) == true)
-    XCTAssertEqual(model.selectedRow, row)
+    XCTAssertTrue(model.selection.entry?.key.sameEntry(other: file.key) == true)
+    XCTAssertEqual(model.selection.row, row)
     try assertContext(menu, enabled: [.moveToTrash, .deleteImmediately])
     model.prepare(.trash)
     try await waitUntil { model.pending != nil }
@@ -346,7 +346,7 @@ import XCTest
       table.menu(
         for: try rightClick(
           at: table.convert(NSPoint(x: otherRect.midX, y: otherRect.midY), to: nil))))
-    XCTAssertTrue(model.selected?.key.sameEntry(other: file.key) == true)
+    XCTAssertTrue(model.selection.entry?.key.sameEntry(other: file.key) == true)
     model.cancelConfirmation()
     try await waitUntil { model.canAct }
     let directory = try entry("small-files", in: model)
@@ -364,7 +364,7 @@ import XCTest
     let center = map.convert(NSPoint(x: blockRect.midX, y: blockRect.midY), to: nil)
     // No hover result for the point yet: no menu, and the selection stays.
     XCTAssertNil(map.menu(for: try rightClick(at: center)))
-    XCTAssertTrue(model.selected?.key.sameEntry(other: directory.key) == true)
+    XCTAssertTrue(model.selection.entry?.key.sameEntry(other: directory.key) == true)
     map.mouseMoved(
       with: try XCTUnwrap(
         NSEvent.mouseEvent(
@@ -375,7 +375,7 @@ import XCTest
     let hovered = try XCTUnwrap(model.hover)
     try assertContext(
       map.menu(for: try rightClick(at: center)), enabled: [.moveToTrash, .deleteImmediately])
-    XCTAssertTrue(model.selected?.key.sameEntry(other: hovered.entry.key) == true)
+    XCTAssertTrue(model.selection.entry?.key.sameEntry(other: hovered.entry.key) == true)
     // A point in another block, outside the hovered rectangle, shows no menu.
     let elsewhere = try XCTUnwrap(
       model.picture?.targets.first { !$0.entry.key.sameEntry(other: block.entry.key) })
@@ -385,19 +385,19 @@ import XCTest
       map.menu(
         for: try rightClick(
           at: map.convert(NSPoint(x: elsewhereRect.midX, y: elsewhereRect.midY), to: nil))))
-    XCTAssertTrue(model.selected?.key.sameEntry(other: hovered.entry.key) == true)
+    XCTAssertTrue(model.selection.entry?.key.sameEntry(other: hovered.entry.key) == true)
     // A grouped block selects the aggregate, which disables every item command.
     model.hover = DiagramSelection(
       entry: hovered.entry, relativePath: hovered.relativePath, actionable: false,
       rect: hovered.rect, bytes: hovered.bytes)
     try assertContext(map.menu(for: try rightClick(at: center)), enabled: [])
-    XCTAssertNil(model.selected)
-    XCTAssertTrue(model.aggregate?.sameEntry(other: hovered.entry.key) == true)
+    XCTAssertNil(model.selection.entry)
+    XCTAssertTrue(model.selection.aggregate?.sameEntry(other: hovered.entry.key) == true)
     // The inventory root stays protected.
     let root = model.records!.status.root
     model.hover = DiagramSelection(
       entry: root, relativePath: Data(), actionable: true, rect: hovered.rect, bytes: 0)
     try assertContext(map.menu(for: try rightClick(at: center)), enabled: [])
-    XCTAssertTrue(model.selected?.key.sameEntry(other: root.key) == true)
+    XCTAssertTrue(model.selection.entry?.key.sameEntry(other: root.key) == true)
   }
 }

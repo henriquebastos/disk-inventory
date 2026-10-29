@@ -27,7 +27,7 @@ import XCTest
     m.prepare(.permanentlyDelete)
     try await waitUntil { m.pending != nil }
     let original = m.pending!.action
-    let key = m.selected!.key
+    let key = m.selection.entry!.key
     // A second real capability moves the target inside the memory inventory after preparation.
     let moved = try await Task.detached {
       let action = try s.prepare(key: key, action: .trash)
@@ -74,7 +74,7 @@ import XCTest
     _ = try tree.rows(offset: 0, limit: 256)
     _ = try m.picture!.frame.hit(x: 0, y: 0)
     m.select(try entry("large-file", m))
-    try await waitUntil { m.selectedRow != nil }
+    try await waitUntil { m.selection.row != nil }
     XCTAssertTrue(m.canAct)
   }
   func testParentRequestsCoalesceActualQueriesAndDropObsoletePendingWork() async throws {
@@ -82,7 +82,7 @@ import XCTest
     let s = m.session!
     let leaf = try entry("large-file", m)
     m.select(leaf)
-    try await waitUntil { m.selectedRow != nil && m.selectionPath != nil }
+    try await waitUntil { m.selection.row != nil && m.selection.path != nil }
     let blocker = try await block(m)
     let before = s.selectionQueryCount()
     m.selectParent(leaf)
@@ -91,7 +91,7 @@ import XCTest
     XCTAssertEqual(s.activeCallCount(), 2)
     XCTAssertEqual(s.selectionQueryCount(), before)
     _ = try await blocker.value
-    try await waitUntil { m.selected?.parent == nil && m.selectionPath != nil }
+    try await waitUntil { m.selection.entry?.parent == nil && m.selection.path != nil }
     await settled(m)
     let executed = s.selectionQueryCount() - before
     print(
@@ -105,7 +105,7 @@ import XCTest
     await settled(m)
     XCTAssertEqual(s.selectionQueryCount(), baseline)
     m.select(leaf)
-    try await waitUntil { m.selectionPath != nil && m.selectedRow != nil }
+    try await waitUntil { m.selection.path != nil && m.selection.row != nil }
     let idle = s.selectionQueryCount()
     let coordinator = ContentsTree.Coordinator(m)
     m.working = true
@@ -116,7 +116,7 @@ import XCTest
     await Task.yield()
     XCTAssertEqual(s.selectionQueryCount(), idle)
     m.working = false
-    XCTAssertTrue(m.selected!.key.sameEntry(other: leaf.key))
+    XCTAssertTrue(m.selection.entry!.key.sameEntry(other: leaf.key))
   }
   func testQueuedParentDoesNotExecuteAfterSelectionOrSessionChanges() async throws {
     for replacement in [false, true] {
@@ -124,7 +124,7 @@ import XCTest
       let s = m.session!
       let leaf = try entry("large-file", m)
       m.select(leaf)
-      try await waitUntil { m.selectedRow != nil && m.selectionPath != nil }
+      try await waitUntil { m.selection.row != nil && m.selection.path != nil }
       let blocker = try await block(m)
       let before = s.selectionQueryCount()
       m.selectParent(leaf)
@@ -137,7 +137,7 @@ import XCTest
       }
       _ = try await blocker.value
       try await waitUntil {
-        !m.loading && !m.replacingSession && m.selectionPath != nil
+        !m.loading && !m.replacingSession && m.selection.path != nil
           || replacement && !m.loading && !m.replacingSession
       }
       await settled(m)
@@ -149,7 +149,7 @@ import XCTest
         XCTAssertNotNil(m.tree)
         XCTAssertNil(m.error)
       } else {
-        XCTAssertEqual(m.selected?.displayName, "zero-byte")
+        XCTAssertEqual(m.selection.entry?.displayName, "zero-byte")
       }
     }
   }
@@ -157,7 +157,7 @@ import XCTest
     let m = try await load("presentation")
     let empty = try entry("trash", m)
     m.select(empty)
-    try await waitUntil { m.selectedRow != nil }
+    try await waitUntil { m.selection.row != nil }
     let coordinator = ContentsTree.Coordinator(m)
     let table = ContentsTree.Table(frame: .zero)
     table.keyboard = { code in
@@ -178,7 +178,7 @@ import XCTest
     try await Task.sleep(for: .milliseconds(30))
     XCTAssertEqual(m.outline!.total, total)
     XCTAssertFalse(m.outline!.rows.first { $0.entry.key.sameEntry(other: empty.key) }!.expanded)
-    XCTAssertTrue(m.selected!.key.sameEntry(other: empty.key))
+    XCTAssertTrue(m.selection.entry!.key.sameEntry(other: empty.key))
     // Even an already-expanded empty branch, created through the real core, has no child.
     let tree = m.tree!
     _ = try tree.expand(key: empty.key, expanded: true)
@@ -188,15 +188,15 @@ import XCTest
     }
     table.keyDown(with: right)
     try await Task.sleep(for: .milliseconds(30))
-    XCTAssertTrue(m.selected!.key.sameEntry(other: empty.key))
+    XCTAssertTrue(m.selection.entry!.key.sameEntry(other: empty.key))
     let directory = try entry("small-files", m)
     m.select(directory)
-    try await waitUntil { m.selectedRow != nil }
+    try await waitUntil { m.selection.row != nil }
     table.keyDown(with: right)
     try await waitUntil { !m.treeEditing }
     table.keyDown(with: right)
-    try await waitUntil { m.selected?.kind == .file }
-    XCTAssertTrue(m.selected!.parent!.sameEntry(other: directory.key))
+    try await waitUntil { m.selection.entry?.kind == .file }
+    XCTAssertTrue(m.selection.entry!.parent!.sameEntry(other: directory.key))
   }
   func testHistorySelectionOutsideSliceRestoresVisibleRowWithoutRevealOrScroll() async throws {
     let m = try await load("dix")
@@ -205,35 +205,35 @@ import XCTest
     m.expand(projects, expanded: true)
     try await waitUntil { !m.treeEditing }
     m.select(projects)
-    try await waitUntil { m.selectedRow != nil && m.selectionPath != nil }
-    let row = m.selectedRow!
-    m.scrollRow = 1200
+    try await waitUntil { m.selection.row != nil && m.selection.path != nil }
+    let row = m.selection.row!
+    m.scrolled(toRow: 1200)
     let tree = m.tree!
     let before = try tree.rows(offset: UInt64.max, limit: 1).expandedDirectories
     m.focus(projects.key)
     try await waitUntil { !m.loading }
-    m.back()
+    m.focusParent()
     try await waitUntil { !m.loading }
     XCTAssertTrue(m.records!.focus.key.sameEntry(other: root))
     XCTAssertTrue(m.tree === tree)
     XCTAssertEqual(m.restoredScrollRow, 1200)
     XCTAssertGreaterThan(m.outline!.offset, 1000)
-    XCTAssertEqual(m.selectedRow, row)
-    XCTAssertTrue(m.selected!.key.sameEntry(other: projects.key))
+    XCTAssertEqual(m.selection.row, row)
+    XCTAssertTrue(m.selection.entry!.key.sameEntry(other: projects.key))
     XCTAssertEqual(try tree.rows(offset: UInt64.max, limit: 1).expandedDirectories, before)
     let child = try tree.rows(offset: 1, limit: 1).rows[0].entry
     m.select(child)
-    try await waitUntil { m.selectedRow != nil && m.selectionPath != nil }
-    m.scrollRow = 0
+    try await waitUntil { m.selection.row != nil && m.selection.path != nil }
+    m.scrolled(toRow: 0)
     m.expand(projects, expanded: false)
     try await waitUntil { !m.treeEditing }
-    XCTAssertNil(m.selectedRow)
+    XCTAssertNil(m.selection.row)
     m.focus(projects.key)
     try await waitUntil { !m.loading }
-    m.back()
+    m.focusParent()
     try await waitUntil { !m.loading }
-    XCTAssertTrue(m.selected!.key.sameEntry(other: child.key))
-    XCTAssertNil(m.selectedRow)
+    XCTAssertTrue(m.selection.entry!.key.sameEntry(other: child.key))
+    XCTAssertNil(m.selection.row)
     XCTAssertEqual(m.restoredScrollRow, 0)
     XCTAssertEqual(try tree.rows(offset: 0, limit: 1).expandedDirectories, 0)
   }

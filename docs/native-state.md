@@ -18,16 +18,46 @@ extensions hold the behavior:
 | [ExplorerModel+Operations.swift](../native/Explorer/ExplorerModel+Operations.swift) | Command enable rules, Trash and Delete, outcomes, Refresh Directory |
 | [ExplorerModel+Input.swift](../native/Explorer/ExplorerModel+Input.swift) | Busy rules for tree and map input, tree keys, map context-menu selection |
 
-Swift `private` does not reach other files, so the request bookkeeping is internal. Views read
-only published state and component states.
+Swift `private` does not reach other files, so the request bookkeeping is internal. The
+request versions are `@ObservationIgnored`, except `viewVersion`, which model tests wait for.
+Views read only published state and component states, and change the model only through
+intents.
+
+## Selection state
+
+`selection` is one `SelectionState` value: the selected item, its tree row, its map region,
+its saved path, a failed path lookup, and a selected grouped block. `clear()` drops every
+field at once. Esc, focus, a session load, and recovery after Refresh, Trash or Delete call it,
+so a grouped block also leaves the card. A new item selection keeps only the shown region
+until its own region arrives. A failed path lookup shows "Could not read this path." on the
+card and in its help tag, and Reveal in Finder stays disabled.
+
+Any change of `selection` runs the tree and map representables again, but the map draws only
+when a drawn input changes: the selection region, the hover rectangle, the picture, or the
+result motion. Its `draw` reads a copy of the selected key, because AppKit draws a view again
+when a model property that `draw` read changes.
+
+- [MapDrawingModelTests.swift](../native/ExplorerModelTests/MapDrawingModelTests.swift)
+  "testHostedMapDrawsOnlyWhenADrawnInputChanges": counts draws with the fixture frame sampler;
+  a tree expansion and the path and reveal answers after a map click draw nothing.
+- [SelectionCardTests.swift](../native/ExplorerModelTests/SelectionCardTests.swift)
+  "testRefreshAndASessionLoadClearASelectedGroupedBlock" and
+  "testCardSaysThePathCouldNotBeReadWhenItsLookupFails".
+- [InputRulesTests.swift](../native/ExplorerModelTests/InputRulesTests.swift)
+  "testSelectRowHighlightsTheClickedRowAtOnce" (`selectRow`, a tree click) and
+  "testScrolledSavesTheTopRowAndRowZeroAboveTheFirstRow" (`scrolled(toRow:)`, the tree scroll
+  observer).
 
 ## Component states
 
 A component state is a plain Swift value: strings, numbers and flags, never a Rust handle such
-as `EntryKey`. The model computes it from its published state, so reading it in a view body
-observes the same properties as before. The view renders the value and sends an intent back;
-the model performs the intent with the existing command rules. Each view has a `#Preview` per
-variant that needs no Rust session.
+as `EntryKey`. The model computes it from its published state. A small host view
+(`ExplorerHeaderHost`, `SelectionCardHost`, `OutcomeBannerHost`, `ProgressBarHost`, and
+`StatusBar`) computes it in its own body, so a change redraws only that component. A progress
+tick changes only the bar: `ExplorerView` reads only whether a bar shows
+(`showsProgressBar`, `showsStartScreenProgressBar`). The view renders the value and sends an
+intent back; the model performs the intent with the command rules. Each view has a
+`#Preview` per variant that needs no Rust session. Untested: no test counts body runs.
 
 | State | View | Variants |
 |---|---|---|
@@ -35,11 +65,11 @@ variant that needs no Rust session.
 | `OutcomeBannerState` | [OutcomeBanner.swift](../native/Explorer/OutcomeBanner.swift) | error, outcome and issues, Details open or closed; `outcomeBanner` is nil while hidden |
 | `ProgressBarState` | [ProgressBar.swift](../native/Explorer/ProgressBar.swift) | operation (phase, counter, Stop), checking an item, preparing an inventory, working |
 | `HeaderState` | [ExplorerHeader.swift](../native/Explorer/ExplorerHeader.swift) | menu titles and rules, Partial, Incomplete and Not saved badges, total, scan date, Refresh, breadcrumbs enabled |
-| `TreeRowState` | [TreeRowState.swift](../native/Explorer/TreeRowState.swift), `Cell.apply` and `SizeCell.apply` in [NativeViews.swift](../native/Explorer/NativeViews.swift) | loaded row (name, depth, swatch color, usage percent, size, disclosure and accessibility ids), loading placeholder |
+| `TreeRowState` | [TreeRowState.swift](../native/Explorer/TreeRowState.swift), `Cell.apply` and `SizeCell.apply` in [TreeView.swift](../native/Explorer/TreeView.swift) | loaded row (name, depth, swatch color, usage percent, size, disclosure and accessibility ids), loading placeholder |
 
 The item variant holds the name, the size (directory subtree or file accounted allocation),
-the direct-item count of a directory, the complete saved path (nil while it loads), root
-protection and the Reveal in Finder, Move to Trash… and Delete… enable rules.
+the direct-item count of a directory, the complete saved path (nil while it loads or after a
+failed lookup), root protection and the Reveal in Finder, Move to Trash… and Delete… enable rules.
 
 [SelectionCardTests.swift](../native/ExplorerModelTests/SelectionCardTests.swift) has one model
 test per variant:
@@ -151,7 +181,8 @@ map hit tests and the tree use one each (`viewWorker`, `pathWorker`, `regionWork
 `parentWorker`, `hitWorker`, `treeWorker`). A waiting click is served before a waiting hover; a
 waiting expansion before a reveal, and a reveal before a row page. An expansion runs even when
 a newer request changed the outline version. A replaced view request resumes its caller at
-once; a served one resumes it after publishing, or after dropping an obsolete result.
+once; a served one resumes it after publishing, or after dropping an obsolete result. A view
+request that a load or focus made obsolete while it waited builds nothing.
 [WorkerModelTests.swift](../native/ExplorerModelTests/WorkerModelTests.swift) holds the Rust
 lock while requests wait: "testObsoleteRegionAnswersDoNotReturnAfterClearSelection",
 "testObsoleteHoverAnswersDoNotReturnAfterThePointerLeaves",
@@ -160,8 +191,9 @@ lock while requests wait: "testObsoleteRegionAnswersDoNotReturnAfterClearSelecti
 "testHoverAnswersDoNotReturnDuringAResultMotion",
 "testWaitingExpansionRunsBeforeALaterRevealAndEndsTheEdit",
 "testObsoleteRevealDoesNotPublishAfterAnExpansion", "testRevealAfterClearSelectionSelectsNoRow"
-"testRowPageAskedAfterARevealIsServedAfterIt" and
-"testReplacedViewRequestsResumeTheirCallersOnceAndEarly".
+"testRowPageAskedAfterARevealIsServedAfterIt",
+"testReplacedViewRequestsResumeTheirCallersOnceAndEarly" and
+"testObsoleteWaitingViewRequestBuildsNothingAfterALoad".
 
 `ExplorerModel.settled()` returns once every worker is idle at the same moment. It does not wait
 for session loads, operations, the rebuild debounce, the motion clock or AppKit; tests wait

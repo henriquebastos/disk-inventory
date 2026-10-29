@@ -19,10 +19,7 @@ struct RemovalMotionPlan {
     case .trashed(let destination):
       var visible: Rectangle?
       if case .inside(let relativePath) = scope {
-        var absolute = rootPath
-        if absolute.last != 47 { absolute.append(47) }
-        absolute.append(relativePath)
-        if absolute == destination {
+        if joinedPath(root: rootPath, relative: relativePath) == destination {
           visible = visibleTargets.first { $0.actionable && $0.relativePath == relativePath }?.rect
         }
       }

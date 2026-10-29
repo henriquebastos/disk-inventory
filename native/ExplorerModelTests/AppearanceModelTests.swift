@@ -115,8 +115,8 @@ import XCTest
     model.select(large.entry)
     // The selected row comes with the tree reveal, which replaces the outline slice.
     try await waitUntil {
-      model.selectionPath == "large-file" && model.selectedRegion != nil
-        && model.selectedRow != nil
+      model.selection.path == "large-file" && model.selection.region != nil
+        && model.selection.row != nil
     }
     let session = try XCTUnwrap(model.session)
     let tree = try XCTUnwrap(model.tree)
@@ -140,9 +140,9 @@ import XCTest
     XCTAssertTrue(model.outlineToken === rows)
     XCTAssertFalse(model.scan.polling)
     XCTAssertNil(model.scan.progress)
-    XCTAssertEqual(model.selected?.displayName, "large-file")
-    XCTAssertEqual(model.selectionPath, "large-file")
-    try await waitUntil { model.selectedRegion != nil }
+    XCTAssertEqual(model.selection.entry?.displayName, "large-file")
+    XCTAssertEqual(model.selection.path, "large-file")
+    try await waitUntil { model.selection.region != nil }
     XCTAssertEqual(model.picture?.bitmap.width, before.bitmap.width)
     // The same appearance again, and the workspace notification, build nothing new.
     view.appearance = NSAppearance(named: other)

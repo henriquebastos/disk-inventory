@@ -19,20 +19,20 @@ import XCTest
   func testSelectionRegionNeverClearsWhileTheNextRegionLoads() async throws {
     let model = try await load("presentation")
     model.select(try row(model, "large-file").entry)
-    try await waitUntil { model.selectedRegion != nil }
-    let first = try XCTUnwrap(model.selectedRegion)
+    try await waitUntil { model.selection.region != nil }
+    let first = try XCTUnwrap(model.selection.region)
     // A tree selection keeps the shown region until the new one arrives: no frame without dim.
     model.select(try row(model, "small-files").entry)
-    XCTAssertEqual(model.selectedRegion?.x, first.x)
-    XCTAssertEqual(model.selectedRegion?.width, first.width)
-    try await waitUntil { model.selectedRegion.map { $0.width != first.width } == true }
+    XCTAssertEqual(model.selection.region?.x, first.x)
+    XCTAssertEqual(model.selection.region?.width, first.width)
+    try await waitUntil { model.selection.region.map { $0.width != first.width } == true }
     // A map click publishes the clicked tile's rectangle with the selection, synchronously.
     let frame = try XCTUnwrap(model.picture?.frame)
     let hit = try XCTUnwrap(try frame.hit(x: UInt32(first.x + 2), y: UInt32(first.y + 2)))
     model.select(hit.entry, region: hit.rect)
-    XCTAssertEqual(model.selectedRegion?.x, hit.rect.x)
-    XCTAssertEqual(model.selectedRegion?.height, hit.rect.height)
-    XCTAssertEqual(model.selected?.displayName, "large-file")
+    XCTAssertEqual(model.selection.region?.x, hit.rect.x)
+    XCTAssertEqual(model.selection.region?.height, hit.rect.height)
+    XCTAssertEqual(model.selection.entry?.displayName, "large-file")
   }
 
   func testStatusTextNamesTheHoveredBlockWhileAnotherItemIsSelected() async throws {
@@ -53,7 +53,7 @@ import XCTest
     try await waitUntil { model.hover?.entry.key.sameEntry(other: target.entry.key) == true }
     XCTAssertEqual(model.statusText, "/Users/ana/" + displayPath(target.relativePath))
     // The selection, its path, the picture and the session stay: a hover is not a selection.
-    XCTAssertEqual(model.selected?.displayName, "Movies")
+    XCTAssertEqual(model.selection.entry?.displayName, "Movies")
     XCTAssertEqual(model.selectedDisplayPath, "/Users/ana/Movies")
     XCTAssertEqual(model.diagramBuilds, builds)
     XCTAssertTrue(model.picture?.frame === picture?.frame)
@@ -75,8 +75,8 @@ import XCTest
     for (fx, fy) in [(0.2, 0.3), (0.5, 0.5), (0.8, 0.7)] {
       model.point(
         UInt32(region.x + region.width * fx), UInt32(region.y + region.height * fy), click: true)
-      try await waitUntil { model.selected?.displayName == ".Trash" }
-      XCTAssertNil(model.aggregate, "the Trash region is not an aggregate")
+      try await waitUntil { model.selection.entry?.displayName == ".Trash" }
+      XCTAssertNil(model.selection.aggregate, "the Trash region is not an aggregate")
       model.clearSelection()
     }
     // A double click focuses the Trash, which then draws its files normally.
@@ -93,20 +93,20 @@ import XCTest
   func testClearSelectionResetsItemRegionCardAndRowOnly() async throws {
     let model = try await load("presentation")
     model.select(try row(model, "large-file").entry)
-    try await waitUntil { model.selectedRegion != nil && model.selectionPath == "large-file" }
+    try await waitUntil { model.selection.region != nil && model.selection.path == "large-file" }
     let (focus, builds, tree) = (model.records?.focus.key, model.diagramBuilds, model.tree)
     XCTAssertTrue(model.canClearSelection)
     model.clearSelection()
-    XCTAssertNil(model.selected)
-    XCTAssertNil(model.selectedRegion)
-    XCTAssertNil(model.selectedRow)
-    XCTAssertNil(model.selectionPath)
+    XCTAssertNil(model.selection.entry)
+    XCTAssertNil(model.selection.region)
+    XCTAssertNil(model.selection.row)
+    XCTAssertNil(model.selection.path)
     XCTAssertNil(model.selectedDisplayPath)
     XCTAssertFalse(model.canClearSelection)
     try await Task.sleep(for: .milliseconds(300))
     // A late path or region answer for the old selection does not come back.
-    XCTAssertNil(model.selectedRegion)
-    XCTAssertNil(model.selectionPath)
+    XCTAssertNil(model.selection.region)
+    XCTAssertNil(model.selection.path)
     XCTAssertTrue(model.records?.focus.key.sameEntry(other: try XCTUnwrap(focus)) == true)
     XCTAssertEqual(model.diagramBuilds, builds)
     XCTAssertTrue(model.tree === tree)
@@ -114,8 +114,8 @@ import XCTest
     model.selectAggregate(try XCTUnwrap(focus), bytes: 64)
     XCTAssertTrue(model.canClearSelection)
     model.clearSelection()
-    XCTAssertNil(model.aggregate)
-    XCTAssertNil(model.aggregateText)
+    XCTAssertNil(model.selection.aggregate)
+    XCTAssertNil(model.selection.aggregateText)
   }
 
   func testBannerDismissHidesOutcomeErrorAndSeenIssues() async throws {
@@ -172,7 +172,7 @@ import XCTest
     model.focus(try row(model, "Library").entry.key)
     try await waitUntil { model.records?.focus.displayName == "Library" && !model.loading }
     model.select(try row(model, "Caches").entry)
-    try await waitUntil { model.selectedRegion != nil }
+    try await waitUntil { model.selection.region != nil }
     let total = try XCTUnwrap(model.records?.focus.subtreeBytes)
     let builds = model.diagramBuilds
     model.refresh()

@@ -72,7 +72,8 @@ No context menu shows while a confirmation is pending or the view is loading or 
 The map also shows none while result motion runs. `ExplorerCommandTarget` validates the items. Move to Trash…
 and Delete Immediately… are disabled when the first responder is an editable text view,
 because Delete then edits text. The inventory root keeps both removals disabled.
-Reveal in Finder can stay disabled until the selected path loads.
+Reveal in Finder can stay disabled until the selected path loads, and stays disabled when
+its lookup fails.
 
 ## 1c Confirmations
 

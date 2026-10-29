@@ -26,24 +26,24 @@ import XCTest
     let start = ContinuousClock.now
     model.select(try entry("zero-byte", model))
     let elapsed = start.duration(to: .now)
-    XCTAssertEqual(model.selected?.displayName, "zero-byte")
-    XCTAssertNil(model.selectionPath)
+    XCTAssertEqual(model.selection.entry?.displayName, "zero-byte")
+    XCTAssertNil(model.selection.path)
     XCTAssertTrue(model.session?.isBusy() == true)
     print("RESPONSIVENESS main-actor select+property publication while Rust busy: \(elapsed)")
     XCTAssertLessThan(elapsed, .milliseconds(100))
     for _ in 0..<180 {
-      if let path = model.selectionPath { XCTAssertEqual(path, "zero-byte") }
-      XCTAssertEqual(model.selected?.displayName, "zero-byte")
+      if let path = model.selection.path { XCTAssertEqual(path, "zero-byte") }
+      XCTAssertEqual(model.selection.entry?.displayName, "zero-byte")
       try await Task.sleep(for: .milliseconds(10))
     }
     _ = try await blocker.value
-    XCTAssertEqual(model.selectionPath, "zero-byte")
+    XCTAssertEqual(model.selection.path, "zero-byte")
   }
   func testSelectionAndNavigationUseSavedDataWithoutLiveMetadata() async throws {
     let model = try await model("metadata-delay")
     let start = ContinuousClock.now
     model.select(try entry("large-file", model))
-    try await waitUntil { model.selectionPath == "large-file" }
+    try await waitUntil { model.selection.path == "large-file" }
     let directory = try entry("small-files", model).key
     model.focus(directory)
     try await waitUntil { !model.loading }
@@ -64,8 +64,8 @@ import XCTest
     _ = try await blocker.value
     // The obsolete path request finishes and publishes nothing.
     await settled(model)
-    XCTAssertNil(model.selected)
-    XCTAssertNil(model.selectionPath)
+    XCTAssertNil(model.selection.entry)
+    XCTAssertNil(model.selection.path)
     XCTAssertGreaterThan(model.records!.status.root.subtreeBytes, 1 << 53)
   }
   func testCancelPendingPreparationAndRootProtection() async throws {
@@ -120,9 +120,9 @@ import XCTest
       })
     if case .rollup(let directory, _) = rollup.kind {
       model.selectAggregate(directory, bytes: rollup.bytes)
-      XCTAssertNil(model.selected)
+      XCTAssertNil(model.selection.entry)
       XCTAssertFalse(model.canAct)
-      XCTAssertNotNil(model.aggregateText)
+      XCTAssertNotNil(model.selection.aggregateText)
     }
   }
 
@@ -138,7 +138,7 @@ import XCTest
     try await Task.sleep(for: .milliseconds(1200))
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
     _ = try await blocker.value
-    XCTAssertNil(model.selectionPath)
+    XCTAssertNil(model.selection.path)
   }
 
   func testReplacementBlocksRetainedViewActionsUntilInstallation() async throws {
@@ -192,7 +192,7 @@ import XCTest
     let model = try await model("metadata-delay")
     let oldSession = try XCTUnwrap(model.session)
     // isBusy below belongs to explicit preparation, not saved-data selection.
-    model.selected = try entry("large-file", model)
+    model.selection.entry = try entry("large-file", model)
     let preparation = try XCTUnwrap(model.prepare(.trash))
     try await pollUntil { oldSession.isBusy() }
     model.load { try ExplorerSession.fixture(scenario: "ordinary") }
@@ -210,7 +210,7 @@ import XCTest
     let session = try XCTUnwrap(model.session)
     let removed = try entry("hardlink-a", model)
     model.select(removed)
-    try await waitUntil { model.selectionRawPath != nil && model.selectedRow != nil }
+    try await waitUntil { model.selection.rawPath != nil && model.selection.row != nil }
     // Mutate only the memory fixture, leaving the model's old presentation to reconcile.
     _ = try await Task.detached {
       let action = try session.prepare(key: removed.key, action: .permanentlyDelete)
@@ -232,13 +232,15 @@ import XCTest
     _ = try await blocker.value
     await recovery.value
     try await waitUntil {
-      if model.selected?.key.sameEntry(other: removed.key) == true { XCTAssertFalse(model.canAct) }
+      if model.selection.entry?.key.sameEntry(other: removed.key) == true {
+        XCTAssertFalse(model.canAct)
+      }
       return !model.loading && model.picture?.bitmap.width == UInt32(size.width)
         && model.picture?.bitmap.height == UInt32(size.height)
     }
-    XCTAssertNil(model.selected)
-    XCTAssertNil(model.selectionRawPath)
-    XCTAssertNil(model.selectionPath)
+    XCTAssertNil(model.selection.entry)
+    XCTAssertNil(model.selection.rawPath)
+    XCTAssertNil(model.selection.path)
     XCTAssertNil(model.selectedURL)
     XCTAssertFalse(model.canAct)
     XCTAssertNotNil(model.tree)
@@ -255,7 +257,7 @@ import XCTest
     let recovery = Task { await model.recoverView(session) }
     try await pollUntil { model.tree == nil && model.loading && session.activeCallCount() >= 2 }
     XCTAssertTrue(session.isBusy())
-    XCTAssertNotNil(model.selected)
+    XCTAssertNotNil(model.selection.entry)
     model.focus(directory)
     _ = try await blocker.value
     await recovery.value

@@ -23,6 +23,18 @@ extension ExplorerModel {
   }
 }
 
+/// Computes the banner state in its own body, so a new outcome redraws only the banner.
+struct OutcomeBannerHost: View {
+  let model: ExplorerModel
+  var body: some View {
+    if let banner = model.outcomeBanner {
+      OutcomeBanner(
+        state: banner, dismiss: { model.dismissBanner() },
+        toggleDetails: { model.toggleBannerDetails() })
+    }
+  }
+}
+
 /// Errors, operation outcomes and issues, over the top of the map. It hit-tests only its own
 /// frame and stays until Dismiss, a replacing outcome or a new folder.
 struct OutcomeBanner: View {

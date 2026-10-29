@@ -2,7 +2,8 @@ import AppKit
 
 extension ExplorerModel {
   var canAct: Bool {
-    selected?.parent != nil && recoveryToken == nil && !working && !loading && !replacingSession
+    selection.entry?.parent != nil && recoveryToken == nil && !working && !loading
+      && !replacingSession
       && pending == nil
   }
   // Command enable rules. Each reads saved state only and is false while a confirmation is
@@ -16,11 +17,11 @@ extension ExplorerModel {
   var canStopScan: Bool {
     scan.progress?.cancellable == true && scan.offersStop && pending == nil
   }
-  var canOpenSelectedDirectory: Bool { isIdle && selected?.kind == .directory }
+  var canOpenSelectedDirectory: Bool { isIdle && selection.entry?.kind == .directory }
   var canOpenEnclosingDirectory: Bool { isIdle && records?.focus.parent != nil }
   @discardableResult
   func prepare(_ kind: ActionKind) -> Task<Void, Never>? {
-    guard canAct, let entry = selected, let s = session else { return nil }
+    guard canAct, let entry = selection.entry, let s = session else { return nil }
     preparing = true
     working = true
     checking = entryName(entry)
@@ -73,8 +74,8 @@ extension ExplorerModel {
     let generation = sessionVersion
     let navigation = viewVersion
     let previous = picture
-    let source = selectedRegion
-    let selectedKey = selected?.key
+    let source = selection.region
+    let selectedKey = selection.entry?.key
     return Task {
       do {
         let result = try await Task.detached(priority: .userInitiated) {

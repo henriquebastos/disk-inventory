@@ -60,7 +60,7 @@ import XCTest
     defer { model.shutdown() }
     model.select(try entry("large-file", in: model))
     try await waitUntil { model.selectedDisplayPath?.contains("large-file") == true }
-    XCTAssertEqual(model.selected?.displayName, "large-file")
+    XCTAssertEqual(model.selection.entry?.displayName, "large-file")
     XCTAssertTrue(model.canAct, "Delete stays available")
     XCTAssertNil(model.error)
   }
@@ -105,7 +105,7 @@ import XCTest
     XCTAssertTrue(model.records?.status.stale == true, "Incomplete badge")
     model.select(try entry("unknown-a", in: model))
     try await waitUntil { model.selectedDisplayPath?.contains("unknown-a") == true }
-    XCTAssertEqual(model.selected?.displayName, "unknown-a")
+    XCTAssertEqual(model.selection.entry?.displayName, "unknown-a")
   }
 
   /// A plain Delete plays the poof for at least four clock ticks: motion, not a jump.
@@ -113,7 +113,7 @@ import XCTest
     let model = try await load("presentation")
     defer { model.shutdown() }
     model.select(try entry("large-file", in: model))
-    try await waitUntil { model.selectedRegion != nil }
+    try await waitUntil { model.selection.region != nil }
     model.prepare(.permanentlyDelete)
     try await waitUntil { model.pending != nil }
     model.execute()

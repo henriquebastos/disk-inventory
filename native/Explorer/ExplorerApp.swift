@@ -59,7 +59,8 @@ final class ExplorerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
   /// The map never takes the focus, so a click on it leaves the focus where it was. An
   /// attached confirmation sheet keeps its own Esc (Cancel), and text keeps its own keys.
   func clearSelection(on event: NSEvent) -> Bool {
-    guard event.keyCode == 53, let window, event.window === window, window.attachedSheet == nil,
+    guard event.keyCode == KeyCode.escape, let window, event.window === window,
+      window.attachedSheet == nil,
       event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
       let model, model.canClearSelection
     else { return false }
@@ -116,16 +117,14 @@ struct ExplorerView: View {
   @Bindable var model: ExplorerModel
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      if let records = model.records, let header = model.header {
-        ExplorerHeader(state: header, send: { $0.perform(in: model) }) {
-          BreadcrumbStrip(model: model, records: records)
-        }
+      if let records = model.records {
+        ExplorerHeaderHost(model: model, records: records)
         Divider()
         HSplitView {
           VStack(spacing: 0) {
             ContentsTree(model: model)
             Divider()
-            SelectionCard(state: model.selectionCard) { model.perform($0) }
+            SelectionCardHost(model: model)
           }.frame(minWidth: 360, idealWidth: 400, maxWidth: 480)
           VStack(alignment: .leading, spacing: 0) {
             DiagramView(model: model).padding(10).overlay(alignment: .topLeading) {
@@ -136,21 +135,13 @@ struct ExplorerView: View {
                 }
               }
             }
-            .overlay(alignment: .top) {
-              if let banner = model.outcomeBanner {
-                OutcomeBanner(
-                  state: banner, dismiss: { model.dismissBanner() },
-                  toggleDetails: { model.toggleBannerDetails() })
-              }
-            }
+            .overlay(alignment: .top) { OutcomeBannerHost(model: model) }
             Divider()
             StatusBar(model: model)
           }.frame(minWidth: 350)
         }
         .overlay(alignment: .top) {
-          if let progress = model.progressBar {
-            ProgressBar(state: progress) { ExplorerCommand.stopScan.perform(in: model) }
-          }
+          if model.showsProgressBar { ProgressBarHost(model: model, startScreen: false) }
         }
       } else {
         VStack(spacing: 20) {
@@ -189,9 +180,8 @@ struct ExplorerView: View {
             Text("Could not open the inventory.").foregroundStyle(.red)
             DisclosureGroup("Details") { Text(error).textSelection(.enabled) }.frame(maxWidth: 460)
           }
-          if let progress = model.startScreenProgressBar {
-            ProgressBar(state: progress) { ExplorerCommand.stopScan.perform(in: model) }
-              .frame(maxWidth: 500)
+          if model.showsStartScreenProgressBar {
+            ProgressBarHost(model: model, startScreen: true).frame(maxWidth: 500)
           }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
       }

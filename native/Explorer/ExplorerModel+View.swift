@@ -1,14 +1,32 @@
 import AppKit
 
+/// What `serveView` builds off the main actor.
+private struct ViewBuild {
+  let records: ViewRecords
+  let tree: ExplorerTree
+  /// The row page to publish; nil keeps the shown one.
+  let rows: OutlineSlice?
+  let picture: DiagramPicture
+  /// The restored or surviving selection.
+  let selection: SelectionRecord?
+  /// The top row to scroll to.
+  let scrollRow: UInt64
+  /// The tree row of `selection`.
+  let selectedRow: Int?
+  /// The selection whose region came with the picture, and that region.
+  let regionKey: EntryKey?
+  let region: Rectangle?
+}
+
 extension ExplorerModel {
   func invalidatePresentation(retainingRows: Bool = false) {
     tree = nil
     // Retain only the bounded display slice, never the obsolete tree query handle.
     if !retainingRows {
       outline = nil
-      selectedRow = nil
+      selection.row = nil
     }
-    selectedRegion = nil
+    selection.region = nil
     hover = nil
     outlineVersion += 1
     hoverVersion += 1
@@ -35,19 +53,25 @@ extension ExplorerModel {
         ViewRequest(
           session: s, focus: focus, tree: reuse, size: viewport, appearance: mapAppearance,
           sessionVersion: sessionVersion, viewVersion: version, restore: restore,
-          recovery: recovery, selection: selection, shownSelection: selected?.key, done: done),
+          recovery: recovery, selection: selection, shownSelection: self.selection.entry?.key,
+          done: done),
         serve: serveView)?.done.resume()
     }
   }
   private func serveView(_ request: ViewRequest) async {
+    // A view request that a newer load or focus made obsolete builds nothing.
+    guard request.sessionVersion == sessionVersion, request.viewVersion == viewVersion else {
+      request.done.resume()
+      return
+    }
     do {
-      let result = try await Task.detached(priority: .userInitiated) {
+      let build = try await Task.detached(priority: .userInitiated) {
         let s = request.session
         let status = try s.status()
         let entry = try s.selection(key: request.focus).entry
         var ancestors: [EntryRecord] = []
         var parent = entry.parent
-        while let key = parent, ancestors.count < 64 {
+        while let key = parent, ancestors.count < NavigationLimit.ancestors {
           let e = try s.selection(key: key).entry
           ancestors.insert(e, at: 0)
           parent = e.parent
@@ -67,7 +91,7 @@ extension ExplorerModel {
           let position = request.restore?.scrollRow ?? 0
           let total = try tree.rows(offset: UInt64.max, limit: 1).total
           offset = min(position, total > 0 ? total - 1 : 0)
-          rows = try tree.rows(offset: offset > 32 ? offset - 32 : 0, limit: 256)
+          rows = try tree.rows(offset: TreePage.start(showing: offset), limit: TreePage.size)
         } else {
           rows = nil
           offset = 0
@@ -89,60 +113,50 @@ extension ExplorerModel {
         let region = regionKey.flatMap { try? picture.frame.region(key: $0) }
         let publishedRows =
           request.recovery
-          ? try tree.rows(offset: offset > 32 ? offset - 32 : 0, limit: 256) : rows
-        return (
-          ViewRecords(status: status, focus: entry, ancestors: ancestors), tree,
-          publishedRows,
-          picture, selection, offset, selectedRow, (regionKey, region)
-        )
+          ? try tree.rows(offset: TreePage.start(showing: offset), limit: TreePage.size) : rows
+        return ViewBuild(
+          records: ViewRecords(status: status, focus: entry, ancestors: ancestors), tree: tree,
+          rows: publishedRows, picture: picture, selection: selection, scrollRow: offset,
+          selectedRow: selectedRow, regionKey: regionKey, region: region)
       }.value
       if request.sessionVersion == sessionVersion && request.viewVersion == viewVersion {
-        records = result.0
-        tree = result.1
+        records = build.records
+        tree = build.tree
         if request.recovery || request.tree == nil || request.restore != nil {
-          outline = result.2
-          selectedRow = nil
-          restoredScrollRow = Int(result.5)
-          scrollRow = result.5
+          outline = build.rows
+          selection.row = nil
+          restoredScrollRow = Int(build.scrollRow)
+          scrollRow = build.scrollRow
           scrollSerial += 1
         }
-        if request.recovery {
-          selected = nil
-          selectionRawPath = nil
-          selectionPath = nil
-        }
-        if let selection = result.4 {
-          selected = selection.entry
-          selectionRawPath = selection.relativePath
-          selectionPath = displayPath(selection.relativePath)
-          selectedRow = result.6
-          if request.recovery, result.6 != nil { revealSerial += 1 }
+        if request.recovery { selection.clear() }
+        if let found = build.selection {
+          selection.entry = found.entry
+          selection.rawPath = found.relativePath
+          selection.path = displayPath(found.relativePath)
+          selection.row = build.selectedRow
+          if request.recovery, build.selectedRow != nil { revealSerial += 1 }
         }
         restoring = nil
-        picture = result.3
+        picture = build.picture
         diagramBuilds += 1
         loading = false
-        if let selected {
+        if let selected = selection.entry {
           // The region came with the picture when the selection is the same entry.
-          if let key = result.7.0, key.sameEntry(other: selected.key) {
-            selectedRegion = result.7.1
+          if let key = build.regionKey, key.sameEntry(other: selected.key) {
+            selection.region = build.region
           } else {
             updateSelectedRegion(selected.key)
           }
         } else {
-          selectedRegion = nil
+          selection.region = nil
         }
       }
     } catch {
       if request.sessionVersion == sessionVersion && request.viewVersion == viewVersion {
         self.error = String(describing: error)
         loading = false
-        if request.recovery {
-          selected = nil
-          selectedRow = nil
-          selectionRawPath = nil
-          selectionPath = nil
-        }
+        if request.recovery { selection.clear() }
         if case BridgeError.InvalidEntry = error {
           outcome =
             "Previous view is no longer available; returning to a known live ancestor."
@@ -221,10 +235,7 @@ extension ExplorerModel {
         if size == viewport && appearance == mapAppearance { break }
       }
     } else {
-      selected = nil
-      selectedRow = nil
-      selectionRawPath = nil
-      selectionPath = nil
+      self.selection.clear()
       loading = false
     }
   }

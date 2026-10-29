@@ -33,7 +33,7 @@ import XCTest
       name: "large-file", size: "4.1 KB", count: nil, path: nil, rootProtected: false,
       canRevealInFinder: false, canMoveToTrash: true, canDelete: true)
     XCTAssertEqual(model.selectionCard, .item(loading))
-    try await waitUntil { model.selectionPath != nil }
+    try await waitUntil { model.selection.path != nil }
     XCTAssertEqual(
       model.selectionCard,
       .item(
@@ -56,7 +56,7 @@ import XCTest
     let model = try await fixture()
     defer { model.shutdown() }
     model.select(try entry("small-files", in: model))
-    try await waitUntil { model.selectionPath != nil }
+    try await waitUntil { model.selection.path != nil }
     XCTAssertEqual(
       model.selectionCard,
       .item(
@@ -81,7 +81,7 @@ import XCTest
     let model = try await fixture()
     defer { model.shutdown() }
     model.perform(.selectRoot)
-    try await waitUntil { model.selectionPath != nil }
+    try await waitUntil { model.selection.path != nil }
     guard case .item(let root) = model.selectionCard else {
       return XCTFail("\(model.selectionCard)")
     }
@@ -102,5 +102,55 @@ import XCTest
     model.perform(.showGroupedDirectory)
     try await waitUntil { !model.loading && model.records?.focus.displayName == "small-files" }
     XCTAssertEqual(model.selectionCard, .nothing(canSelectRoot: true))
+  }
+
+  /// A failed path lookup says so on the card and in its help tag, instead of "Loading path…"
+  /// for good. An entry of another session makes the lookup fail.
+  func testCardSaysThePathCouldNotBeReadWhenItsLookupFails() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    let other = try await fixture("ordinary")
+    defer { other.shutdown() }
+    model.select(try entry("large-file", in: other))
+    await settled(model)
+    guard case .item(let failed) = model.selectionCard else {
+      return XCTFail("\(model.selectionCard)")
+    }
+    XCTAssertNil(failed.path)
+    XCTAssertTrue(failed.pathUnavailable)
+    XCTAssertEqual(failed.pathText, "Could not read this path.")
+    XCTAssertEqual(failed.pathHelp, "Could not read this path.")
+    // The next selection loads its path again.
+    model.select(try entry("large-file", in: model))
+    guard case .item(let loading) = model.selectionCard else {
+      return XCTFail("\(model.selectionCard)")
+    }
+    XCTAssertEqual(loading.pathText, "Loading path…")
+    XCTAssertEqual(loading.pathHelp, "")
+    try await waitUntil { model.selection.path != nil }
+    guard case .item(let loaded) = model.selectionCard else {
+      return XCTFail("\(model.selectionCard)")
+    }
+    XCTAssertFalse(loaded.pathUnavailable)
+    XCTAssertEqual(loaded.pathText, "/Workspace/large-file")
+  }
+
+  /// One clear drops every field of a selection: a Refresh and a new session also remove a
+  /// selected grouped block from the card, as they remove a selected item.
+  func testRefreshAndASessionLoadClearASelectedGroupedBlock() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    let directory = try entry("small-files", in: model)
+    model.selectAggregate(directory.key, bytes: 4096)
+    XCTAssertEqual(model.selectionCard, .group(size: "4.1 KB"))
+    model.refresh()
+    try await waitUntil { !model.working && !model.loading }
+    XCTAssertEqual(model.selectionCard, .nothing(canSelectRoot: true), "after Refresh")
+    XCTAssertNil(model.selection.aggregate)
+    model.selectAggregate(directory.key, bytes: 4096)
+    model.load { try ExplorerSession.fixture(scenario: "ordinary") }
+    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
+    XCTAssertEqual(model.selectionCard, .nothing(canSelectRoot: true), "after a new session")
+    XCTAssertNil(model.selection.aggregate)
   }
 }

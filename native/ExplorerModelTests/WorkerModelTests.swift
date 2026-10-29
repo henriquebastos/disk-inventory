@@ -35,11 +35,11 @@ import XCTest
     try await pollUntil { session.activeCallCount() == 4 }
     model.select(try entry("small-files", in: model))
     model.clearSelection()
-    XCTAssertNil(model.selectedRegion)
+    XCTAssertNil(model.selection.region)
     _ = try await blocker.value
     await settled(model)
-    XCTAssertNil(model.selectedRegion)
-    XCTAssertNil(model.selected)
+    XCTAssertNil(model.selection.region)
+    XCTAssertNil(model.selection.entry)
   }
 
   /// A map point inside a fixture block that `point` hit-tests.
@@ -85,7 +85,7 @@ import XCTest
     model.clearSelection()
     _ = try await blocker.value
     await settled(model)
-    XCTAssertNil(model.selected)
+    XCTAssertNil(model.selection.entry)
   }
 
   /// A map rebuild while a click hit test waits: the click belongs to the old picture.
@@ -99,7 +99,7 @@ import XCTest
     _ = try await blocker.value
     await rebuilding.value
     await settled(model)
-    XCTAssertNil(model.selected)
+    XCTAssertNil(model.selection.entry)
   }
 
   /// A result motion starts while a hover hit test waits: the hover is not shown.
@@ -133,7 +133,7 @@ import XCTest
     let rows = try XCTUnwrap(model.outline?.total)
     model.expand(try entry("small-files", in: model), expanded: true)
     model.select(try entry("large-file", in: model))
-    try await waitUntil { !model.treeEditing && model.selectedRow != nil }
+    try await waitUntil { !model.treeEditing && model.selection.row != nil }
     await settled(model)
     // The 128 items of small-files are visible rows.
     XCTAssertEqual(model.outline?.total, rows + 128)
@@ -164,7 +164,7 @@ import XCTest
     model.clearSelection()
     _ = try await blocker.value
     await settled(model)
-    XCTAssertNil(model.selectedRow)
+    XCTAssertNil(model.selection.row)
     XCTAssertEqual(model.revealSerial, serial)
   }
 
@@ -180,7 +180,7 @@ import XCTest
     model.requestRows(0)
     await settled(model)
     XCTAssertEqual(model.outline?.offset, 0)
-    let row = try XCTUnwrap(model.selectedRow)
+    let row = try XCTUnwrap(model.selection.row)
     XCTAssertTrue(model.outline?.rows[row].entry.key.sameEntry(other: deep.key) == true)
   }
 
@@ -225,5 +225,35 @@ import XCTest
     await settled(model)
     XCTAssertEqual(finished.names.count, 3)
     XCTAssertEqual(model.diagramBuilds, builds + 1, "the first build is obsolete when it ends")
+  }
+
+  /// A load makes a waiting view request of the old session obsolete without replacing it.
+  /// When it is served, it builds nothing: the old session gets no query for it.
+  func testObsoleteWaitingViewRequestBuildsNothingAfterALoad() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    let session = try XCTUnwrap(model.session)
+    let root = try XCTUnwrap(model.records?.focus.key)
+    let start = model.viewVersion
+    let blocker = try await holdBridge(model)
+    let first = Task { await model.updateView(focus: root) }
+    try await pollUntil { session.activeCallCount() == 2 }
+    let second = Task { await model.updateView(focus: root) }
+    try await waitUntil { model.viewVersion == start + 2 }
+    let gate = DispatchSemaphore(value: 0)
+    model.load {
+      gate.wait()
+      return try ExplorerSession.fixture(scenario: "presentation")
+    }
+    let queries = session.selectionQueryCount()
+    _ = try await blocker.value
+    await bounded("view requests return") {
+      await first.value
+      await second.value
+    }
+    // Only the first build, which was running when the load began, asks for its focus.
+    XCTAssertEqual(session.selectionQueryCount(), queries + 1)
+    gate.signal()
+    try await waitUntil { model.records != nil && !model.loading && !model.replacingSession }
   }
 }

@@ -2,6 +2,14 @@ import AppKit
 import Observation
 
 func displayPath(_ data: Data) -> String { String(decoding: data, as: UTF8.self) }
+/// A saved root path joined with a saved relative path. An empty relative path names the root.
+func joinedPath(root: Data, relative: Data) -> Data {
+  guard !relative.isEmpty else { return root }
+  var path = root
+  if path.last != UInt8(ascii: "/") { path.append(UInt8(ascii: "/")) }
+  path.append(relative)
+  return path
+}
 func entryName(_ entry: EntryRecord) -> String {
   entry.displayName.isEmpty ? "Inventory root" : entry.displayName
 }
@@ -49,6 +57,25 @@ struct PendingConfirmation: Identifiable {
   var actionIsDefault: Bool { !permanent }
   var actionIsDestructive: Bool { permanent }
 }
+/// The selected item or grouped map block, and what the views show for it. `clear()` drops
+/// every field at once, so no value of an old selection stays on the card, the tree or the map.
+struct SelectionState {
+  /// The selected item; nil without a selection and for a grouped block.
+  var entry: EntryRecord?
+  /// The tree row of the selected item, while the tree shows it.
+  var row: Int?
+  /// The map rectangle of the selection.
+  var region: Rectangle?
+  /// The saved path of `entry`, relative to the inventory root; nil while it loads.
+  var rawPath: Data?
+  var path: String?
+  /// The path lookup failed: the card says so instead of loading.
+  var pathUnavailable = false
+  /// A selected grouped map block: the key of its directory and its formatted size.
+  var aggregate: EntryKey?
+  var aggregateText: String?
+  mutating func clear() { self = SelectionState() }
+}
 
 /// The explorer controller. Stored state is declared here; the role extensions in
 /// `ExplorerModel+*.swift` hold the behavior. Swift `private` does not reach other files, so
@@ -62,12 +89,12 @@ struct PendingConfirmation: Identifiable {
   var outline: OutlineSlice? { didSet { outlineToken = NSObject() } }
   var outlineToken = NSObject()
   var revealSerial = 0
-  var selectedRow: Int?
-  var selectedRegion: Rectangle?
+  var selection = SelectionState()
   var hover: DiagramSelection?
   var diagramBuilds = 0
-  var outlineVersion = 0
-  var hoverVersion = 0
+  // Request versions. No view reads them, so a change redraws nothing.
+  @ObservationIgnored var outlineVersion = 0
+  @ObservationIgnored var hoverVersion = 0
   var recoveryToken: UUID?
   struct ViewRequest {
     let session: ExplorerSession
@@ -106,7 +133,7 @@ struct PendingConfirmation: Identifiable {
   }
   /// Tree expansion, reveal and row pages, one Rust call at a time.
   let treeWorker = LatestWorker<TreeRequest>(slots: 3)
-  var clickVersion = 0
+  @ObservationIgnored var clickVersion = 0
   struct HitRequest {
     let frame: DiagramFrame
     let x: UInt32
@@ -122,14 +149,16 @@ struct PendingConfirmation: Identifiable {
   }
   /// Map hit tests for the pointer: clicks select, hovers name the block in the status bar.
   let hitWorker = LatestWorker<HitRequest>(slots: 2)
-  /// Frame, selected key, and the session, view and selection versions it was asked under.
-  typealias RegionRequest = (DiagramFrame, EntryKey, Int, Int, Int)
+  struct RegionRequest {
+    let frame: DiagramFrame
+    let key: EntryKey
+    let sessionVersion: Int
+    let viewVersion: Int
+    let selectionVersion: Int
+  }
   /// Publishes the map region of the selection.
   let regionWorker = LatestWorker<RegionRequest>()
 
-  var selected: EntryRecord?
-  var selectionPath: String?
-  var selectionRawPath: Data?
   let numbers: NativeNumberFormat
   let scan = ScanCoordinator()
   let motion = ResultMotion()
@@ -161,8 +190,8 @@ struct PendingConfirmation: Identifiable {
   private(set) var dismissedIssues = 0 { didSet { closeDetailsWithBanner() } }
   /// The outcome banner over the map: errors, operation outcomes and new issues.
   var bannerVisible: Bool { error != nil || outcome != nil || issues.count > dismissedIssues }
-  /// The Details disclosure of the outcome banner is open. It closes when the banner hides, as
-  /// the disclosure's own view state did when the banner left the window.
+  /// The Details disclosure of the outcome banner is open. It closes when the banner hides, so a
+  /// banner that shows again starts closed.
   private(set) var bannerDetailsShown = false
   /// The Details word and its chevron both open and close the disclosure.
   func toggleBannerDetails() {
@@ -178,8 +207,6 @@ struct PendingConfirmation: Identifiable {
     dismissedIssues = issues.count
   }
   var pending: PendingConfirmation?
-  var aggregate: EntryKey?
-  var aggregateText: String?
   struct NavigationContext {
     let focus: EntryKey
     let tree: ExplorerTree
@@ -195,10 +222,11 @@ struct PendingConfirmation: Identifiable {
   let fixtureMode: Bool
   /// Fixture mode marks only the window title; the content matches production.
   var windowTitle: String { fixtureMode ? "Disk Inventory — SIMULATED" : "Disk Inventory" }
-  var sessionVersion = 0
+  @ObservationIgnored var sessionVersion = 0
+  /// Observed: model tests wait for a view request with `waitUntil`.
   var viewVersion = 0
-  var selectionVersion = 0
-  var actionVersion = 0
+  @ObservationIgnored var selectionVersion = 0
+  @ObservationIgnored var actionVersion = 0
   struct PathRequest {
     let session: ExplorerSession
     let key: EntryKey

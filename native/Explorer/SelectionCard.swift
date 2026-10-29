@@ -16,13 +16,21 @@ struct SelectionCardItem: Equatable {
   let size: String
   /// "N direct items" for a directory, nil for a file.
   let count: String?
-  /// The complete saved path; nil while it loads.
+  /// The complete saved path; nil while it loads or after its lookup failed.
   let path: String?
+  /// The path lookup failed.
+  var pathUnavailable = false
   /// The inventory root has no parent and cannot be removed.
   let rootProtected: Bool
   let canRevealInFinder: Bool
   let canMoveToTrash: Bool
   let canDelete: Bool
+  /// The path line: the path, "Loading path…", or the failed lookup.
+  var pathText: String {
+    path ?? (pathUnavailable ? "Could not read this path." : "Loading path…")
+  }
+  /// The help tag of the path line; empty while the path loads.
+  var pathHelp: String { path ?? (pathUnavailable ? pathText : "") }
 }
 
 /// What a card button asks the model to do.
@@ -35,7 +43,7 @@ enum SelectionCardIntent: Equatable {
 
 extension ExplorerModel {
   var selectionCard: SelectionCardState {
-    if let entry = selected {
+    if let entry = selection.entry {
       let directory = entry.kind == .directory
       return .item(
         SelectionCardItem(
@@ -43,21 +51,30 @@ extension ExplorerModel {
           size: numbers.storage(directory ? entry.subtreeBytes : entry.accountedBytes),
           count: directory
             ? numbers.count(entry.childCount, one: "direct item", other: "direct items") : nil,
-          path: selectedDisplayPath, rootProtected: entry.parent == nil,
+          path: selectedDisplayPath, pathUnavailable: selection.pathUnavailable,
+          rootProtected: entry.parent == nil,
           canRevealInFinder: ExplorerCommand.revealInFinder.isEnabled(in: self),
           canMoveToTrash: ExplorerCommand.moveToTrash.isEnabled(in: self),
           canDelete: ExplorerCommand.deleteImmediately.isEnabled(in: self)))
     }
-    if let aggregateText { return .group(size: aggregateText) }
+    if let aggregateText = selection.aggregateText { return .group(size: aggregateText) }
     return .nothing(canSelectRoot: records?.status.root != nil)
   }
   func perform(_ intent: SelectionCardIntent) {
     switch intent {
     case .showInList: revealSelection()
     case .command(let command): command.perform(in: self)
-    case .showGroupedDirectory: if let aggregate { focus(aggregate) }
+    case .showGroupedDirectory: if let aggregate = selection.aggregate { focus(aggregate) }
     case .selectRoot: if let root = records?.status.root { select(root) }
     }
+  }
+}
+
+/// Computes the card state in its own body, so a change of the selection redraws only the card.
+struct SelectionCardHost: View {
+  let model: ExplorerModel
+  var body: some View {
+    SelectionCard(state: model.selectionCard) { model.perform($0) }
   }
 }
 
@@ -81,10 +98,10 @@ struct SelectionCard: View {
         if let count = item.count {
           Text(count).font(.caption)
         }
-        Text(item.path ?? "Loading path…")
+        Text(item.pathText)
           .font(.system(.caption, design: .monospaced))
           .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-          .toolTip(item.path ?? "").accessibilityIdentifier("selected-path")
+          .toolTip(item.pathHelp).accessibilityIdentifier("selected-path")
         HStack(spacing: 6) {
           Button("Reveal in Finder") { send(.command(.revealInFinder)) }
             .disabled(!item.canRevealInFinder)

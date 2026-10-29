@@ -14,13 +14,13 @@ enum ProgressBarState: Equatable {
 }
 
 extension ExplorerModel {
-  /// The bar over the explorer split view: while loading, working or replacing the session.
-  var progressBar: ProgressBarState? {
-    loading || working || replacingSession ? progressBarContent : nil
-  }
-  /// The bar on the start screen: while a session loads. No operation runs without one.
+  /// The bar over the explorer split view shows while loading, working or replacing the session.
+  var showsProgressBar: Bool { loading || working || replacingSession }
+  /// The bar on the start screen shows while a session loads. No operation runs without one.
+  var showsStartScreenProgressBar: Bool { loading || replacingSession }
+  var progressBar: ProgressBarState? { showsProgressBar ? progressBarContent : nil }
   var startScreenProgressBar: ProgressBarState? {
-    loading || replacingSession ? progressBarContent : nil
+    showsStartScreenProgressBar ? progressBarContent : nil
   }
   private var progressBarContent: ProgressBarState {
     if scan.progress != nil {
@@ -30,6 +30,19 @@ extension ExplorerModel {
     }
     if let checking { return .checking(name: checking) }
     return replacingSession ? .preparingInventory : .working
+  }
+}
+
+/// Computes the bar state in its own body. The state reads the scan progress, so a progress
+/// tick redraws only the bar, not the explorer around it.
+struct ProgressBarHost: View {
+  let model: ExplorerModel
+  /// The start-screen bar, which shows only while a session loads.
+  let startScreen: Bool
+  var body: some View {
+    if let state = startScreen ? model.startScreenProgressBar : model.progressBar {
+      ProgressBar(state: state) { ExplorerCommand.stopScan.perform(in: model) }
+    }
   }
 }
 

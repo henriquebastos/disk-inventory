@@ -1,5 +1,16 @@
 import AppKit
 
+/// The AppKit virtual key codes (`NSEvent.keyCode`) that the explorer handles.
+enum KeyCode {
+  static let returnKey: UInt16 = 36
+  static let escape: UInt16 = 53
+  static let enter: UInt16 = 76
+  static let leftArrow: UInt16 = 123
+  static let rightArrow: UInt16 = 124
+  static let downArrow: UInt16 = 125
+  static let upArrow: UInt16 = 126
+}
+
 /// Busy rules for tree and map input, named once. They differ on purpose: each keeps the exact
 /// condition of the input that uses it. Views ask a rule or call an intent; the intents and the
 /// actions they call check their own rule again.
@@ -26,7 +37,7 @@ extension ExplorerModel {
     guard row >= 0, let p = outline else { return nil }
     let at = Int64(row) - Int64(p.offset)
     guard at >= 0, at < Int64(p.rows.count) else {
-      requestRows(UInt64(max(0, row / 128 * 128)))
+      requestRows(UInt64(max(0, row / TreePage.alignment * TreePage.alignment)))
       return nil
     }
     return p.rows[Int(at)]
@@ -36,11 +47,11 @@ extension ExplorerModel {
   /// nothing either.
   func treeNavigationKey(_ code: UInt16) -> Bool {
     guard isIdle else { return true }
-    if code == 126 {
+    if code == KeyCode.upArrow {
       focusParent()
       return true
     }
-    if code == 125 || code == 36 || code == 76 {
+    if code == KeyCode.downArrow || code == KeyCode.returnKey || code == KeyCode.enter {
       openSelectedDirectory()
       return true
     }
@@ -50,10 +61,10 @@ extension ExplorerModel {
   /// selects the parent. Returns whether the key is consumed: always while busy; not without
   /// a selected cached row, so the table moves the selection itself.
   func treeArrowKey(_ code: UInt16) -> Bool {
-    guard code == 123 || code == 124 else { return false }
+    guard code == KeyCode.leftArrow || code == KeyCode.rightArrow else { return false }
     guard isIdle else { return true }
-    guard let index = selectedRow, let row = outlineRow(at: index) else { return false }
-    if code == 124 {
+    guard let index = selection.row, let row = outlineRow(at: index) else { return false }
+    if code == KeyCode.rightArrow {
       guard row.entry.kind == .directory, row.entry.childCount > 0 else { return true }
       if !row.expanded {
         expand(row.entry, expanded: true)
@@ -76,7 +87,7 @@ extension ExplorerModel {
     guard let hover, canOpenMapContextMenu else { return false }
     if !hover.actionable {
       selectAggregate(hover.entry.key, bytes: hover.bytes)
-    } else if selected?.key.sameEntry(other: hover.entry.key) != true {
+    } else if selection.entry?.key.sameEntry(other: hover.entry.key) != true {
       select(hover.entry)
     }
     return true

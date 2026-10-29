@@ -4,7 +4,7 @@ extension ExplorerModel {
   private func parentRequestIsCurrent(_ request: ParentRequest) -> Bool {
     isIdle && request.session === session && request.generation == sessionVersion
       && request.navigation == viewVersion && request.selection == selectionVersion
-      && selected?.key.sameEntry(other: request.source) == true
+      && selection.entry?.key.sameEntry(other: request.source) == true
   }
   func selectParent(_ entry: EntryRecord) {
     guard let key = entry.parent, let session else { return }
@@ -20,22 +20,24 @@ extension ExplorerModel {
     }.value
     if parentRequestIsCurrent(request), let result { select(result) }
   }
-  /// The shown region stays until the new one arrives. Clearing it first drew the map
-  /// without the selection dim for one to three frames whenever a display refresh fell
-  /// between the click and the session-locked region query: the click flicker.
+  /// The shown region stays until the new one arrives, so no display refresh between the
+  /// click and the session-locked region query draws the map without the selection dim.
   func updateSelectedRegion(_ key: EntryKey) {
     guard let frame = picture?.frame else {
-      selectedRegion = nil
+      selection.region = nil
       return
     }
     regionWorker.submit(
-      (frame, key, sessionVersion, viewVersion, selectionVersion), serve: serveRegion)
+      RegionRequest(
+        frame: frame, key: key, sessionVersion: sessionVersion, viewVersion: viewVersion,
+        selectionVersion: selectionVersion), serve: serveRegion)
   }
   private func serveRegion(_ request: RegionRequest) async {
-    let (frame, key, generation, navigation, selection) = request
-    let region = try? await Task.detached { try frame.region(key: key) }.value
-    if generation == sessionVersion, navigation == viewVersion, selection == selectionVersion {
-      selectedRegion = region
+    let region = try? await Task.detached { try request.frame.region(key: request.key) }.value
+    if request.sessionVersion == sessionVersion, request.viewVersion == viewVersion,
+      request.selectionVersion == selectionVersion
+    {
+      selection.region = region
     }
   }
   func point(_ x: UInt32, _ y: UInt32, click: Bool = false, doubleClick: Bool = false) {
@@ -82,17 +84,13 @@ extension ExplorerModel {
   func select(_ entry: EntryRecord, region: Rectangle? = nil) {
     // Local highlight is published before any blocking generated call is dispatched.
     clickVersion += 1
-    selected = entry
-    selectedRow = nil
-    aggregate = nil
-    aggregateText = nil
-    selectionRawPath = nil
-    selectionPath = nil
+    // The shown region stays until the region of the new item arrives.
+    selection = SelectionState(entry: entry, region: selection.region)
     selectionVersion += 1
     reveal(entry)
     if let region {
       regionWorker.discard()
-      selectedRegion = region
+      selection.region = region
     } else {
       updateSelectedRegion(entry.key)
     }
@@ -103,7 +101,14 @@ extension ExplorerModel {
         selectionVersion: selectionVersion, sessionVersion: sessionVersion),
       serve: servePath)
   }
+  /// A click on a tree row: selects its item and highlights the clicked row at once, before
+  /// the reveal answers with the same row.
+  func selectRow(_ row: Int, entry: EntryRecord) {
+    select(entry)
+    selection.row = row
+  }
   /// At most one blocking call plus one replaceable request, even during rapid keyboard selection.
+  /// A failed lookup marks the path unavailable, so the card does not show "Loading path…".
   private func servePath(_ request: PathRequest) async {
     let path = await Task.detached(priority: .userInitiated) {
       try? request.session.selection(key: request.key).relativePath
@@ -111,14 +116,16 @@ extension ExplorerModel {
     guard request.selectionVersion == selectionVersion,
       request.sessionVersion == sessionVersion
     else { return }
-    selectionRawPath = path
-    selectionPath = path.map(displayPath)
+    selection.rawPath = path
+    selection.path = path.map(displayPath)
+    selection.pathUnavailable = path == nil
   }
 
   /// Esc in the map or the tree: no selected item, region, card or tree highlight. Saved
   /// data, focus, expansion and scroll stay.
   var canClearSelection: Bool {
-    (selected != nil || aggregate != nil) && !working && !loading && !replacingSession
+    (selection.entry != nil || selection.aggregate != nil) && !working && !loading
+      && !replacingSession
       && pending == nil && !motion.active
   }
   func clearSelection() {
@@ -128,40 +135,24 @@ extension ExplorerModel {
     regionWorker.discard()
     parentWorker.discard()
     selectionVersion += 1
-    selected = nil
-    selectedRow = nil
-    selectedRegion = nil
-    selectionRawPath = nil
-    selectionPath = nil
-    aggregate = nil
-    aggregateText = nil
+    selection.clear()
   }
 
   func selectAggregate(_ key: EntryKey, bytes: UInt64) {
     clickVersion += 1
     pathWorker.discard()
     selectionVersion += 1
-    selected = nil
-    selectedRow = nil
-    selectedRegion = nil
-    selectionRawPath = nil
-    selectionPath = nil
-    aggregate = key
-    aggregateText = numbers.storage(bytes)
+    selection = SelectionState(aggregate: key, aggregateText: numbers.storage(bytes))
   }
-  func revealSelection() { if let selected { reveal(selected) } }
+  func revealSelection() { if let entry = selection.entry { reveal(entry) } }
   var selectedDisplayPath: String? {
-    guard let relative = selectionRawPath else { return nil }
+    guard let relative = selection.rawPath else { return nil }
     return completeDisplayPath(relative)
   }
   /// The saved root path joined with a saved relative path, from the inventory only.
   func completeDisplayPath(_ relative: Data) -> String? {
-    guard var root = records?.status.rootPath else { return nil }
-    if !relative.isEmpty {
-      if root.last != 47 { root.append(47) }
-      root.append(relative)
-    }
-    return displayPath(root)
+    guard let root = records?.status.rootPath else { return nil }
+    return displayPath(joinedPath(root: root, relative: relative))
   }
   /// The status bar: the complete path of the map block under the pointer, also while another
   /// item is selected. A grouped block names its folder. Empty when the pointer is off the map.
@@ -172,19 +163,16 @@ extension ExplorerModel {
   }
   var selectedURL: URL? {
     guard !fixtureMode, recoveryToken == nil, !loading, !working, !replacingSession,
-      let relative = selectionRawPath, var path = records?.status.rootPath
+      let relative = selection.rawPath, let root = records?.status.rootPath
     else {
       return nil
     }
-    if !relative.isEmpty {
-      if path.last != 47 { path.append(47) }
-      path.append(relative)
-    }
+    let path = joinedPath(root: root, relative: relative)
     guard !path.contains(0) else { return nil }
     let url = (path + Data([0])).withUnsafeBytes { bytes in
       URL(
         fileURLWithFileSystemRepresentation: bytes.baseAddress!.assumingMemoryBound(to: CChar.self),
-        isDirectory: selected?.kind == .directory, relativeTo: nil)
+        isDirectory: selection.entry?.kind == .directory, relativeTo: nil)
     }
     // Finder must never receive a lossy display-path reconstruction.
     return Self.pathBytes(url) == path ? url : nil

@@ -76,7 +76,7 @@ import XCTest
         windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
     )
     map.mouseDown(with: click)
-    try await waitUntil { model.selected?.key.sameEntry(other: target.entry.key) == true }
+    try await waitUntil { model.selection.entry?.key.sameEntry(other: target.entry.key) == true }
     let tiny = try entry("Tiny files", in: model)
     model.focus(tiny.key)
     try await assertSettled()
@@ -138,19 +138,19 @@ import XCTest
     model.load { try ExplorerSession.fixture(scenario: "presentation") }
     try await waitUntil { !model.replacingSession }
     model.select(try entry("large-file", in: model))
-    try await waitUntil { model.selectionRawPath != nil }
+    try await waitUntil { model.selection.rawPath != nil }
     let relative = Data("folder/name % é".utf8)
-    model.selectionRawPath = relative
+    model.selection.rawPath = relative
     var expected = model.records!.status.rootPath
     if expected.last != 47 { expected.append(47) }
     expected.append(relative)
     XCTAssertEqual(ExplorerModel.pathBytes(try XCTUnwrap(model.selectedURL)), expected)
-    model.selectionPath = "not-the-authoritative-path"
+    model.selection.path = "not-the-authoritative-path"
     XCTAssertEqual(ExplorerModel.pathBytes(try XCTUnwrap(model.selectedURL)), expected)
-    model.selectionRawPath = Data([255, 97])
+    model.selection.rawPath = Data([255, 97])
     // Foundation replaces invalid UTF-8; never reveal that different path.
     XCTAssertNil(model.selectedURL)
-    model.selectionRawPath = Data([97, 0, 98])
+    model.selection.rawPath = Data([97, 0, 98])
     XCTAssertNil(model.selectedURL)
     model.shutdown()
   }
@@ -391,32 +391,32 @@ import XCTest
     try await waitUntil { !model.treeEditing }
     let child = try XCTUnwrap(model.outline?.rows.first { $0.depth == 1 }?.entry)
     model.select(child)
-    try await waitUntil { model.selectedRow != nil && model.selectionPath != nil }
+    try await waitUntil { model.selection.row != nil && model.selection.path != nil }
     model.expand(projects, expanded: false)
     try await waitUntil { !model.treeEditing }
-    XCTAssertNil(model.selectedRow)
+    XCTAssertNil(model.selection.row)
     let tree = model.tree
-    model.scrollRow = 1
+    model.scrolled(toRow: 1)
     model.focus(projects.key)
     try await waitUntil { !model.loading }
     let inside = try XCTUnwrap(model.outline?.rows.first?.entry)
     model.select(inside)
-    try await waitUntil { model.selectedRow != nil }
-    model.scrollRow = 250
+    try await waitUntil { model.selection.row != nil }
+    model.scrolled(toRow: 250)
     model.focus(root)
     try await waitUntil { !model.loading }
     XCTAssertTrue(model.tree === tree)
-    XCTAssertTrue(model.selected!.key.sameEntry(other: child.key))
-    XCTAssertNil(model.selectedRow)
+    XCTAssertTrue(model.selection.entry!.key.sameEntry(other: child.key))
+    XCTAssertNil(model.selection.row)
     XCTAssertEqual(model.restoredScrollRow, 1)
     model.focus(projects.key)
     try await waitUntil { !model.loading }
-    XCTAssertTrue(model.selected!.key.sameEntry(other: inside.key))
+    XCTAssertTrue(model.selection.entry!.key.sameEntry(other: inside.key))
     XCTAssertEqual(model.restoredScrollRow, 250)
     model.focus(root)
     try await waitUntil { !model.loading }
     model.revealSelection()
-    try await waitUntil { model.selectedRow != nil }
+    try await waitUntil { model.selection.row != nil }
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: root))
     XCTAssertLessThanOrEqual(model.outline!.rows.count, 256)
     XCTAssertLessThanOrEqual(model.history.count, 64)
@@ -492,7 +492,7 @@ import XCTest
   func testSuccessfulRemovalHoldsOnlyOneOldFrameAndReplacementCancelsMotion() async throws {
     let model = try await fixture("presentation")
     model.select(try entry("large-file", in: model))
-    try await waitUntil { model.selectedRegion != nil }
+    try await waitUntil { model.selection.region != nil }
     let old = model.picture!.frame
     model.prepare(.permanentlyDelete)
     try await waitUntil { model.pending != nil }
@@ -507,7 +507,7 @@ import XCTest
     try await waitUntil { !model.replacingSession }
     try await Task.sleep(for: .milliseconds(300))
     XCTAssertNil(model.motion.previous)
-    XCTAssertNil(model.selected)
+    XCTAssertNil(model.selection.entry)
     XCTAssertNil(model.outcome)
   }
 
@@ -570,7 +570,7 @@ import XCTest
     model.execute()
     try await waitUntil { !model.working }
     XCTAssertTrue(model.outcome?.contains("Partial") == true)
-    XCTAssertEqual(model.selected?.displayName, "small-files")
+    XCTAssertEqual(model.selection.entry?.displayName, "small-files")
     XCTAssertFalse(model.motion.active)
     XCTAssertFalse(model.issues.isEmpty)
   }
@@ -597,7 +597,7 @@ import XCTest
     XCTAssertTrue(model.reduceMotion)
     try await waitUntil { !model.loading && !model.replacingSession && model.records != nil }
     model.select(try entry("large-file", in: model))
-    try await waitUntil { model.selectedRegion != nil }
+    try await waitUntil { model.selection.region != nil }
     model.prepare(.permanentlyDelete)
     try await waitUntil { model.pending != nil }
     model.execute()
@@ -632,7 +632,7 @@ import XCTest
     let table = try XCTUnwrap(table(in: host))
     let serial = model.revealSerial
     await model.recoverView(session, preserving: survivor.key)
-    let row = try XCTUnwrap(model.selectedRow)
+    let row = try XCTUnwrap(model.selection.row)
     XCTAssertGreaterThan(row, 255)
     XCTAssertGreaterThan(model.revealSerial, serial)
     XCTAssertEqual(model.restoredScrollRow, row)
@@ -660,9 +660,9 @@ import XCTest
     let serial = model.revealSerial
     await model.recoverView(session, preserving: movie.key)
     XCTAssertTrue(model.records!.focus.key.sameEntry(other: tiny.key))
-    XCTAssertTrue(model.selected!.key.sameEntry(other: movie.key))
-    XCTAssertEqual(model.selectionRawPath, Data("Movie.mov".utf8))
-    XCTAssertNil(model.selectedRow)
+    XCTAssertTrue(model.selection.entry!.key.sameEntry(other: movie.key))
+    XCTAssertEqual(model.selection.rawPath, Data("Movie.mov".utf8))
+    XCTAssertNil(model.selection.row)
     XCTAssertEqual(model.revealSerial, serial)
     XCTAssertEqual(model.outline?.offset, 0)
     XCTAssertFalse(model.outline!.rows.contains { $0.entry.key.sameEntry(other: movie.key) })
@@ -672,7 +672,7 @@ import XCTest
     let model = try await fixture("metadata-delay")
     let target = try entry("large-file", in: model)
     model.select(target)
-    try await waitUntil { model.selectedRow != nil && model.selectionRawPath != nil }
+    try await waitUntil { model.selection.row != nil && model.selection.rawPath != nil }
     let session = try XCTUnwrap(model.session)
     let token = model.outlineToken
     let rows = try XCTUnwrap(model.outline).total
@@ -693,7 +693,7 @@ import XCTest
     table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
     coordinator.tableViewSelectionDidChange(
       Notification(name: NSTableView.selectionDidChangeNotification, object: table))
-    XCTAssertTrue(model.selected?.key.sameEntry(other: target.key) == true)
+    XCTAssertTrue(model.selection.entry?.key.sameEntry(other: target.key) == true)
     let disclosure = NSButton()
     disclosure.tag = 0
     coordinator.toggle(disclosure)
@@ -705,7 +705,7 @@ import XCTest
     await recovery.value
     XCTAssertNotNil(model.tree)
     XCTAssertFalse(model.outlineToken === token)
-    XCTAssertTrue(model.selected?.key.sameEntry(other: target.key) == true)
+    XCTAssertTrue(model.selection.entry?.key.sameEntry(other: target.key) == true)
   }
 
   func testRemovalOutcomeKeepsHostedMapViewportAndTreeRowsStable() async throws {
@@ -737,7 +737,7 @@ import XCTest
       let viewport = model.viewport
       let builds = model.diagramBuilds
       model.select(try entry("large-file", in: model))
-      try await waitUntil { model.selectedRegion != nil }
+      try await waitUntil { model.selection.region != nil }
       model.prepare(action)
       try await waitUntil { model.pending != nil }
       model.execute()
@@ -762,7 +762,7 @@ import XCTest
   func testInsideTrashTravelsBetweenMateriallyDistinctRegions() async throws {
     let model = try await fixture("presentation-trash-inside")
     model.select(try entry("large-file", in: model))
-    try await waitUntil { model.selectedRegion != nil }
+    try await waitUntil { model.selection.region != nil }
     model.prepare(.trash)
     try await waitUntil { model.pending != nil }
     model.execute()
@@ -777,13 +777,13 @@ import XCTest
     try await waitUntil { !model.working }
     XCTAssertEqual(model.motion.lastStyle, .travel)
     XCTAssertGreaterThanOrEqual(model.motion.lastTicks, 4)
-    XCTAssertEqual(model.selected?.displayName, "moved")
+    XCTAssertEqual(model.selection.entry?.displayName, "moved")
   }
 
   func testInsideTrashTravelsToTheMovedTileBeyondAccessibilityTargets() async throws {
     let model = try await fixture("presentation-trash-late-target")
     model.select(try entry("large-file", in: model))
-    try await waitUntil { model.selectedRegion != nil }
+    try await waitUntil { model.selection.region != nil }
     model.prepare(.trash)
     try await waitUntil { model.pending != nil }
     model.execute()
@@ -793,6 +793,6 @@ import XCTest
     XCTAssertFalse(model.picture!.targets.contains { $0.relativePath == Data("trash/moved".utf8) })
     try await waitUntil { !model.working }
     XCTAssertEqual(model.motion.lastStyle, .travel)
-    XCTAssertEqual(model.selected?.displayName, "moved")
+    XCTAssertEqual(model.selection.entry?.displayName, "moved")
   }
 }

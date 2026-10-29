@@ -25,7 +25,7 @@ import XCTest
   /// Selects `name` as a tree click does and waits for its row.
   func select(_ name: String, in model: ExplorerModel) async throws {
     model.select(try entry(name, in: model))
-    try await waitUntil { model.selectedRow != nil }
+    try await waitUntil { model.selection.row != nil }
   }
 
   func testTreeArrowKeysExpandSelectTheFirstItemCollapseAndSelectTheParent() async throws {
@@ -36,15 +36,15 @@ import XCTest
     XCTAssertTrue(model.treeArrowKey(right))
     try await waitUntil { !model.treeEditing }
     XCTAssertTrue(try row("small-files", in: model).expanded)
-    XCTAssertTrue(model.selected?.key.sameEntry(other: directory.key) == true)
+    XCTAssertTrue(model.selection.entry?.key.sameEntry(other: directory.key) == true)
     // Right on an expanded directory selects its first item.
     XCTAssertTrue(model.treeArrowKey(right))
-    XCTAssertTrue(model.selected?.parent?.sameEntry(other: directory.key) == true)
-    try await waitUntil { model.selectedRow != nil }
+    XCTAssertTrue(model.selection.entry?.parent?.sameEntry(other: directory.key) == true)
+    try await waitUntil { model.selection.row != nil }
     // Left on an item that is not expanded selects its parent.
     XCTAssertTrue(model.treeArrowKey(left))
-    try await waitUntil { model.selected?.key.sameEntry(other: directory.key) == true }
-    try await waitUntil { model.selectedRow != nil }
+    try await waitUntil { model.selection.entry?.key.sameEntry(other: directory.key) == true }
+    try await waitUntil { model.selection.row != nil }
     // Left on an expanded directory collapses it.
     XCTAssertTrue(model.treeArrowKey(left))
     try await waitUntil { !model.treeEditing }
@@ -53,7 +53,7 @@ import XCTest
     try await select("large-file", in: model)
     XCTAssertTrue(model.treeArrowKey(right))
     XCTAssertFalse(model.treeEditing)
-    XCTAssertEqual(model.selected?.displayName, "large-file")
+    XCTAssertEqual(model.selection.entry?.displayName, "large-file")
     XCTAssertFalse(model.treeArrowKey(commandUp))
     // Without a selected row the table moves the selection itself.
     model.clearSelection()
@@ -130,13 +130,13 @@ import XCTest
     let block = try XCTUnwrap(model.picture?.targets.first { $0.entry.displayName == "large-file" })
     model.hover = block
     XCTAssertTrue(model.selectHoveredBlockForContextMenu())
-    XCTAssertEqual(model.selected?.displayName, "large-file")
+    XCTAssertEqual(model.selection.entry?.displayName, "large-file")
     model.hover = DiagramSelection(
       entry: block.entry, relativePath: block.relativePath, actionable: false, rect: block.rect,
       bytes: 1234)
     XCTAssertTrue(model.selectHoveredBlockForContextMenu())
-    XCTAssertNil(model.selected)
-    XCTAssertTrue(model.aggregate?.sameEntry(other: block.entry.key) == true)
+    XCTAssertNil(model.selection.entry)
+    XCTAssertTrue(model.selection.aggregate?.sameEntry(other: block.entry.key) == true)
   }
 
   /// A pending confirmation blocks the map context menu but not pointer hits; a result motion
@@ -165,5 +165,31 @@ import XCTest
     XCTAssertNil(model.hover)
     model.motion.cancel()
     XCTAssertTrue(model.acceptsMapPointer)
+  }
+
+  /// A click on a tree row highlights that row at once; the reveal answers later with the
+  /// same row.
+  func testSelectRowHighlightsTheClickedRowAtOnce() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    let outline = try XCTUnwrap(model.outline)
+    let index = try XCTUnwrap(outline.rows.firstIndex { $0.entry.displayName == "large-file" })
+    let row = Int(outline.offset) + index
+    model.selectRow(row, entry: try entry("large-file", in: model))
+    XCTAssertEqual(model.selection.row, row)
+    XCTAssertEqual(model.selection.entry?.displayName, "large-file")
+    await settled(model)
+    XCTAssertEqual(model.selection.row, row)
+  }
+
+  /// The tree reports its top row as it scrolls, and focus saves it in the history. No row at
+  /// the top (-1) saves row 0.
+  func testScrolledSavesTheTopRowAndRowZeroAboveTheFirstRow() async throws {
+    let model = try await fixture()
+    defer { model.shutdown() }
+    model.scrolled(toRow: 40)
+    XCTAssertEqual(model.scrollRow, 40)
+    model.scrolled(toRow: -1)
+    XCTAssertEqual(model.scrollRow, 0)
   }
 }

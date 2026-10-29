@@ -38,6 +38,20 @@ extension ExplorerModel {
   }
 }
 
+/// Computes the header state in its own body, so a change of a header rule redraws only the
+/// header.
+struct ExplorerHeaderHost: View {
+  let model: ExplorerModel
+  let records: ViewRecords
+  var body: some View {
+    if let header = model.header {
+      ExplorerHeader(
+        state: header, send: { $0.perform(in: model) },
+        breadcrumbs: { BreadcrumbStrip(model: model, records: records) })
+    }
+  }
+}
+
 /// The header: the inventory menu, the breadcrumbs, the badges, the total and Refresh.
 struct ExplorerHeader<Breadcrumbs: View>: View {
   let state: HeaderState

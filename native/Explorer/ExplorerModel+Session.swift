@@ -14,9 +14,7 @@ extension ExplorerModel {
     history.removeAll()
     restoring = nil
     pathWorker.discard()
-    selected = nil
-    selectionRawPath = nil
-    selectionPath = nil
+    selection.clear()
     sessionVersion += 1
     viewVersion += 1
     selectionVersion += 1
@@ -62,9 +60,7 @@ extension ExplorerModel {
         working = false
         requestedFocus = result.1.root.key
         records = nil
-        selected = nil
-        selectionRawPath = nil
-        selectionPath = nil
+        selection.clear()
         history = []
         restoring = nil
         issues = []
