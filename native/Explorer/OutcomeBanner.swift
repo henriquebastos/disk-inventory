@@ -79,8 +79,10 @@ struct OutcomeBanner: View {
     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5))
     .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
-    .padding(.top, 20).padding(.horizontal, 20)
     .accessibilityElement(children: .contain).accessibilityIdentifier("outcome-banner")
+    // The busy bar over the explorer is about 48 points high. The banner always starts 20
+    // points below it, so it has the same place with or without the bar.
+    .padding(.top, 68).padding(.horizontal, 20)
   }
 }
 

@@ -1150,7 +1150,8 @@ extension XCUIElement {
     XCTAssertTrue(outcome.disappears(within: 8))
   }
   /// Refresh shows the scan's progress with the folder name, a live counter, its time and Stop.
-  /// Stop keeps the previous data and says so; a complete refresh applies the live change.
+  /// Stop keeps the previous data and says so, in a banner below the next refresh's busy bar; a
+  /// complete refresh applies the live change.
   func testRefreshShowsNamedProgressWithCounterTimeAndStopKeepsData() throws {
     launch("prototype-home-refresh")
     row("Library").doubleClick()
@@ -1179,6 +1180,14 @@ extension XCUIElement {
     XCTAssertFalse(row("new cache.db").exists)
     screenshot("refresh-stopped")
     app.buttons["refresh"].click()
+    // The banner of the stopped refresh stays below the busy bar of the next one.
+    text("scan-phase", contains: "Refreshing “Library”…")
+    screenshot("refresh-banner-below-bar")
+    let bar = app.descendants(matching: .any)["progress-bar"].firstMatch.frame
+    let banner = app.descendants(matching: .any)["outcome-banner"].firstMatch.frame
+    print("BANNER bar \(bar) banner \(banner)")
+    XCTAssertFalse(bar.isEmpty || banner.isEmpty, "the bar and the banner both show")
+    XCTAssertGreaterThanOrEqual(banner.minY, bar.maxY + 8, "the busy bar covers the banner")
     outcome(is: "Refreshed “Library”.", timeout: 20)
     operationEnds()
     XCTAssertNotEqual(app.staticTexts["scope-total"].value as? String, total)

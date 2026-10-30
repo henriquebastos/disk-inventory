@@ -81,6 +81,7 @@ struct ProgressBar: View {
         Spacer()
       }
     }.font(.callout).padding(12).background(.bar)
+      .accessibilityElement(children: .contain).accessibilityIdentifier("progress-bar")
   }
 }
 

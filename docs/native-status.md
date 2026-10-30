@@ -25,7 +25,7 @@ rebuild the map or change its picture, so it needs no throttle.
 
 ## Outcome banner
 
-The banner floats over the top of the map, at most 440 points wide. It shows the error line
+The banner floats over the map, at most 440 points wide, below the place of the busy bar. It shows the error line
 (`error`), the outcome text (`outcome`) and a Details disclosure with the error text and the
 session issue log (`issues`). The chevron and the word Details both open and close it; the
 model keeps that state and closes Details when the banner hides. The banner hit-tests only its own frame, so the rest of the map
@@ -125,7 +125,8 @@ real runner:
 - "testEscapeClearsTheSelectionInTreeAndMap": Esc after a tree and a map selection, no dim
   after Esc, and the sheet's Esc priority.
 - "testRefreshShowsNamedProgressWithCounterTimeAndStopKeepsData": the named phase, a rising
-  counter, the time, Stop with unchanged data, then a complete refresh with the new file.
+  counter, the time, Stop with unchanged data, the banner below the next busy bar, then a
+  complete refresh with the new file.
 - "testDeleteNamesEachPhaseCountsRemovedItemsAndOffersStop" and
   "testSkippedItemsShowACountAndTheirReasonsInDetails": real clicks on Delete, its confirmation
   and Stop; the Checking and Deleting phases, a rising removed counter, the stopped and skipped
