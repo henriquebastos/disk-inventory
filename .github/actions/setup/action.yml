@@ -1,0 +1,22 @@
+name: Set up the build tools
+description: Selects Xcode, installs the pinned Rust toolchain and XcodeGen, and fetches crates.
+runs:
+  using: composite
+  steps:
+    - name: Select Xcode 27.1
+      shell: bash
+      run: sudo xcode-select --switch /Applications/Xcode_27.1.app && xcodebuild -version
+    - name: Install Rust 1.96.0
+      shell: bash
+      # The version that the checks pass with locally; a newer Clippy can add new warnings.
+      run: |
+        rustup toolchain install 1.96.0 --profile minimal --component clippy,rustfmt
+        rustup default 1.96.0
+        rustc --version
+    - name: Install XcodeGen
+      shell: bash
+      run: brew install xcodegen && xcodegen --version
+    - name: Fetch crates
+      shell: bash
+      # The checks and the build scripts run Cargo offline.
+      run: cargo fetch --locked

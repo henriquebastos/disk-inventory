@@ -1,0 +1,105 @@
+name: Release
+
+# Publishing a GitHub release with a tag such as v1.2.0 runs the checks on the tag, builds the
+# app, then signs, notarizes and staples DiskInventory-1.2.0.dmg and attaches it and its
+# checksum to the release. Run the workflow by hand from main to build the DMG again for an
+# existing release. The rules of the release environment limit it to main and v* tags.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of an existing release, such as v1.2.0
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  release:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    # The signing and notarization secrets belong to this environment only. Its deployment
+    # rules (main and v* tags) keep them from jobs of other branches.
+    environment: release
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Read the version from the tag
+        run: |
+          if [[ ! $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The tag must be like v1.2.0, not '$TAG'"
+            exit 1
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Run scripts/check.sh model
+        env:
+          CHECK_ROOT: ${{ runner.temp }}/check
+        run: scripts/check.sh model
+      # The build runs Cargo build scripts and XcodeGen, so it runs before the secrets arrive.
+      - name: Build the app
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/check/target
+        run: scripts/build-release.sh "$VERSION" "$RUNNER_TEMP/release"
+      - name: Import the Developer ID certificate
+        env:
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          umask 077
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$P12_PASSWORD" \
+            -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" \
+            "$keychain" > /dev/null
+          # codesign searches the user keychain list; xargs removes the quotes of the old paths.
+          security list-keychains -d user | xargs security list-keychains -d user -s "$keychain"
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            awk -F'"' '/Developer ID Application/ { print $2; exit }')
+          [[ -n $identity ]] || { echo "::error::No Developer ID Application identity"; exit 1; }
+          printf '%s\n' "$NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          {
+            echo "SIGN_IDENTITY=$identity"
+            echo "SIGN_KEYCHAIN=$keychain"
+            echo "NOTARY_KEY_PATH=$RUNNER_TEMP/notary.p8"
+          } >> "$GITHUB_ENV"
+      - name: Sign, notarize and staple the DMG
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: scripts/package-release.sh "$VERSION" "$RUNNER_TEMP/release"
+      - name: Attach the DMG to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$RUNNER_TEMP/release/DiskInventory-$VERSION.dmg" \
+            "$RUNNER_TEMP/release/DiskInventory-$VERSION.dmg.sha256"
+      - name: Remove the signing keychain and the notary key
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/developer-id.p12"
+      - name: Keep the check logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-check-logs
+          path: ${{ runner.temp }}/check/logs
+          retention-days: 14

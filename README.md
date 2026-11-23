@@ -10,6 +10,11 @@ bounded views, with native-free fixture scenarios. The [native explorer](docs/na
 adds a SwiftUI/AppKit table, treemap, compact selection summary and explicitly confirmed
 operations. No source-file contents are read.
 
+To install the app, download the DMG of the latest GitHub release, open it and drag Disk
+Inventory to Applications. It needs macOS 26 or later and Apple silicon.
+[release.md](docs/release.md) describes the checks on GitHub and how a release builds the
+notarized DMG. Disk Inventory is open source under the [MIT License](LICENSE).
+
 Opening a snapshot eagerly reads and validates the entire file, reconstructs its
 arrays and recomputes accounting. Export streams entries from that in-memory map;
 it does not sort or materialize all export rows. This is not mmap or lazy loading.
