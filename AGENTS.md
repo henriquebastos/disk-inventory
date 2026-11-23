@@ -3,6 +3,7 @@
 Read [README.md](README.md) first. Read [docs/spec.md](docs/spec.md) before changing
 collection, accounting, queries or snapshots; it links behavior to source and tests.
 For benchmark changes, read [scripts/run-benchmark.mjs](scripts/run-benchmark.mjs).
+For GitHub Actions, releases and the GitHub setup, read [docs/release.md](docs/release.md).
 
 ## 1a Verify changes
 

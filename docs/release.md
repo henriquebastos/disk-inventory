@@ -45,32 +45,45 @@ Run workflow, branch `main`) with the same tag, or delete the release and its ta
 The app needs macOS 26 or later and Apple silicon. To scan protected folders, people add
 the app in System Settings, Privacy & Security, Full Disk Access.
 
-## 1c Signing secrets
+## 1c Set up GitHub
 
-The release job uses the GitHub environment `release`. Store these secrets in that
-environment, not in the repository:
+[setup-github.sh](../scripts/setup-github.sh) does each setup step with `gh`. Each step can
+run again and changes only what is missing or different. No step prints a secret.
 
-| Secret | Value |
-|---|---|
-| `DEVELOPER_ID_P12_BASE64` | The Developer ID Application certificate and its private key, exported from Keychain Access as a `.p12` file, then encoded with `base64 -i developer-id.p12` |
-| `DEVELOPER_ID_P12_PASSWORD` | The password of the `.p12` file |
-| `NOTARY_KEY_P8` | The full text of an App Store Connect API key file (`AuthKey_….p8`) with the Developer role |
-| `NOTARY_KEY_ID` | The key ID of that API key |
-| `NOTARY_ISSUER_ID` | The issuer ID shown above the list of API keys |
+```sh
+repo=OWNER/disk-inventory keys=~/.local/share/disk-inventory-release  # outside Git
+scripts/setup-github.sh repo "$repo"           # public repository and origin remote; no push
+scripts/setup-github.sh protect "$repo" OWNER  # release environment and tag ruleset
+scripts/setup-github.sh csr "$repo" "$keys"    # private key and signing request for Apple
+NOTARY_KEY_PATH=… NOTARY_KEY_ID=… NOTARY_ISSUER_ID=… \
+  scripts/setup-github.sh secrets "$repo" "$keys" ~/Downloads/developerID_application.cer
+scripts/setup-github.sh status "$repo"
+```
 
-Create the API key in App Store Connect, Users and Access, Integrations, App Store Connect
-API, Team Keys. Apple lets you download the key file once only.
+Steps that only the account owner can do:
 
-The job imports the certificate into a temporary keychain and deletes the keychain and the
-key file at the end. Notarization stops with HTTP 403 when the Apple Developer Program
-License Agreement is not accepted; accept it at developer.apple.com/account.
+1. Accept the Apple Developer Program License Agreement at developer.apple.com/account.
+   Until then, notarization stops with HTTP 403, and so does the `secrets` step.
+2. Upload the signing request at developer.apple.com, Certificates, +, Developer ID
+   Application. If Apple asks for a Sub-CA, choose G2. Download the certificate. This
+   certificate is for GitHub only, so you can revoke it without an effect on your Mac.
+3. Make an App Store Connect API key with the Developer role (App Store Connect, Users and
+   Access, Integrations, Team Keys). Apple lets you download the `.p8` file once only. The
+   issuer ID shows above the list of keys.
 
-An environment gives its secrets to each job that names it, from any branch. These rules
-keep the secrets for releases (Settings, Environments, release, and Settings, Rules):
+The `secrets` step checks the API key with the notary service. It adds the Apple
+intermediate certificate from the keychains of the Mac to a `.p12` file with a random
+password, and stores five secrets in the `release` environment:
+`DEVELOPER_ID_P12_BASE64`, `DEVELOPER_ID_P12_PASSWORD`, `NOTARY_KEY_P8`, `NOTARY_KEY_ID` and
+`NOTARY_ISSUER_ID`. The release job imports the certificate into a temporary keychain and
+deletes the keychain and the key files at the end.
 
-- Deployment branches and tags: Selected, with the branch `main` and the tag pattern `v*`.
-- A tag ruleset for `v*` that lets only administrators create, change or delete such tags.
-- Optional: you as a required reviewer, so each release run waits for your approval.
+An environment gives its secrets to each job that names it, from any branch. The `protect`
+step keeps them for releases:
+
+- The environment deploys only from the branch `main` and from tags that match `v*`.
+- The `release tags` ruleset lets only administrators create, move or delete `v*` tags.
+- With the optional user, each release run waits for the approval of that user.
 
 Pull requests from forks never get the secrets.
 
