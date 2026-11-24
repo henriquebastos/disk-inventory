@@ -597,6 +597,9 @@ import XCTest
       arguments: [], environment: ["DI_REDUCE_MOTION": "1"], storage: storage)
     XCTAssertFalse(native.fixtureMode)
     XCTAssertFalse(native.fixtureReduceMotion)
+    XCTAssertEqual(
+      native.reduceMotion, NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+      "the default reads the macOS setting")
     native.shutdown()
     let ordinary = try await fixtureModel("presentation")
     XCTAssertFalse(ordinary.fixtureReduceMotion)
@@ -724,9 +727,16 @@ import XCTest
   func testRemovalOutcomeKeepsHostedMapViewportAndTreeRowsStable() async throws {
     for action in [ActionKind.trash, .permanentlyDelete] {
       let model = try await fixtureModel("presentation-trash-inside")
+      // AppKit shrinks a window that is larger than the screen, which would move the map.
+      let style: NSWindow.StyleMask = [.titled, .resizable]
+      let screen =
+        NSScreen.screens.first?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 900)
+      let fits = NSWindow.contentRect(forFrameRect: screen, styleMask: style)
       let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
-        styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        contentRect: NSRect(
+          origin: fits.origin,
+          size: CGSize(width: min(1280, fits.width), height: min(800, fits.height))),
+        styleMask: style, backing: .buffered, defer: false)
       window.isReleasedWhenClosed = false
       let host = NSHostingView(rootView: ExplorerView(model: model))
       window.contentView = host

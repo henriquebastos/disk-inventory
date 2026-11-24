@@ -167,9 +167,9 @@ struct SelectionState {
   var scanDate: Date?
   /// UI acceptance override from DI_REDUCE_MOTION=1, honored only in fixture mode.
   let fixtureReduceMotion: Bool
-  var reduceMotion: Bool {
-    fixtureReduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-  }
+  /// The macOS Reduce Motion setting, read when a result motion is planned.
+  let systemReduceMotion: @MainActor () -> Bool
+  var reduceMotion: Bool { fixtureReduceMotion || systemReduceMotion() }
   /// UI acceptance override from DI_APPEARANCE, honored only in fixture mode. AppKit cannot
   /// create a high-contrast appearance, so a contrast value changes the map, not the chrome.
   let fixtureAppearance: MapAppearance?
@@ -266,9 +266,13 @@ struct SelectionState {
     arguments: [String] = ProcessInfo.processInfo.arguments,
     environment: [String: String] = ProcessInfo.processInfo.environment,
     storage: ManagedInventoryStorage? = nil,
-    numbers: NativeNumberFormat = .system
+    numbers: NativeNumberFormat = .system,
+    systemReduceMotion: @escaping @MainActor () -> Bool = {
+      NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
   ) {
     self.numbers = numbers
+    self.systemReduceMotion = systemReduceMotion
     fixtureMode =
       arguments.contains("--fixture-mode") || arguments.contains("--scenario")
       || environment["DI_UI_TEST"] != nil

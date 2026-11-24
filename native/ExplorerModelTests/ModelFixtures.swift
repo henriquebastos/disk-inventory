@@ -5,13 +5,15 @@ import XCTest
 
 extension XCTestCase {
   /// A fixture-mode model of the Rust fixture `scenario`, once its first view is published.
+  /// The macOS Reduce Motion setting is off unless `systemReduceMotion` says otherwise, so the
+  /// result does not depend on the host.
   @MainActor func fixtureModel(
     _ scenario: String, environment: [String: String] = [:], numbers: NativeNumberFormat = .system,
-    file: StaticString = #filePath, line: UInt = #line
+    systemReduceMotion: Bool = false, file: StaticString = #filePath, line: UInt = #line
   ) async throws -> ExplorerModel {
     let model = ExplorerModel(
       arguments: ["--fixture-mode", "--scenario", scenario], environment: environment,
-      numbers: numbers)
+      numbers: numbers, systemReduceMotion: { systemReduceMotion })
     try await waitUntil(
       { model.records != nil && !model.loading && !model.replacingSession }, file: file,
       line: line)

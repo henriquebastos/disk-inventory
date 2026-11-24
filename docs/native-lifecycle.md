@@ -84,6 +84,8 @@ all visible destinations. Outside, unknown or invisible destinations use in-plac
 motion. The model reads Reduce Motion from NSWorkspace at operation completion.
 Reduce Motion uses a fade without translation or scaling.
 In fixture mode only, `DI_REDUCE_MOTION=1` also selects the fade.
+Model tests give the system setting through the `systemReduceMotion` initializer argument, so
+the result does not depend on the host.
 UI tests use this override and never change the system setting.
 No surviving rectangle gets its own animation object.
 Session/navigation generations and explicit motion cancellation prevent stale

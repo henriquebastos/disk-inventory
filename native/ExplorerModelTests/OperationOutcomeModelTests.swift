@@ -114,4 +114,18 @@ import XCTest
     XCTAssertEqual(model.motion.lastStyle, .poof)
     XCTAssertGreaterThanOrEqual(model.motion.lastTicks, 4)
   }
+
+  /// With the macOS Reduce Motion setting on, a Delete fades instead of the poof.
+  func testDeleteFadesWhenTheSystemReducesMotion() async throws {
+    let model = try await fixtureModel("presentation", systemReduceMotion: true)
+    defer { model.shutdown() }
+    model.select(try entry("large-file", in: model))
+    try await waitUntil { model.selection.region != nil }
+    model.prepare(.permanentlyDelete)
+    try await waitUntil { model.pending != nil }
+    model.execute()
+    try await waitUntil { !model.working }
+    XCTAssertEqual(model.outcome, "Deleted.")
+    XCTAssertEqual(model.motion.lastStyle, .fade)
+  }
 }
