@@ -48,6 +48,8 @@ for dir in "$root" "$CARGO_TARGET_DIR" "$gui" "$TMPDIR"; do
     exit 2
   fi
 done
+# Tests open fixtures without following symlinks, and the macOS TMPDIR is under /var, a symlink.
+TMPDIR=$(cd "$TMPDIR" && pwd -P)
 if [[ $build == no && ! -d "$gui/DerivedData/Build/Products/Debug/DiskInventory.app" ]]; then
   echo "check: ui --no-build needs a GUI build in $gui; run check.sh ui or model-only first" >&2
   exit 2

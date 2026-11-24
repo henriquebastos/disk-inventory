@@ -277,9 +277,10 @@ fn busy_poll_does_not_take_the_session_lock() {
 }
 #[test]
 fn native_snapshot_open_never_requires_the_recorded_source() {
+    // Snapshot open follows no symlink, and the temporary folder can be under one, such as /var.
     let root = std::env::var_os("BRIDGE_TEST_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+        .unwrap_or_else(|| std::fs::canonicalize(std::env::temp_dir()).unwrap());
     let dir = root.join(format!("snapshot-test-{}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let snapshot = dir.join("saved.dmap");

@@ -19,6 +19,8 @@ export TMPDIR=$CHECK_ROOT/tmp
 ```
 
 macOS always sets `TMPDIR`, so the `CHECK_ROOT/tmp` default applies only when you unset it.
+check.sh resolves `TMPDIR` to a path without symlinks, because the tests open their
+fixtures without following symlinks.
 [build-bridge.sh](../scripts/build-bridge.sh) uses the exported `CARGO_TARGET_DIR`, so
 the GUI build and the Rust stages share one Cargo tree.
 
