@@ -573,12 +573,11 @@ fn native_owned_fixture_metadata_url_scope_and_nofollow_permanent_removal() {
         native::validate_trash_path(&root.join(OsStr::from_bytes(b"bad-\xff")), false).is_err()
     );
     assert!(native::validate_trash_path(&root.join("x".repeat(1024)), false).is_err());
-    // /tmp is a symlink alias, not a firmlink: ancestor identity classification fails closed.
-    let alias = PathBuf::from(nested.join("file").to_string_lossy().replacen(
-        "/private/tmp",
-        "/tmp",
-        1,
-    ));
+    // A symlink alias, unlike a firmlink, makes ancestor identity classification fail closed.
+    let link = fixture.0.join("root-alias");
+    symlink(&root, &link).unwrap();
+    let alias = link.join("nested/file");
+    assert_eq!(fs::read(&alias).unwrap(), vec![0; 4096]);
     assert_eq!(
         s.filesystem.classify_destination(&alias, root_id),
         DestinationScope::Unknown
