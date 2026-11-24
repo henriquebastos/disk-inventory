@@ -26,13 +26,13 @@ extension ExplorerModel {
     Task {
       await cancellation?.value
       do {
-        let result = try await Task.detached(priority: .userInitiated) {
+        let result = try await blocking(qos: .userInitiated) {
           let s = try constructor()
           return (s, try s.status())
-        }.value
+        }
         guard version == sessionVersion else {
           if let generation, let storage {
-            try? await Task.detached { try storage.discard(generation) }.value
+            try? await blocking { try storage.discard(generation) }
           }
           return
         }
@@ -40,9 +40,9 @@ extension ExplorerModel {
         if let generation, let storage {
           let date = Date()
           let rootName = displayPath(result.1.rootPath)
-          let record = try await Task.detached {
+          let record = try await blocking {
             try storage.publish(generation, scannedAt: date, rootName: rootName)
-          }.value
+          }
           lastInventory = record
           installedDate = date
         }
@@ -68,7 +68,7 @@ extension ExplorerModel {
         await updateView(focus: result.1.root.key)
       } catch {
         if let generation, let storage {
-          try? await Task.detached { try storage.discard(generation) }.value
+          try? await blocking { try storage.discard(generation) }
         }
         if version == sessionVersion {
           let failure: String

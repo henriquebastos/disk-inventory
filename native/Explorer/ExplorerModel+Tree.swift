@@ -53,7 +53,7 @@ extension ExplorerModel {
     if case .expand = request.intent { isExpansion = true } else { isExpansion = false }
     if !isExpansion && request.version != outlineVersion { return }
     do {
-      let result = try await Task.detached {
+      let result = try await blocking {
         switch request.intent {
         case .rows(let offset):
           return (try request.tree.rows(offset: offset, limit: TreePage.size), nil as Int?)
@@ -74,7 +74,7 @@ extension ExplorerModel {
             Int(row)
           )
         }
-      }.value
+      }
       if request.generation == sessionVersion, request.version == outlineVersion,
         request.tree === tree
       {

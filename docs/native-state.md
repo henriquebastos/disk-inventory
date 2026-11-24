@@ -174,8 +174,8 @@ The real secondary clicks stay in "testContextMenusSelectClickedRowAndHoveredBlo
 
 [LatestWorker.swift](../native/Explorer/LatestWorker.swift) serves one request at a time on the
 main actor. A new request replaces the waiting request of its slot, and a lower slot is served
-first. The serve function awaits its own detached Rust call and checks the model's versions
-before it publishes. It is held only while the worker runs, so an idle worker retains no
+first. The serve function awaits its own Rust call on a Dispatch thread and checks the model's
+versions before it publishes. It is held only while the worker runs, so an idle worker retains no
 model. The view build, the selection path, the selection region, Left-arrow parent selection,
 map hit tests and the tree use one each (`viewWorker`, `pathWorker`, `regionWorker`,
 `parentWorker`, `hitWorker`, `treeWorker`). A waiting click is served before a waiting hover; a

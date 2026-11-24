@@ -97,8 +97,9 @@ errors stay behind a disclosure.
 
 [ExplorerModel](../native/Explorer/ExplorerModel.swift) and its role extensions and component
 states are specified in [native-state.md](native-state.md). The model publishes selection before
-running synchronous bridge calls in detached tasks. Ordinary selection and navigation
-use saved data only: the GUI never calls liveMetadata. Path, bitmap, hover/click and selection-region requests are bounded/coalesced.
+running synchronous bridge calls on Dispatch threads
+([Blocking.swift](../native/Explorer/Blocking.swift)), never on the Swift concurrency pool.
+Ordinary selection and navigation use saved data only: the GUI never calls liveMetadata. Path, bitmap, hover/click and selection-region requests are bounded/coalesced.
 Tree requests serialize mutations and coalesce reads/reveals. Session/selection/view generations reject obsolete
 results; resize requests debounce 180ms. A separate replacement state keeps the
 retained previous view read-only until installation completes, even if an old view

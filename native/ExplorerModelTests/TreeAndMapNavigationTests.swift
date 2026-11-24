@@ -184,7 +184,7 @@ import XCTest
     model.outline = try model.tree!.rows(offset: model.outline!.total, limit: 256)
     let total = Int(model.outline!.total)
     try await withThrowingTaskGroup(of: MetadataRecord.self) { group in
-      group.addTask { try session.liveMetadata(key: key) }
+      group.addTask { try await blocking { try session.liveMetadata(key: key) } }
       try await pollUntil { session.isBusy() }
       let callback = ContinuousClock.now
       XCTAssertEqual(datasource.numberOfRows(in: table), total)

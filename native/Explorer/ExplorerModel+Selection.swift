@@ -15,9 +15,9 @@ extension ExplorerModel {
   }
   private func serveParent(_ request: ParentRequest) async {
     guard parentRequestIsCurrent(request) else { return }
-    let result = try? await Task.detached {
+    let result = try? await blocking {
       try request.session.selection(key: request.parent).entry
-    }.value
+    }
     if parentRequestIsCurrent(request), let result { select(result) }
   }
   /// The shown region stays until the new one arrives, so no display refresh between the
@@ -33,7 +33,7 @@ extension ExplorerModel {
         selectionVersion: selectionVersion), serve: serveRegion)
   }
   private func serveRegion(_ request: RegionRequest) async {
-    let region = try? await Task.detached { try request.frame.region(key: request.key) }.value
+    let region = try? await blocking { try request.frame.region(key: request.key) }
     if request.sessionVersion == sessionVersion, request.viewVersion == viewVersion,
       request.selectionVersion == selectionVersion
     {
@@ -52,8 +52,7 @@ extension ExplorerModel {
       request, slot: click ? HitRequest.clickSlot : HitRequest.hoverSlot, serve: serveHit)
   }
   private func serveHit(_ request: HitRequest) async {
-    let hit = try? await Task.detached { try request.frame.hit(x: request.x, y: request.y) }
-      .value
+    let hit = try? await blocking { try request.frame.hit(x: request.x, y: request.y) }
     guard request.generation == sessionVersion, request.navigation == viewVersion,
       acceptsMapPointer
     else {
@@ -110,9 +109,9 @@ extension ExplorerModel {
   /// At most one blocking call plus one replaceable request, even during rapid keyboard selection.
   /// A failed lookup marks the path unavailable, so the card does not show "Loading path…".
   private func servePath(_ request: PathRequest) async {
-    let path = await Task.detached(priority: .userInitiated) {
+    let path = await blocking(qos: .userInitiated) {
       try? request.session.selection(key: request.key).relativePath
-    }.value
+    }
     guard request.selectionVersion == selectionVersion,
       request.sessionVersion == sessionVersion
     else { return }

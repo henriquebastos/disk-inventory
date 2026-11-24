@@ -30,12 +30,12 @@ extension ExplorerModel {
     let generation = sessionVersion
     return Task {
       do {
-        let action = try await Task.detached(priority: .userInitiated) {
+        let action = try await blocking(qos: .userInitiated) {
           let action = try s.prepare(key: entry.key, action: kind)
           return (action, action.details())
-        }.value
+        }
         guard version == actionVersion, generation == sessionVersion else {
-          _ = try? await Task.detached { try action.0.cancel() }.value
+          _ = try? await blocking { try action.0.cancel() }
           return
         }
         pending = PendingConfirmation(
@@ -51,7 +51,7 @@ extension ExplorerModel {
   func cancelConfirmation() {
     actionVersion += 1
     if let action = pending?.action {
-      cancellationTask = Task.detached { _ = try? action.cancel() }
+      cancellationTask = Task { _ = try? await blocking { try action.cancel() } }
     }
     pending = nil
     if preparing {
@@ -78,9 +78,9 @@ extension ExplorerModel {
     let selectedKey = selection.entry?.key
     return Task {
       do {
-        let result = try await Task.detached(priority: .userInitiated) {
+        let result = try await blocking(qos: .userInitiated) {
           try s.executeControlled(action: confirmation.action, control: control)
-        }.value
+        }
         guard generation == sessionVersion else { return }
         report(result.mutation)
         retainIssues(result.update)
@@ -164,7 +164,7 @@ extension ExplorerModel {
     _ s: ExplorerSession, key: EntryKey?, scope: TrashScope?
   ) async -> [DiagramSelection] {
     guard case .inside = scope, let key, let frame = picture?.frame else { return [] }
-    return await Task.detached { () -> [DiagramSelection] in
+    return await blocking { () -> [DiagramSelection] in
       guard let moved = try? s.selection(key: key), let rect = try? frame.region(key: key) else {
         return []
       }
@@ -173,7 +173,7 @@ extension ExplorerModel {
           entry: moved.entry, relativePath: moved.relativePath, actionable: true, rect: rect,
           bytes: moved.entry.subtreeBytes)
       ]
-    }.value
+    }
   }
   func retainIssues(_ update: UpdateRecord) {
     issues.append(contentsOf: update.issues)
@@ -194,9 +194,9 @@ extension ExplorerModel {
     let generation = sessionVersion
     Task {
       do {
-        let update = try await Task.detached(priority: .userInitiated) {
+        let update = try await blocking(qos: .userInitiated) {
           try s.refreshDirectoryControlled(key: key, control: control)
-        }.value
+        }
         guard generation == sessionVersion else { return }
         retainIssues(update)
         outcome = "Refreshed “\(name)”."

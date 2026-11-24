@@ -39,7 +39,7 @@ extension XCTestCase {
     let key = try entry("large-file", in: model, file: file, line: line).key
     await settled(model)
     try await pollUntil({ !session.isBusy() }, file: file, line: line)
-    let task = Task.detached { try session.liveMetadata(key: key) }
+    let task = Task { try await blocking { try session.liveMetadata(key: key) } }
     try await pollUntil({ session.isBusy() }, file: file, line: line)
     return task
   }

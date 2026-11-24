@@ -65,7 +65,7 @@ extension ExplorerModel {
       return
     }
     do {
-      let build = try await Task.detached(priority: .userInitiated) {
+      let build = try await blocking(qos: .userInitiated) {
         let s = request.session
         let status = try s.status()
         let entry = try s.selection(key: request.focus).entry
@@ -118,7 +118,7 @@ extension ExplorerModel {
           records: ViewRecords(status: status, focus: entry, ancestors: ancestors), tree: tree,
           rows: publishedRows, picture: picture, selection: selection, scrollRow: offset,
           selectedRow: selectedRow, regionKey: regionKey, region: region)
-      }.value
+      }
       if request.sessionVersion == sessionVersion && request.viewVersion == viewVersion {
         records = build.records
         tree = build.tree
@@ -221,10 +221,10 @@ extension ExplorerModel {
     let candidates =
       ([records?.focus].compactMap { $0 } + (records?.ancestors.reversed() ?? [].reversed())).map(
         \.key)
-    let key = await Task.detached { () -> EntryKey? in
+    let key = await blocking { () -> EntryKey? in
       for key in candidates { if (try? s.selection(key: key)) != nil { return key } }
       return try? s.status().root.key
-    }.value
+    }
     guard generation == sessionVersion, navigation == viewVersion, recoveryToken == token else {
       return
     }

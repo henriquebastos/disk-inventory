@@ -292,7 +292,7 @@ struct SelectionState {
       Task {
         let version = sessionVersion
         do {
-          let last = try await Task.detached { try storage.lastInventory() }.value
+          let last = try await blocking { try storage.lastInventory() }
           if version == sessionVersion { lastInventory = last }
         } catch { self.error = "Could not read last inventory metadata: \(error)" }
       }
